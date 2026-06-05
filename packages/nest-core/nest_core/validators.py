@@ -21,7 +21,7 @@ import contextlib
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 class ValidationResult:
@@ -887,11 +887,200 @@ def validate_reputation_warnings(
 
 
 # ---------------------------------------------------------------------------
+# Comms schema-versioning validators (adversarial)
+# ---------------------------------------------------------------------------
+
+# The wire contract a versioned comms layer must honour, encoded here
+# independently of any plugin so these checks can judge *any* comms
+# implementation -- including the default ``nest_native``, which fails both.
+_COMMS_KNOWN_MAJOR = 1
+_COMMS_KNOWN_ENVELOPE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "id",
+        "sender",
+        "receiver",
+        "payload",
+        "correlation_id",
+        "timestamp",
+        "metadata",
+    }
+)
+
+
+def _parse_comms_envelope(msg: str) -> dict[str, Any] | None:
+    """Parse a trace ``msg`` as a comms envelope, or return ``None``.
+
+    Receiver acks and non-JSON payloads are not envelopes and yield ``None``.
+
+    Example::
+
+        env = _parse_comms_envelope('{"id": "m1", "schema_version": "1.1"}')
+    """
+    if not msg.startswith("{"):
+        return None
+    try:
+        loaded = json.loads(msg)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(loaded, dict) or "id" not in loaded:
+        return None
+    return cast("dict[str, Any]", loaded)
+
+
+def _comms_major(version: str) -> int | None:
+    """Return the integer major of a SemVer string, or ``None`` if malformed.
+
+    Example::
+
+        assert _comms_major("2.3") == 2
+    """
+    try:
+        return int(version.split(".", 1)[0])
+    except (ValueError, AttributeError):
+        return None
+
+
+def _collect_comms_wire(
+    events: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Map each envelope id to its on-the-wire ``version``/``major``/unknowns.
+
+    Reads ground truth from the bytes a receiver actually *received*,
+    independent of how it then chose to decode them. Only delivered envelopes
+    are judged, so a dropped message never counts as a missing ack.
+    """
+    wire: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        env = _parse_comms_envelope(str(ev.get("msg", "")))
+        if env is None:
+            continue
+        mid = str(env.get("id"))
+        version = str(env.get("schema_version", "1.0"))
+        unknown = {k for k in env if k not in _COMMS_KNOWN_ENVELOPE_FIELDS}
+        wire[mid] = {
+            "version": version,
+            "major": _comms_major(version),
+            "unknown_fields": unknown,
+        }
+    return wire
+
+
+def _collect_comms_acks(
+    events: list[dict[str, Any]],
+) -> dict[str, tuple[str, set[str]]]:
+    """Map each envelope id to the receiver's ``(status, preserved_fields)``.
+
+    Receivers emit ``ack:<id>:<status>:<comma-separated preserved fields>``
+    where ``status`` is ``accepted`` or ``rejected_major``.
+    """
+    acks: dict[str, tuple[str, set[str]]] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("ack:"):
+            continue
+        parts = msg.split(":", 3)
+        if len(parts) < 3:
+            continue
+        mid, status = parts[1], parts[2]
+        preserved = {f for f in parts[3].split(",") if f} if len(parts) > 3 else set[str]()
+        acks[mid] = (status, preserved)
+    return acks
+
+
+def validate_comms_reject_unknown_major(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must reject envelopes whose major version they don't speak.
+
+    Catches the *silent-accept* attack: ``nest_native`` ignores
+    ``schema_version`` and decodes a breaking v2.0 envelope into a
+    plausible-but-wrong message, whereas ``versioned`` rejects it.
+
+    Example::
+
+        results = validate_comms_reject_unknown_major(events)
+    """
+    wire = _collect_comms_wire(events)
+    acks = _collect_comms_acks(events)
+    violations: list[str] = []
+    checked = 0
+    for mid, info in wire.items():
+        major = info["major"]
+        if major is None or major <= _COMMS_KNOWN_MAJOR:
+            continue
+        checked += 1
+        status = acks.get(mid)
+        if status is None or status[0] != "rejected_major":
+            got = "no ack" if status is None else status[0]
+            violations.append(f"{mid}: unknown major {info['version']} not rejected (got {got})")
+    if violations:
+        return [ValidationResult("comms_reject_unknown_major", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_reject_unknown_major",
+            True,
+            f"{checked} unknown-major envelope(s) correctly rejected",
+        )
+    ]
+
+
+def validate_comms_no_silent_drop(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must preserve unknown fields from newer-minor peers.
+
+    Catches the *silent-drop* attack: ``nest_native`` reads only the fields it
+    knows and discards a field a newer peer added with no trace, whereas
+    ``versioned`` preserves it for round-trip re-emission.
+
+    Example::
+
+        results = validate_comms_no_silent_drop(events)
+    """
+    wire = _collect_comms_wire(events)
+    acks = _collect_comms_acks(events)
+    violations: list[str] = []
+    checked = 0
+    for mid, info in wire.items():
+        if info["major"] != _COMMS_KNOWN_MAJOR or not info["unknown_fields"]:
+            continue
+        checked += 1
+        status = acks.get(mid)
+        if status is None:
+            unknown = sorted(info["unknown_fields"])
+            violations.append(f"{mid}: carried unknown {unknown} but no ack")
+            continue
+        outcome, preserved = status
+        if outcome != "accepted" or not info["unknown_fields"] <= preserved:
+            dropped = sorted(info["unknown_fields"] - preserved)
+            violations.append(f"{mid}: silently dropped {dropped} (status {outcome})")
+    if violations:
+        return [ValidationResult("comms_no_silent_drop", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_no_silent_drop",
+            True,
+            f"{checked} forward-compat envelope(s) preserved all unknown fields",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
 
 VALIDATORS: dict[str, list[Any]] = {
+    "comms_versioning": [
+        validate_comms_reject_unknown_major,
+        validate_comms_no_silent_drop,
+    ],
     "marketplace": [
         validate_marketplace_no_double_sell,
         validate_marketplace_responses,
