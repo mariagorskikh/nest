@@ -17,11 +17,12 @@ Example::
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 class ValidationResult:
@@ -887,6 +888,116 @@ def validate_reputation_warnings(
 
 
 # ---------------------------------------------------------------------------
+# Comms schema-versioning validators
+# ---------------------------------------------------------------------------
+
+
+def _forwarded_envelopes(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the JSON envelopes re-emitted by the forwarder agent in a trace."""
+    out: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "send" or ev.get("agent") != "forwarder-0":
+            continue
+        try:
+            raw = json.loads(str(ev.get("msg", "")))
+        except (ValueError, TypeError):
+            continue
+        if isinstance(raw, dict):
+            out.append(cast("dict[str, Any]", raw))
+    return out
+
+
+def _envelope_payload(envelope: dict[str, Any]) -> str:
+    """Decode the base64 payload of an envelope to text (best effort)."""
+    try:
+        return base64.b64decode(str(envelope.get("payload", ""))).decode("utf-8", errors="replace")
+    except (ValueError, TypeError):
+        return ""
+
+
+def validate_comms_schema_version(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every forwarded envelope carries an explicit ``schema_version``.
+
+    The name-addressed ``nest_native`` plugin emits no version field, so a
+    forwarded message loses its version — this check FAILS against it.
+    """
+    envs = _forwarded_envelopes(events)
+    missing = [e for e in envs if "schema_version" not in e]
+    if missing:
+        return [
+            ValidationResult(
+                "comms_schema_version",
+                False,
+                f"{len(missing)} forwarded envelope(s) missing schema_version",
+            )
+        ]
+    return [
+        ValidationResult(
+            "comms_schema_version",
+            True,
+            f"all {len(envs)} forwarded envelope(s) carry schema_version",
+        )
+    ]
+
+
+def validate_comms_unknown_field_preserved(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Unknown (future-minor) fields survive a round trip instead of being dropped.
+
+    The v2 message carries an unknown ``priority`` field; a compliant plugin
+    preserves and re-emits it. ``nest_native`` silently drops it — FAIL.
+    """
+    envs = _forwarded_envelopes(events)
+    dropped = [e for e in envs if _envelope_payload(e) == "greeting-v2" and "priority" not in e]
+    checked = sum(1 for e in envs if _envelope_payload(e) == "greeting-v2")
+    if dropped:
+        return [
+            ValidationResult(
+                "comms_unknown_field_preserved",
+                False,
+                f"{len(dropped)} v2 envelope(s) silently dropped the unknown 'priority' field",
+            )
+        ]
+    return [
+        ValidationResult(
+            "comms_unknown_field_preserved",
+            True,
+            f"unknown field preserved across {checked} v2 envelope(s)",
+        )
+    ]
+
+
+def validate_comms_unsupported_major_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Unsupported-major (v3) messages are rejected, not blindly forwarded.
+
+    A compliant plugin raises on an unknown major version; the forwarder then
+    drops it. ``nest_native`` ignores the version and forwards it anyway — FAIL.
+    """
+    envs = _forwarded_envelopes(events)
+    forwarded_v3 = [e for e in envs if _envelope_payload(e) == "probe-v3"]
+    if forwarded_v3:
+        return [
+            ValidationResult(
+                "comms_unsupported_major_rejected",
+                False,
+                f"{len(forwarded_v3)} unsupported-major (v3) message(s) forwarded, not rejected",
+            )
+        ]
+    return [
+        ValidationResult(
+            "comms_unsupported_major_rejected",
+            True,
+            "unsupported-major messages were rejected (not forwarded)",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -919,5 +1030,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "reputation": [
         validate_reputation_scoring,
         validate_reputation_warnings,
+    ],
+    "comms_versioning": [
+        validate_comms_schema_version,
+        validate_comms_unknown_field_preserved,
+        validate_comms_unsupported_major_rejected,
     ],
 }

@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Comms schema-versioning scenario: mixed-version agents exchange envelopes.
+# Swap `comms: versioned` for `nest_native` to watch the comms_versioning
+# validators flip from PASS to FAIL (version + unknown fields get dropped, and
+# the unsupported-major message gets blindly forwarded).
+name: comms_versioning
+description: "Mixed v1/v2 agents over a schema-versioned wire format with forward/backward compat."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 4
+  brain: state-machine
+  roles:
+    - name: sender
+      count: 2
+    - name: forwarder
+      count: 1
+    - name: sink
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: versioned
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: comms_versioning
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 5000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/comms_versioning.jsonl
