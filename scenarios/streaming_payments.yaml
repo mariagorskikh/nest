@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# Streaming payments scenario: 5 buyers, 5 sellers, rolling streams, 5% message drop.
+name: streaming_payments
+description: >
+  5 buyers open streaming payment channels to 5 sellers with
+  per-tick metering.  Buyers open and close streams dynamically
+  while 5% of messages are dropped to simulate adversarial
+  network conditions.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+    - name: seller
+      count: 5
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: streaming
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: streaming_marketplace
+  config:
+    streams_per_buyer: 2
+    max_rate_per_tick: 10
+    max_total_per_stream: 500
+    ticks: 200
+
+failures:
+  message_drop: 0.05
+
+duration: "ticks: 500"
+
+metrics:
+  - success_rate
+  - mean_latency
+  - message_count
+  - total_streams_opened
+  - total_streams_closed
+
+output:
+  trace: ./traces/streaming_payments.jsonl
