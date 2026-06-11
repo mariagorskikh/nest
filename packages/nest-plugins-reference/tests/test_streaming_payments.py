@@ -86,7 +86,12 @@ def test_closed_stream_never_debits_again() -> None:
     ledger: dict[AgentId, int] = {AgentId("payer"): 1000, AgentId("payee"): 0}
     pay._balances = ledger
 
-    asyncio.run(pay.open_stream(AgentId("payee"), rate_per_tick=10, max_total=500, ref=PaymentRef("s1")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("payee"), rate_per_tick=10, max_total=500,
+            ref=PaymentRef("s1"),
+        )
+    )
 
     for _ in range(5):
         pay.drain_tick()
@@ -117,7 +122,12 @@ def test_over_bill_on_partition_payer_runs_dry() -> None:
     pay_b._balances = ledger
 
     initial_total = pay_a.total_balance()
-    asyncio.run(pay_a.open_stream(AgentId("b"), rate_per_tick=10, max_total=200, ref=PaymentRef("p1")))
+    asyncio.run(
+        pay_a.open_stream(
+            AgentId("b"), rate_per_tick=10, max_total=200,
+            ref=PaymentRef("p1"),
+        )
+    )
 
     for _ in range(10):
         pay_a.drain_tick()
@@ -156,7 +166,12 @@ def test_stream_capped_at_max_total() -> None:
     ledger: dict[AgentId, int] = {AgentId("a"): 1000, AgentId("b"): 0}
     pay._balances = ledger
 
-    asyncio.run(pay.open_stream(AgentId("b"), rate_per_tick=50, max_total=200, ref=PaymentRef("cap_test")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("b"), rate_per_tick=50, max_total=200,
+            ref=PaymentRef("cap_test"),
+        )
+    )
 
     for _ in range(100):
         pay.drain_tick()
@@ -194,7 +209,12 @@ def test_stream_close_receipt() -> None:
     ledger: dict[AgentId, int] = {AgentId("me"): 500, AgentId("you"): 0}
     pay._balances = ledger
 
-    asyncio.run(pay.open_stream(AgentId("you"), rate_per_tick=10, max_total=500, ref=PaymentRef("early")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("you"), rate_per_tick=10, max_total=500,
+            ref=PaymentRef("early"),
+        )
+    )
 
     for _ in range(3):
         pay.drain_tick()

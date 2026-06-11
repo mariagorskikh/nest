@@ -18,6 +18,7 @@ the comms versioning PRs).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 from typing import Any
 
@@ -64,7 +65,14 @@ def validator_drain_after_close(
     rate = random.randint(1, 50)
     cap = rate * random.randint(2, 20)
 
-    asyncio.run(pay.open_stream(AgentId("payee"), rate_per_tick=rate, max_total=cap, ref=PaymentRef("adv1")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("payee"),
+            rate_per_tick=rate,
+            max_total=cap,
+            ref=PaymentRef("adv1"),
+        )
+    )
 
     # Drain some ticks
     ticks = random.randint(1, min(10, cap // rate))
@@ -133,7 +141,14 @@ def validator_over_bill_partition(
 
     initial_total = pay.total_balance()
 
-    asyncio.run(pay.open_stream(AgentId("payee"), rate_per_tick=rate, max_total=cap, ref=PaymentRef("adv2")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("payee"),
+            rate_per_tick=rate,
+            max_total=cap,
+            ref=PaymentRef("adv2"),
+        )
+    )
 
     # Drain many ticks — payer WILL run dry
     for _ in range(100):
@@ -295,19 +310,25 @@ def test_streaming_passes_over_bill_partition() -> None:
 
 def test_streaming_passes_conservation_seed_42() -> None:
     """Property-based: conservation holds for seed 42."""
-    result = validator_conservation_invariant(StreamingPayments, seed=42, num_streams=5, max_ticks=200)
+    result = validator_conservation_invariant(
+        StreamingPayments, seed=42, num_streams=5, max_ticks=200
+    )
     assert result["passed"], f"FAILED (seed=42):\n{result['evidence']}"
 
 
 def test_streaming_passes_conservation_seed_7() -> None:
     """Property-based: conservation holds for seed 7."""
-    result = validator_conservation_invariant(StreamingPayments, seed=7, num_streams=8, max_ticks=300)
+    result = validator_conservation_invariant(
+        StreamingPayments, seed=7, num_streams=8, max_ticks=300
+    )
     assert result["passed"], f"FAILED (seed=7):\n{result['evidence']}"
 
 
 def test_streaming_passes_conservation_seed_1337() -> None:
     """Property-based: conservation holds for seed 1337."""
-    result = validator_conservation_invariant(StreamingPayments, seed=1337, num_streams=12, max_ticks=500)
+    result = validator_conservation_invariant(
+        StreamingPayments, seed=1337, num_streams=12, max_ticks=500
+    )
     assert result["passed"], f"FAILED (seed=1337):\n{result['evidence']}"
 
 
@@ -339,17 +360,20 @@ def test_fuzz_random_open_close_sequence() -> None:
                 rate = random.randint(1, 20)
                 cap = rate * random.randint(1, 50)
                 asyncio.run(
-                    pay.open_stream(AgentId("target"), rate_per_tick=rate, max_total=cap, ref=PaymentRef(ref))
+                    pay.open_stream(
+                        AgentId("target"),
+                        rate_per_tick=rate,
+                        max_total=cap,
+                        ref=PaymentRef(ref),
+                    )
                 )
                 open_streams.append(ref)
 
             elif action < 0.6 and open_streams:
                 # Close a random stream
                 ref = open_streams.pop(random.randint(0, len(open_streams) - 1))
-                try:
+                with contextlib.suppress(ValueError):
                     asyncio.run(pay.close_stream(PaymentRef(ref)))
-                except ValueError:
-                    pass
 
             else:
                 # Drain
@@ -368,24 +392,49 @@ def test_fuzz_zero_rate_stream() -> None:
 
     import pytest
     with pytest.raises(ValueError, match="rate_per_tick must be positive"):
-        asyncio.run(pay.open_stream(AgentId("b"), rate_per_tick=0, max_total=100, ref=PaymentRef("zero_rate")))
+        asyncio.run(
+            pay.open_stream(
+                AgentId("b"), rate_per_tick=0, max_total=100,
+                ref=PaymentRef("zero_rate"),
+            )
+        )
 
     with pytest.raises(ValueError, match="max_total must be positive"):
-        asyncio.run(pay.open_stream(AgentId("b"), rate_per_tick=5, max_total=0, ref=PaymentRef("zero_max")))
+        asyncio.run(
+            pay.open_stream(
+                AgentId("b"), rate_per_tick=5, max_total=0,
+                ref=PaymentRef("zero_max"),
+            )
+        )
 
     with pytest.raises(ValueError, match="rate_per_tick .* > max_total"):
-        asyncio.run(pay.open_stream(AgentId("b"), rate_per_tick=200, max_total=100, ref=PaymentRef("flipped")))
+        asyncio.run(
+            pay.open_stream(
+                AgentId("b"), rate_per_tick=200, max_total=100,
+                ref=PaymentRef("flipped"),
+            )
+        )
 
 
 def test_fuzz_duplicate_ref_rejected() -> None:
     """Opening two streams with the same ref raises ValueError."""
     pay = StreamingPayments(AgentId("a"), initial_balance=500)
 
-    asyncio.run(pay.open_stream(AgentId("b"), rate_per_tick=5, max_total=100, ref=PaymentRef("dup")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("b"), rate_per_tick=5, max_total=100,
+            ref=PaymentRef("dup"),
+        )
+    )
 
     import pytest
     with pytest.raises(ValueError, match="Duplicate reference"):
-        asyncio.run(pay.open_stream(AgentId("b"), rate_per_tick=5, max_total=100, ref=PaymentRef("dup")))
+        asyncio.run(
+            pay.open_stream(
+                AgentId("b"), rate_per_tick=5, max_total=100,
+                ref=PaymentRef("dup"),
+            )
+        )
 
 
 def test_fuzz_close_nonexistent_stream() -> None:
@@ -403,7 +452,12 @@ def test_fuzz_close_already_closed() -> None:
     ledger = _make_ledger({"a": 500, "b": 0})
     pay._balances = ledger  # type: ignore[attr-defined]
 
-    asyncio.run(pay.open_stream(AgentId("b"), rate_per_tick=5, max_total=100, ref=PaymentRef("double")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("b"), rate_per_tick=5, max_total=100,
+            ref=PaymentRef("double"),
+        )
+    )
     asyncio.run(pay.close_stream(PaymentRef("double")))
 
     import pytest
@@ -420,7 +474,12 @@ def test_fuzz_negative_initial_balance() -> None:
     pay._balances = ledger  # type: ignore[attr-defined]
 
     # Opening a stream with zero balance is allowed (payer might get funds later)
-    asyncio.run(pay.open_stream(AgentId("rich"), rate_per_tick=5, max_total=100, ref=PaymentRef("optimist")))
+    asyncio.run(
+        pay.open_stream(
+            AgentId("rich"), rate_per_tick=5, max_total=100,
+            ref=PaymentRef("optimist"),
+        )
+    )
 
     # Draining should not move funds (payer has 0)
     pay.drain_tick()
