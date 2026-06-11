@@ -984,6 +984,78 @@ def validate_streaming_no_drain_after_close(
     ]
 
 
+def validate_streaming_no_overbill_on_partition(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: payer must not keep billing when partitioned from payee.
+
+    When the simulator drops messages between a payer and payee (network
+    partition), any ``payment_debited`` after that point is billing for
+    service the payee cannot deliver — an over-bill on partition.
+
+    Tracks (payer, payee) pairs from ``stream_opened`` events, then scans
+    for ``dropped`` events between those pairs.  Any debit that lands at or
+    after a drop-tick between the same payer and payee is a violation.
+    """
+    # stream_ref -> (payer, payee)
+    stream_parties: dict[str, tuple[str, str]] = {}
+    # (payer, payee) -> first tick where drop was observed
+    partition_start: dict[tuple[str, str], int] = {}
+    violations: list[str] = []
+
+    for ev in events:
+        tick = ev.get("tick", 0)
+
+        if ev.get("event_type") == "stream_opened":
+            ref = ev.get("stream_ref", "")
+            payer = ev.get("agent", "")
+            payee = ev.get("to", "")
+            if ref and payer and payee:
+                stream_parties[ref] = (payer, payee)
+
+        elif ev.get("kind") == "dropped":
+            sender = ev.get("from", "")
+            receiver = ev.get("agent", "")
+            # Record the earliest tick a partition was observed either way
+            if sender and receiver:
+                key = (sender, receiver)
+                if key not in partition_start or tick < partition_start[key]:
+                    partition_start[key] = tick
+                # Reverse direction too — partition is bidirectional
+                rev_key = (receiver, sender)
+                if rev_key not in partition_start or tick < partition_start[rev_key]:
+                    partition_start[rev_key] = tick
+
+        elif ev.get("kind") == "payment_debited":
+            ref = ev.get("stream_ref", "")
+            if ref not in stream_parties:
+                continue
+            payer, payee = stream_parties[ref]
+            drop_tick = partition_start.get((payer, payee))
+            if drop_tick is not None and tick >= drop_tick:
+                violations.append(
+                    f"stream {ref}: payer={payer} debited at tick {tick} "
+                    f"but partitioned from payee={payee} since tick {drop_tick}"
+                )
+
+    if violations:
+        return [
+            ValidationResult(
+                "streaming_no_overbill_on_partition",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "streaming_no_overbill_on_partition",
+            True,
+            f"verified {len(stream_parties)} streams across "
+            f"{len(partition_start)} partition edges, no over-bill",
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
@@ -1021,5 +1093,6 @@ VALIDATORS: dict[str, list[Any]] = {
     "streaming_payments": [
         validate_streaming_conservation,
         validate_streaming_no_drain_after_close,
+        validate_streaming_no_overbill_on_partition,
     ],
 }

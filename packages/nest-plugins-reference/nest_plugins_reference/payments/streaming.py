@@ -31,7 +31,19 @@ from nest_core.types import (
 
 @dataclass
 class StreamHandle:
-    """Handle to an active stream."""
+    """Handle to an active stream.
+
+    Example::
+
+        handle = StreamHandle(
+            ref=PaymentRef("s-1"),
+            to=AgentId("worker"),
+            rate_per_tick=10,
+            max_total=500,
+            opened_at_tick=0,
+        )
+        assert handle.total_debited == 0
+    """
 
     ref: PaymentRef
     to: AgentId
@@ -77,11 +89,21 @@ class StreamingPayments:
         self._streams = streams if streams is not None else {}
 
     def balance(self, agent: AgentId) -> int:
-        """Check an agent's balance."""
+        """Check an agent's balance.
+
+        Example::
+
+            bal = payments.balance(AgentId("payee"))
+        """
         return self._balances.get(agent, 0)
 
     async def quote(self, service: ServiceRef) -> Quote:
-        """Return a fixed quote for any service."""
+        """Return a fixed quote for any service.
+
+        Example::
+
+            q = await payments.quote(ServiceRef("compute-hour"))
+        """
         return Quote(service=service, price=Money(amount=10))
 
     async def open_stream(
@@ -96,6 +118,16 @@ class StreamingPayments:
         Funds drain from payer to payee one tick at a time at ``rate_per_tick``
         per tick, capped at ``max_total``. Either party can call ``close_stream``
         at any point; unused remainder is never spent.
+
+        Example::
+
+            handle = await payments.open_stream(
+                to=AgentId("compute-worker"),
+                rate_per_tick=10,
+                max_total=500,
+                ref=PaymentRef("metered-task-1"),
+            )
+            assert handle.total_debited == 10  # first tick drained immediately
 
         Args:
             to: Recipient agent.
@@ -144,6 +176,12 @@ class StreamingPayments:
 
         Called automatically by the scheduler. Returns True if stream still open.
 
+        Example::
+
+            still_open = await payments.tick_stream(PaymentRef("s-1"), current_tick=3)
+            if not still_open:
+                receipt = await payments.close_stream(PaymentRef("s-1"))
+
         Args:
             ref: Stream reference.
             current_tick: Current simulation tick.
@@ -188,6 +226,11 @@ class StreamingPayments:
 
         Either payer or payee can call this. Unused remainder is never spent.
 
+        Example::
+
+            receipt = await payments.close_stream(PaymentRef("s-1"))
+            assert receipt.amount.amount == handle.total_debited
+
         Args:
             ref: Stream reference.
 
@@ -219,6 +262,14 @@ class StreamingPayments:
         """Execute a one-shot payment (one-tick stream).
 
         Satisfies the Payments protocol for backward compatibility.
+
+        Example::
+
+            receipt = await payments.pay(
+                AgentId("seller"),
+                Money(amount=200),
+                PaymentRef("one-shot-1"),
+            )
 
         Args:
             to: Recipient agent.
@@ -253,6 +304,12 @@ class StreamingPayments:
     async def verify_payment(self, ref: PaymentRef) -> PaymentStatus:
         """Verify a payment or stream status by reference.
 
+        Example::
+
+            status = await payments.verify_payment(PaymentRef("s-1"))
+            if status == PaymentStatus.STREAMING:
+                await payments.tick_stream(PaymentRef("s-1"), tick)
+
         Args:
             ref: Payment or stream reference.
 
@@ -272,6 +329,10 @@ class StreamingPayments:
 
     async def refund(self, ref: PaymentRef) -> None:
         """Refund a payment.
+
+        Example::
+
+            await payments.refund(PaymentRef("one-shot-1"))
 
         Args:
             ref: Payment reference.
