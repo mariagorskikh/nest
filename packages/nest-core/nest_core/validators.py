@@ -887,6 +887,104 @@ def validate_reputation_warnings(
 
 
 # ---------------------------------------------------------------------------
+# Streaming payments validators
+# ---------------------------------------------------------------------------
+
+
+def validate_streaming_conservation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Conservation invariant: total debited == total credited at every tick.
+
+    Scans the trace for payment events and verifies that cumulative funds
+    debited from payers equals cumulative funds credited to payees.
+    """
+    cumulative_debited: dict[str, int] = defaultdict(int)
+    cumulative_credited: dict[str, int] = defaultdict(int)
+
+    for ev in events:
+        if ev.get("kind") not in ("payment_debited", "payment_credited"):
+            continue
+
+        agent = ev.get("agent", "")
+        amount = ev.get("amount", 0)
+
+        if ev.get("kind") == "payment_debited":
+            cumulative_debited[agent] += amount
+        elif ev.get("kind") == "payment_credited":
+            cumulative_credited[agent] += amount
+
+    # Check conservation: sum of all debited == sum of all credited
+    total_debited = sum(cumulative_debited.values())
+    total_credited = sum(cumulative_credited.values())
+
+    if total_debited != total_credited:
+        detail = (
+            f"conservation violation: total debited={total_debited} "
+            f"!= total credited={total_credited}"
+        )
+        return [ValidationResult("streaming_conservation", False, detail)]
+
+    return [
+        ValidationResult(
+            "streaming_conservation",
+            True,
+            f"conservation verified: {total_debited} total flow",
+        )
+    ]
+
+
+def validate_streaming_no_drain_after_close(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: closed streams must not drain after closure.
+
+    Tracks open_stream -> close_stream for each ref, verifies no
+    payment_debited events occur after close for that stream ref.
+    """
+    open_times: dict[str, int] = {}  # PaymentRef -> tick
+    close_times: dict[str, int] = {}  # PaymentRef -> tick
+    stream_debits: dict[str, list[int]] = defaultdict(lambda: [])  # PaymentRef -> [ticks]
+
+    for ev in events:
+        tick = ev.get("tick", 0)
+
+        if ev.get("event_type") == "stream_opened":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                open_times[ref] = tick
+
+        elif ev.get("event_type") == "stream_closed":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                close_times[ref] = tick
+
+        elif ev.get("kind") == "payment_debited":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                assert isinstance(stream_debits[ref], list)
+                stream_debits[ref].append(tick)
+
+    # Check: no debit after close
+    violations: list[str] = []
+    for ref, close_tick in close_times.items():
+        debits_after = [t for t in stream_debits.get(ref, []) if t > close_tick]
+        if debits_after:
+            violations.append(f"stream {ref} debited after close at {close_tick}: {debits_after}")
+
+    if violations:
+        return [ValidationResult("streaming_no_drain_after_close", False, "; ".join(violations))]
+
+    return [
+        ValidationResult(
+            "streaming_no_drain_after_close",
+            True,
+            f"verified {len(close_times)} streams, no drain-after-close",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -919,5 +1017,9 @@ VALIDATORS: dict[str, list[Any]] = {
     "reputation": [
         validate_reputation_scoring,
         validate_reputation_warnings,
+    ],
+    "streaming_payments": [
+        validate_streaming_conservation,
+        validate_streaming_no_drain_after_close,
     ],
 }

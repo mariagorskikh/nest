@@ -1,0 +1,43 @@
+# Streaming payments scenario: 5 buyers, 5 sellers, rolling streams with network failures
+# Tests conservation of funds under message drop and stream cancellation
+
+name: streaming_payments
+description: |
+  Five buyers stream payments to five sellers over a sequence of rounds.
+  Tests conservation of funds, mid-stream cancellation, and no drain-after-close.
+
+agents:
+  buyers:
+    count: 5
+    kind: buyer
+    initial_balance: 5000
+
+  sellers:
+    count: 5
+    kind: seller
+    initial_balance: 100
+
+scenarios:
+  rounds: 100
+  message_drop_rate: 0.05
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: streaming
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+failures:
+  message_drop: 0.05
+  network_partition: 0.0  # No partition in this scenario; see other tests for that
+  byzantine_agents: 0.0
+
+seed: 42
