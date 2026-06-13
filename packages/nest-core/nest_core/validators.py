@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -887,6 +888,219 @@ def validate_reputation_warnings(
 
 
 # ---------------------------------------------------------------------------
+# Memory convergence (CRDT) validators
+# ---------------------------------------------------------------------------
+
+
+async def validate_crdt_convergence(
+    make_replica: Callable[[str], Any],
+    writes: list[tuple[int, bytes]],
+    delivery_orders: list[list[int]],
+    *,
+    key: str = "k",
+) -> list[ValidationResult]:
+    """Adversarial convergence check for a CRDT memory plugin.
+
+    This is the discriminating validator the memory-CRDT problem asks for: it
+    drives ``len(delivery_orders)`` replicas through the *same* multiset of
+    writes but delivers those writes to each replica in a **different order**,
+    then asserts every replica reads back an identical value. A conflict-free
+    plugin passes for any orders; an order-dependent plugin such as
+    ``blackboard`` fails the moment two replicas see the writes in different
+    orders.
+
+    The replication channel is chosen by capability: if the plugin exposes
+    ``export`` / ``merge`` (a CvRDT), gossip is delivered through them; if not
+    (e.g. ``blackboard``), the raw payload is delivered through ``write``, so
+    last-writer-wins divergence is exposed faithfully.
+
+    Args:
+        make_replica: factory ``node_id -> plugin instance``.
+        writes: ``(origin_replica_index, payload)`` pairs applied at origin.
+        delivery_orders: one permutation of ``range(len(writes))`` per replica;
+            its length is the replica count.
+        key: the shared key all writes target.
+
+    Example::
+
+        from nest_plugins_reference.memory.lww_register import LwwRegisterMemory
+        results = await validate_crdt_convergence(
+            LwwRegisterMemory,
+            writes=[(0, b"a"), (1, b"b"), (2, b"c")],
+            delivery_orders=[[0, 1, 2], [2, 1, 0], [1, 0, 2]],
+        )
+        assert all(r.passed for r in results)
+    """
+    replica_count = len(delivery_orders)
+    replicas = [make_replica(f"node-{i}") for i in range(replica_count)]
+    has_crdt = all(hasattr(r, "export") and hasattr(r, "merge") for r in replicas)
+
+    # Phase 1: apply each write at its origin and capture the gossip payload.
+    gossip: list[bytes] = []
+    for origin, payload in writes:
+        await replicas[origin].write(key, payload)
+        if has_crdt:
+            state = replicas[origin].export(key)
+            gossip.append(state if state is not None else payload)
+        else:
+            gossip.append(payload)
+
+    # Phase 2: deliver every non-local write to each replica in its own order.
+    for r_idx, order in enumerate(delivery_orders):
+        for w_idx in order:
+            if writes[w_idx][0] == r_idx:
+                continue
+            if has_crdt:
+                await replicas[r_idx].merge(key, gossip[w_idx])
+            else:
+                await replicas[r_idx].write(key, gossip[w_idx])
+
+    finals = [await r.read(key) for r in replicas]
+    converged = len(set(finals)) == 1 and finals[0] is not None
+    if converged:
+        return [
+            ValidationResult(
+                "crdt_convergence",
+                True,
+                f"{replica_count} replicas converged to {finals[0]!r} "
+                f"under {replica_count} distinct delivery orders",
+            )
+        ]
+    distinct = sorted({repr(v) for v in finals})
+    return [
+        ValidationResult(
+            "crdt_convergence",
+            False,
+            f"replicas diverged into {len(distinct)} distinct value(s): {', '.join(distinct)}",
+        )
+    ]
+
+
+def validate_memory_convergence(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: every replica's final CRDT state agrees.
+
+    The ``memory_concurrent_writers`` scenario has each agent broadcast its
+    terminal register as a ``final:<json>`` record on stop. This validator
+    confirms every agent emitted exactly one such record and that all of them
+    decode to byte-identical register state -- i.e. the swarm converged.
+    """
+    finals: dict[str, str] = {}
+    duplicates: set[str] = set()
+    malformed: list[str] = []
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("final:"):
+            continue
+        agent = str(ev.get("agent", ""))
+        body = msg[len("final:") :]
+        try:
+            parsed = json.loads(body)
+            canonical = json.dumps(parsed, sort_keys=True)
+        except (ValueError, TypeError):
+            malformed.append(agent)
+            continue
+        if agent in finals:
+            duplicates.add(agent)
+        finals[agent] = canonical
+
+    results: list[ValidationResult] = []
+
+    if malformed:
+        results.append(
+            ValidationResult(
+                "memory_convergence_wellformed",
+                False,
+                f"{len(malformed)} malformed final record(s): {sorted(set(malformed))}",
+            )
+        )
+
+    if not finals:
+        results.append(
+            ValidationResult(
+                "memory_convergence",
+                False,
+                "no final replica states found in trace",
+            )
+        )
+        return results
+
+    distinct = set(finals.values())
+    if len(distinct) == 1:
+        results.append(
+            ValidationResult(
+                "memory_convergence",
+                True,
+                f"all {len(finals)} replicas converged to identical state",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "memory_convergence",
+                False,
+                f"{len(finals)} replicas hold {len(distinct)} distinct final states",
+            )
+        )
+
+    if duplicates:
+        results.append(
+            ValidationResult(
+                "memory_convergence_one_final_per_agent",
+                False,
+                f"agents emitted multiple final records: {sorted(duplicates)}",
+            )
+        )
+
+    return results
+
+
+def validate_memory_liveness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: every agent that started reported a final state.
+
+    Convergence is only meaningful if no replica silently dropped out. This
+    check confirms that every agent with a ``start`` event also emitted a
+    ``final:`` record -- i.e. the gossip protocol made progress at every
+    replica, not just the ones that happened to win.
+    """
+    started: set[str] = set()
+    reported: set[str] = set()
+    for ev in events:
+        agent = str(ev.get("agent", ""))
+        if ev.get("kind") == "start":
+            started.add(agent)
+        elif ev.get("kind") in ("send", "broadcast") and str(ev.get("msg", "")).startswith(
+            "final:"
+        ):
+            reported.add(agent)
+
+    if not started:
+        return [ValidationResult("memory_liveness", False, "no agents started in trace")]
+    missing = started - reported
+    if missing:
+        return [
+            ValidationResult(
+                "memory_liveness",
+                False,
+                f"{len(missing)} replica(s) never reported a final state: {sorted(missing)}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "memory_liveness",
+            True,
+            f"all {len(started)} replicas reported a final state",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -919,5 +1133,9 @@ VALIDATORS: dict[str, list[Any]] = {
     "reputation": [
         validate_reputation_scoring,
         validate_reputation_warnings,
+    ],
+    "memory_concurrent_writers": [
+        validate_memory_convergence,
+        validate_memory_liveness,
     ],
 }
