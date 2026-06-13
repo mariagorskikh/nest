@@ -887,6 +887,86 @@ def validate_reputation_warnings(
 
 
 # ---------------------------------------------------------------------------
+# Memory convergence validators
+# ---------------------------------------------------------------------------
+
+
+def validate_memory_convergence(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """All writers agree on the same winning value by the end of the run.
+
+    Writers announce their locally winning value as ``value:<key>:<winner>``.
+    The last value each writer announces must be identical across writers --
+    that is what convergence means for the shared key.
+    """
+    last_value: dict[str, str] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("value:"):
+            continue
+        parts = msg.split(":", 2)
+        if len(parts) < 3:
+            continue
+        agent = str(ev.get("agent", ""))
+        last_value[agent] = parts[2]
+
+    distinct = set(last_value.values())
+    if not last_value:
+        return [ValidationResult("memory_convergence", False, "no value announcements found")]
+    if "" in distinct:
+        return [ValidationResult("memory_convergence", False, "a writer reported an empty value")]
+    if len(distinct) > 1:
+        detail = (
+            f"{len(distinct)} distinct final values across {len(last_value)} writers: {distinct}"
+        )
+        return [ValidationResult("memory_convergence", False, detail)]
+    return [
+        ValidationResult(
+            "memory_convergence",
+            True,
+            f"all {len(last_value)} writers converged on {distinct.pop()!r}",
+        )
+    ]
+
+
+def validate_memory_all_writers_report(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every agent that started eventually announced a final value (liveness).
+
+    A writer that never reports back would let a stuck or crashed replica hide
+    behind the agreement check, so we require each started agent to participate.
+    """
+    started: set[str] = {str(ev.get("agent", "")) for ev in events if ev.get("kind") == "start"}
+    reported: set[str] = set()
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        if _message_body(ev).startswith("value:"):
+            reported.add(str(ev.get("agent", "")))
+
+    missing = started - reported
+    if missing:
+        return [
+            ValidationResult(
+                "memory_all_writers_report",
+                False,
+                f"{len(missing)} writers never reported: {sorted(missing)}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "memory_all_writers_report",
+            True,
+            f"all {len(started)} writers reported",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -919,5 +999,9 @@ VALIDATORS: dict[str, list[Any]] = {
     "reputation": [
         validate_reputation_scoring,
         validate_reputation_warnings,
+    ],
+    "memory_concurrent_writers": [
+        validate_memory_convergence,
+        validate_memory_all_writers_report,
     ],
 }

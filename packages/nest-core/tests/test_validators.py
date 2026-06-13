@@ -629,6 +629,7 @@ class TestValidatorRegistry:
             "consensus",
             "supply_chain",
             "reputation",
+            "memory_concurrent_writers",
         }
         assert set(VALIDATORS.keys()) == expected
 
