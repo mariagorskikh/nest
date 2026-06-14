@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# Gossip registry scenario.
+#
+# 21 agents in two partition groups + one bridge:
+#   * peer_a-0..9 — partition group 0
+#   * peer_b-0..9 — partition group 1
+#   * bridge-0    — no group, can talk to both
+#
+# Without the bridge, no cross-group gossip can converge (simulator drops
+# all cross-partition transport).  With the bridge, anti-entropy
+# converges within K ≈ 10 rounds (theoretical log_F(N) ≈ 3, doubled for
+# 5% message drop, plus safety margin).
+#
+# Deterministic under seeds 42, 7, 1337 — the gossip plugin uses each
+# agent's seeded RNG for peer selection and never reads wall-clock time.
+name: gossip_registry
+description: "21 agents, 2 partition groups + bridge, gossip-based registry."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 21
+  brain: state-machine
+  roles:
+    - name: peer_a
+      count: 10
+    - name: peer_b
+      count: 10
+    - name: bridge
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: gossip
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: gossip_registry
+  config:
+    gossip_interval: 50
+
+failures:
+  message_drop: 0.05
+  network_partition:
+    groups:
+      - [peer_a-0, peer_a-1, peer_a-2, peer_a-3, peer_a-4, peer_a-5, peer_a-6, peer_a-7, peer_a-8, peer_a-9]
+      - [peer_b-0, peer_b-1, peer_b-2, peer_b-3, peer_b-4, peer_b-5, peer_b-6, peer_b-7, peer_b-8, peer_b-9]
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/gossip_registry.jsonl

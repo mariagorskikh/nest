@@ -21,6 +21,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("comms", "nest_native"): f"{_REF}.comms.nest_native:NestNativeComms",
     ("identity", "did_key"): f"{_REF}.identity.did_key:DidKeyIdentity",
     ("registry", "in_memory"): f"{_REF}.registry.in_memory:InMemoryRegistry",
+    ("registry", "gossip"): f"{_REF}.registry.gossip:GossipRegistry",
     ("auth", "jwt"): f"{_REF}.auth.jwt_auth:JwtAuth",
     ("trust", "score_average"): f"{_REF}.trust.score_average:ScoreAverageTrust",
     ("payments", "prepaid_credits"): f"{_REF}.payments.prepaid_credits:PrepaidCredits",
