@@ -750,6 +750,7 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "streaming_payments",
+            "comms_versioning",
         }
         assert set(VALIDATORS.keys()) == expected
 

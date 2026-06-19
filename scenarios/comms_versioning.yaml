@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Comms schema-versioning scenario: a swarm mid-rolling-upgrade.
+#
+# 8 peers (half on the old 1.0 wire format, half on a newer one) send envelopes
+# to a single auditor that decodes them with the `versioned` comms plugin. The
+# newer peers carry an unknown `x-trace-id` field (must be preserved) and a
+# breaking 2.0 envelope (must be rejected).
+#
+# Verify::
+#
+#     nest run scenarios/comms_versioning.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/comms_versioning.jsonl'), 'comms_versioning')]"
+name: comms_versioning
+description: "8 mixed-version peers send to an auditor; unknown fields preserved, breaking majors rejected."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 9
+  brain: state-machine
+  roles:
+    - name: peer
+      count: 8
+    - name: auditor
+      count: 1
+
+layers:
+  comms: versioned
+
+task:
+  type: comms_versioning
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/comms_versioning.jsonl

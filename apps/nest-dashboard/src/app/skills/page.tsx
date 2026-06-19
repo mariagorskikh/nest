@@ -66,14 +66,14 @@ const EXAMPLE_SKILL = `# Weather Lookup
 Get the current weather for any city.
 
 ## Base URL
-https://my-weather-skill.onrender.com
+https://weather.example.com
 
 ## Endpoints
 
 GET /weather?city={city}
   Returns the current weather for one city.
   Example:
-    curl "https://my-weather-skill.onrender.com/weather?city=Boston"
+    curl "https://weather.example.com/weather?city=Boston"
   Response:
     { "city": "Boston", "tempF": 64, "sky": "cloudy" }
 
@@ -83,17 +83,17 @@ GET /weather?city={city}
 3. Read tempF and sky from the answer, then tell the user.`;
 
 const API_LIST = `# List every SkillMD
-curl https://your-app.com/api/skills
+curl https://nandatown.projectnanda.org/api/skills
 
 # Get one SkillMD
-curl https://your-app.com/api/skills/<id>`;
+curl https://nandatown.projectnanda.org/api/skills/<id>`;
 
-const API_POST = `curl -X POST https://your-app.com/api/skills \\
+const API_POST = `curl -X POST https://nandatown.projectnanda.org/api/skills \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "Weather Lookup",
     "source_type": "url",
-    "source_url": "https://my-weather-skill.onrender.com/skill.md",
+    "source_url": "https://weather.example.com/skill.md",
     "endpoints": "GET /weather?city={city}"
   }'`;
 
