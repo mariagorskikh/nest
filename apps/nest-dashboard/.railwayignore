@@ -2,3 +2,7 @@ node_modules
 .next
 .git
 .venv
+# Secrets — DATABASE_URL is provided as a Railway service variable, so the
+# local .env.local must not be uploaded into the build context.
+.env.local
+.env*.local

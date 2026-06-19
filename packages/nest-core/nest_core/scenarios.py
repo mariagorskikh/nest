@@ -77,3 +77,7 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("memory_concurrent_writers", memory_concurrent_writers_factory)
+    elif name == "comms_versioning":
+        from nest_core.scenarios_builtin.comms_versioning import comms_versioning_factory
+
+        register_scenario("comms_versioning", comms_versioning_factory)

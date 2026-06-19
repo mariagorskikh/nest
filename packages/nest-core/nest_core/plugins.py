@@ -19,11 +19,13 @@ _REF = "nest_plugins_reference"
 _BUILTINS: dict[tuple[str, str], str] = {
     ("transport", "in_memory"): f"{_REF}.transport.in_memory:StandaloneInMemoryTransport",
     ("comms", "nest_native"): f"{_REF}.comms.nest_native:NestNativeComms",
+    ("comms", "versioned"): f"{_REF}.comms.versioned:VersionedComms",
     ("identity", "did_key"): f"{_REF}.identity.did_key:DidKeyIdentity",
     ("registry", "in_memory"): f"{_REF}.registry.in_memory:InMemoryRegistry",
     ("auth", "jwt"): f"{_REF}.auth.jwt_auth:JwtAuth",
     ("trust", "score_average"): f"{_REF}.trust.score_average:ScoreAverageTrust",
     ("payments", "prepaid_credits"): f"{_REF}.payments.prepaid_credits:PrepaidCredits",
+    ("payments", "streaming"): f"{_REF}.payments.streaming:StreamingPayments",
     ("coordination", "contract_net"): f"{_REF}.coordination.contract_net:ContractNet",
     ("negotiation", "alternating_offers"): (
         f"{_REF}.negotiation.alternating_offers:AlternatingOffers"
