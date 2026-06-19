@@ -121,7 +121,7 @@ export function SubmitForm() {
             id="content"
             name="content"
             rows={10}
-            placeholder={"# Weather Lookup\n\nGet the current weather for any city.\n\n## Base URL\nhttps://my-skill.onrender.com\n..."}
+            placeholder={"# Weather Lookup\n\nGet the current weather for any city.\n\n## Base URL\nhttps://weather.example.com\n..."}
             className={`${inputClass} font-mono text-[0.85rem] leading-relaxed`}
           />
         </div>
@@ -154,7 +154,7 @@ export function SubmitForm() {
           id="endpoints"
           name="endpoints"
           rows={3}
-          placeholder={"GET  https://my-skill.onrender.com/weather?city={city}\nPOST https://my-skill.onrender.com/alerts"}
+          placeholder={"GET  https://weather.example.com/weather?city={city}\nPOST https://weather.example.com/alerts"}
           className={`${inputClass} font-mono text-[0.85rem] leading-relaxed`}
         />
         <p className="mt-2 text-[0.82rem] text-ink-400">

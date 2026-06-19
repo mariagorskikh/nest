@@ -620,6 +620,126 @@ class TestValidationResult:
         assert "FAIL" in repr(r)
 
 
+class TestStreamingValidators:
+    """Tests for the three streaming payment validators."""
+
+    def test_conservation_passes(self) -> None:
+        """Conservation passes when debited == credited."""
+        from nest_core.validators import validate_streaming_conservation
+
+        events = [
+            {"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0},
+            {"kind": "payment_credited", "agent": "payee", "amount": 100, "tick": 0},
+            {"kind": "payment_debited", "agent": "payer", "amount": 50, "tick": 1},
+            {"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 1},
+        ]
+        results = validate_streaming_conservation(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_conservation_fails_on_imbalance(self) -> None:
+        """Conservation fails when debited != credited."""
+        from nest_core.validators import validate_streaming_conservation
+
+        events = [
+            {"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0},
+            {"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 0},
+        ]
+        results = validate_streaming_conservation(events)
+        assert len(results) == 1
+        assert not results[0].passed
+        assert "conservation violation" in results[0].detail
+
+    def test_no_drain_after_close_passes(self) -> None:
+        """No drain-after-close passes when debits stop before close."""
+        from nest_core.validators import validate_streaming_no_drain_after_close
+
+        events = [
+            {"event_type": "stream_opened", "stream_ref": "s1", "tick": 0},
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 2},
+            {"event_type": "stream_closed", "stream_ref": "s1", "tick": 3},
+        ]
+        results = validate_streaming_no_drain_after_close(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_no_drain_after_close_fails(self) -> None:
+        """Fails when debit occurs after close."""
+        from nest_core.validators import validate_streaming_no_drain_after_close
+
+        events = [
+            {"event_type": "stream_opened", "stream_ref": "s1", "tick": 0},
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
+            {"event_type": "stream_closed", "stream_ref": "s1", "tick": 2},
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},  # AFTER close!
+        ]
+        results = validate_streaming_no_drain_after_close(events)
+        assert len(results) == 1
+        assert not results[0].passed
+        assert "debited after close" in results[0].detail
+
+    def test_no_overbill_on_partition_passes(self) -> None:
+        """No over-bill passes when drops occur but no debits after."""
+        from nest_core.validators import validate_streaming_no_overbill_on_partition
+
+        events = [
+            {
+                "event_type": "stream_opened",
+                "stream_ref": "s1",
+                "agent": "payer",
+                "to": "payee",
+                "tick": 0,
+            },
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
+            {"kind": "dropped", "from": "payer", "agent": "payee", "tick": 2},
+            # No payment_debited after the partition
+        ]
+        results = validate_streaming_no_overbill_on_partition(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_no_overbill_on_partition_fails(self) -> None:
+        """Fails when debit occurs after partition between payer and payee."""
+        from nest_core.validators import validate_streaming_no_overbill_on_partition
+
+        events = [
+            {
+                "event_type": "stream_opened",
+                "stream_ref": "s1",
+                "agent": "payer",
+                "to": "payee",
+                "tick": 0,
+            },
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
+            {"kind": "dropped", "from": "payer", "agent": "payee", "tick": 3},
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},  # OVER-BILL
+        ]
+        results = validate_streaming_no_overbill_on_partition(events)
+        assert len(results) == 1
+        assert not results[0].passed
+        assert "partitioned" in results[0].detail
+
+    def test_no_overbill_ignores_other_drops(self) -> None:
+        """Drop between unrelated agents does not trigger a violation."""
+        from nest_core.validators import validate_streaming_no_overbill_on_partition
+
+        events = [
+            {
+                "event_type": "stream_opened",
+                "stream_ref": "s1",
+                "agent": "payer",
+                "to": "payee",
+                "tick": 0,
+            },
+            {"kind": "dropped", "from": "other-a", "agent": "other-b", "tick": 2},
+            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},
+        ]
+        results = validate_streaming_no_overbill_on_partition(events)
+        assert len(results) == 1
+        assert results[0].passed  # unrelated drop, not a violation
+
+
 class TestValidatorRegistry:
     def test_all_scenario_types_registered(self) -> None:
         expected = {
@@ -629,6 +749,9 @@ class TestValidatorRegistry:
             "consensus",
             "supply_chain",
             "reputation",
+            "memory_concurrent_writers",
+            "streaming_payments",
+            "comms_versioning",
         }
         assert set(VALIDATORS.keys()) == expected
 

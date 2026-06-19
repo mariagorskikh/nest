@@ -66,12 +66,6 @@ export function Footer() {
             >
               Report an issue
             </FooterLink>
-            <FooterLink
-              href="https://github.com/projnanda/nandatown/discussions"
-              external
-            >
-              Discussions
-            </FooterLink>
           </FooterColumn>
         </div>
 

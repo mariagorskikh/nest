@@ -548,7 +548,7 @@ pip install "nest-core[plugins]"`}
             <p className="mb-8 text-[0.92rem] text-ink-400">
               Prefer to skip the venv? Use{' '}
               <a
-                href="https://pipx.pypa.io/stable/installation/"
+                href="https://pipx.pypa.io/latest/installation/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-rust hover:text-rust/80 underline underline-offset-2"
@@ -1030,7 +1030,7 @@ my_decay = "my_trust.plugin:DecayTrust"`}
                     the folder where you made the venv, then try again.
                     Or install with{' '}
                     <a
-                      href="https://pipx.pypa.io/stable/installation/"
+                      href="https://pipx.pypa.io/latest/installation/"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-rust hover:text-rust/80 underline underline-offset-2"

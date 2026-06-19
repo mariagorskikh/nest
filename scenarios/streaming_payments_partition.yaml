@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Streaming payments with network partition: buyers isolated from sellers.
+# Tests the no-overbill-on-partition validator — partitioned payers must not
+# keep billing when messages to the payee are dropped.
+
+name: streaming_payments_partition
+description: |
+  Five buyers stream payments to five sellers under a network partition that
+  isolates buyers from sellers. Any payment_debited after the partition must
+  be caught by the over-bill validator. All three validators run: conservation,
+  no-drain-after-close, no-overbill-on-partition.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+      config:
+        initial_balance: 5000
+    - name: seller
+      count: 5
+      config:
+        initial_balance: 100
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: streaming
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: streaming_payments
+  config:
+    rounds: 100
+
+failures:
+  message_drop: 0.05
+  network_partition:
+    groups:
+      - [buyer-0, buyer-1, buyer-2, buyer-3, buyer-4]
+      - [seller-0, seller-1, seller-2, seller-3, seller-4]
+  byzantine_agents: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/streaming_payments_partition.jsonl

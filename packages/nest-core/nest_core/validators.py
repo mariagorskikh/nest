@@ -20,8 +20,9 @@ from __future__ import annotations
 import contextlib
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 class ValidationResult:
@@ -887,11 +888,570 @@ def validate_reputation_warnings(
 
 
 # ---------------------------------------------------------------------------
+hackathon/amaancoderx-crdt-memory
+# Memory convergence (CRDT) validators
+# ---------------------------------------------------------------------------
+
+
+async def validate_crdt_convergence(
+    make_replica: Callable[[str], Any],
+    writes: list[tuple[int, bytes]],
+    delivery_orders: list[list[int]],
+    *,
+    key: str = "k",
+) -> list[ValidationResult]:
+    """Adversarial convergence check for a CRDT memory plugin.
+
+    This is the discriminating validator the memory-CRDT problem asks for: it
+    drives ``len(delivery_orders)`` replicas through the *same* multiset of
+    writes but delivers those writes to each replica in a **different order**,
+    then asserts every replica reads back an identical value. A conflict-free
+    plugin passes for any orders; an order-dependent plugin such as
+    ``blackboard`` fails the moment two replicas see the writes in different
+    orders.
+
+    The replication channel is chosen by capability: if the plugin exposes
+    ``export`` / ``merge`` (a CvRDT), gossip is delivered through them; if not
+    (e.g. ``blackboard``), the raw payload is delivered through ``write``, so
+    last-writer-wins divergence is exposed faithfully.
+
+    Args:
+        make_replica: factory ``node_id -> plugin instance``.
+        writes: ``(origin_replica_index, payload)`` pairs applied at origin.
+        delivery_orders: one permutation of ``range(len(writes))`` per replica;
+            its length is the replica count.
+        key: the shared key all writes target.
+
+    Example::
+
+        from nest_plugins_reference.memory.lww_register import LwwRegisterMemory
+        results = await validate_crdt_convergence(
+            LwwRegisterMemory,
+            writes=[(0, b"a"), (1, b"b"), (2, b"c")],
+            delivery_orders=[[0, 1, 2], [2, 1, 0], [1, 0, 2]],
+        )
+        assert all(r.passed for r in results)
+    """
+    replica_count = len(delivery_orders)
+    replicas = [make_replica(f"node-{i}") for i in range(replica_count)]
+    has_crdt = all(hasattr(r, "export") and hasattr(r, "merge") for r in replicas)
+
+    # Phase 1: apply each write at its origin and capture the gossip payload.
+    gossip: list[bytes] = []
+    for origin, payload in writes:
+        await replicas[origin].write(key, payload)
+        if has_crdt:
+            state = replicas[origin].export(key)
+            gossip.append(state if state is not None else payload)
+        else:
+            gossip.append(payload)
+
+    # Phase 2: deliver every non-local write to each replica in its own order.
+    for r_idx, order in enumerate(delivery_orders):
+        for w_idx in order:
+            if writes[w_idx][0] == r_idx:
+                continue
+            if has_crdt:
+                await replicas[r_idx].merge(key, gossip[w_idx])
+            else:
+                await replicas[r_idx].write(key, gossip[w_idx])
+
+    finals = [await r.read(key) for r in replicas]
+    converged = len(set(finals)) == 1 and finals[0] is not None
+    if converged:
+        return [
+            ValidationResult(
+                "crdt_convergence",
+                True,
+                f"{replica_count} replicas converged to {finals[0]!r} "
+                f"under {replica_count} distinct delivery orders",
+            )
+        ]
+    distinct = sorted({repr(v) for v in finals})
+    return [
+        ValidationResult(
+            "crdt_convergence",
+            False,
+            f"replicas diverged into {len(distinct)} distinct value(s): {', '.join(distinct)}",
+        )
+    ]
+
+
+def validate_memory_convergence(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: every replica's final CRDT state agrees.
+
+    The ``memory_concurrent_writers`` scenario has each agent broadcast its
+    terminal register as a ``final:<json>`` record on stop. This validator
+    confirms every agent emitted exactly one such record and that all of them
+    decode to byte-identical register state -- i.e. the swarm converged.
+    """
+    finals: dict[str, str] = {}
+    duplicates: set[str] = set()
+    malformed: list[str] = []
+
+# Streaming payments validators
+# ---------------------------------------------------------------------------
+
+
+def validate_streaming_conservation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Conservation invariant: total debited == total credited at every tick.
+
+    Scans the trace for payment events and verifies that cumulative funds
+    debited from payers equals cumulative funds credited to payees.
+    """
+    cumulative_debited: dict[str, int] = defaultdict(int)
+    cumulative_credited: dict[str, int] = defaultdict(int)
+
+    for ev in events:
+        if ev.get("kind") not in ("payment_debited", "payment_credited"):
+            continue
+
+        agent = ev.get("agent", "")
+        amount = ev.get("amount", 0)
+
+        if ev.get("kind") == "payment_debited":
+            cumulative_debited[agent] += amount
+        elif ev.get("kind") == "payment_credited":
+            cumulative_credited[agent] += amount
+
+    # Check conservation: sum of all debited == sum of all credited
+    total_debited = sum(cumulative_debited.values())
+    total_credited = sum(cumulative_credited.values())
+
+    if total_debited != total_credited:
+        detail = (
+            f"conservation violation: total debited={total_debited} "
+            f"!= total credited={total_credited}"
+        )
+        return [ValidationResult("streaming_conservation", False, detail)]
+
+    return [
+        ValidationResult(
+            "streaming_conservation",
+            True,
+            f"conservation verified: {total_debited} total flow",
+        )
+    ]
+
+
+def validate_streaming_no_drain_after_close(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: closed streams must not drain after closure.
+
+    Tracks open_stream -> close_stream for each ref, verifies no
+    payment_debited events occur after close for that stream ref.
+    """
+    open_times: dict[str, int] = {}  # PaymentRef -> tick
+    close_times: dict[str, int] = {}  # PaymentRef -> tick
+    stream_debits: dict[str, list[int]] = defaultdict(lambda: [])  # PaymentRef -> [ticks]
+
+    for ev in events:
+        tick = ev.get("tick", 0)
+
+        if ev.get("event_type") == "stream_opened":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                open_times[ref] = tick
+
+        elif ev.get("event_type") == "stream_closed":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                close_times[ref] = tick
+
+        elif ev.get("kind") == "payment_debited":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                assert isinstance(stream_debits[ref], list)
+                stream_debits[ref].append(tick)
+
+    # Check: no debit after close
+    violations: list[str] = []
+    for ref, close_tick in close_times.items():
+        debits_after = [t for t in stream_debits.get(ref, []) if t > close_tick]
+        if debits_after:
+            violations.append(f"stream {ref} debited after close at {close_tick}: {debits_after}")
+
+    if violations:
+        return [ValidationResult("streaming_no_drain_after_close", False, "; ".join(violations))]
+
+    return [
+        ValidationResult(
+            "streaming_no_drain_after_close",
+            True,
+            f"verified {len(close_times)} streams, no drain-after-close",
+        )
+    ]
+
+
+def validate_streaming_no_overbill_on_partition(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: payer must not keep billing when partitioned from payee.
+
+    When the simulator drops messages between a payer and payee (network
+    partition), any ``payment_debited`` after that point is billing for
+    service the payee cannot deliver — an over-bill on partition.
+
+    Tracks (payer, payee) pairs from ``stream_opened`` events, then scans
+    for ``dropped`` events between those pairs.  Any debit that lands at or
+    after a drop-tick between the same payer and payee is a violation.
+    """
+    # stream_ref -> (payer, payee)
+    stream_parties: dict[str, tuple[str, str]] = {}
+    # (payer, payee) -> first tick where drop was observed
+    partition_start: dict[tuple[str, str], int] = {}
+    violations: list[str] = []
+
+    for ev in events:
+        tick = ev.get("tick", 0)
+
+        if ev.get("event_type") == "stream_opened":
+            ref = ev.get("stream_ref", "")
+            payer = ev.get("agent", "")
+            payee = ev.get("to", "")
+            if ref and payer and payee:
+                stream_parties[ref] = (payer, payee)
+
+        elif ev.get("kind") == "dropped":
+            sender = ev.get("from", "")
+            receiver = ev.get("agent", "")
+            # Record the earliest tick a partition was observed either way
+            if sender and receiver:
+                key = (sender, receiver)
+                if key not in partition_start or tick < partition_start[key]:
+                    partition_start[key] = tick
+                # Reverse direction too — partition is bidirectional
+                rev_key = (receiver, sender)
+                if rev_key not in partition_start or tick < partition_start[rev_key]:
+                    partition_start[rev_key] = tick
+
+        elif ev.get("kind") == "payment_debited":
+            ref = ev.get("stream_ref", "")
+            if ref not in stream_parties:
+                continue
+            payer, payee = stream_parties[ref]
+            drop_tick = partition_start.get((payer, payee))
+            if drop_tick is not None and tick >= drop_tick:
+                violations.append(
+                    f"stream {ref}: payer={payer} debited at tick {tick} "
+                    f"but partitioned from payee={payee} since tick {drop_tick}"
+                )
+
+    if violations:
+        return [
+            ValidationResult(
+                "streaming_no_overbill_on_partition",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "streaming_no_overbill_on_partition",
+            True,
+            f"verified {len(stream_parties)} streams across "
+            f"{len(partition_start)} partition edges, no over-bill",
+# Comms schema-versioning validators (adversarial)
+# ---------------------------------------------------------------------------
+
+# The wire contract a versioned comms layer must honour, encoded here
+# independently of any plugin so these checks can judge *any* comms
+# implementation -- including the default ``nest_native``, which fails both.
+_COMMS_KNOWN_MAJOR = 1
+_COMMS_KNOWN_ENVELOPE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "id",
+        "sender",
+        "receiver",
+        "payload",
+        "correlation_id",
+        "timestamp",
+        "metadata",
+    }
+)
+
+
+def _parse_comms_envelope(msg: str) -> dict[str, Any] | None:
+    """Parse a trace ``msg`` as a comms envelope, or return ``None``.
+
+    Receiver acks and non-JSON payloads are not envelopes and yield ``None``.
+
+    Example::
+
+        env = _parse_comms_envelope('{"id": "m1", "schema_version": "1.1"}')
+    """
+    if not msg.startswith("{"):
+        return None
+    try:
+        loaded = json.loads(msg)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(loaded, dict) or "id" not in loaded:
+        return None
+    return cast("dict[str, Any]", loaded)
+
+
+def _comms_major(version: str) -> int | None:
+    """Return the integer major of a SemVer string, or ``None`` if malformed.
+
+    Example::
+
+        assert _comms_major("2.3") == 2
+    """
+    try:
+        return int(version.split(".", 1)[0])
+    except (ValueError, AttributeError):
+        return None
+
+
+def _collect_comms_wire(
+    events: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Map each envelope id to its on-the-wire ``version``/``major``/unknowns.
+
+    Reads ground truth from the bytes a receiver actually *received*,
+    independent of how it then chose to decode them. Only delivered envelopes
+    are judged, so a dropped message never counts as a missing ack.
+    """
+    wire: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        env = _parse_comms_envelope(str(ev.get("msg", "")))
+        if env is None:
+            continue
+        mid = str(env.get("id"))
+        version = str(env.get("schema_version", "1.0"))
+        unknown = {k for k in env if k not in _COMMS_KNOWN_ENVELOPE_FIELDS}
+        wire[mid] = {
+            "version": version,
+            "major": _comms_major(version),
+            "unknown_fields": unknown,
+        }
+    return wire
+
+
+def _collect_comms_acks(
+    events: list[dict[str, Any]],
+) -> dict[str, tuple[str, set[str]]]:
+    """Map each envelope id to the receiver's ``(status, preserved_fields)``.
+
+    Receivers emit ``ack:<id>:<status>:<comma-separated preserved fields>``
+    where ``status`` is ``accepted`` or ``rejected_major``.
+    """
+    acks: dict[str, tuple[str, set[str]]] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("final:"):
+            continue
+        agent = str(ev.get("agent", ""))
+        body = msg[len("final:") :]
+        try:
+            parsed = json.loads(body)
+            canonical = json.dumps(parsed, sort_keys=True)
+        except (ValueError, TypeError):
+            malformed.append(agent)
+            continue
+        if agent in finals:
+            duplicates.add(agent)
+        finals[agent] = canonical
+
+    results: list[ValidationResult] = []
+
+    if malformed:
+        results.append(
+            ValidationResult(
+                "memory_convergence_wellformed",
+                False,
+                f"{len(malformed)} malformed final record(s): {sorted(set(malformed))}",
+            )
+        )
+
+    if not finals:
+        results.append(
+            ValidationResult(
+                "memory_convergence",
+                False,
+                "no final replica states found in trace",
+            )
+        )
+        return results
+
+    distinct = set(finals.values())
+    if len(distinct) == 1:
+        results.append(
+            ValidationResult(
+                "memory_convergence",
+                True,
+                f"all {len(finals)} replicas converged to identical state",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "memory_convergence",
+                False,
+                f"{len(finals)} replicas hold {len(distinct)} distinct final states",
+            )
+        )
+
+    if duplicates:
+        results.append(
+            ValidationResult(
+                "memory_convergence_one_final_per_agent",
+                False,
+                f"agents emitted multiple final records: {sorted(duplicates)}",
+            )
+        )
+
+    return results
+
+
+def validate_memory_liveness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: every agent that started reported a final state.
+
+    Convergence is only meaningful if no replica silently dropped out. This
+    check confirms that every agent with a ``start`` event also emitted a
+    ``final:`` record -- i.e. the gossip protocol made progress at every
+    replica, not just the ones that happened to win.
+    """
+    started: set[str] = set()
+    reported: set[str] = set()
+    for ev in events:
+        agent = str(ev.get("agent", ""))
+        if ev.get("kind") == "start":
+            started.add(agent)
+        elif ev.get("kind") in ("send", "broadcast") and str(ev.get("msg", "")).startswith(
+            "final:"
+        ):
+            reported.add(agent)
+
+    if not started:
+        return [ValidationResult("memory_liveness", False, "no agents started in trace")]
+    missing = started - reported
+    if missing:
+        return [
+            ValidationResult(
+                "memory_liveness",
+                False,
+                f"{len(missing)} replica(s) never reported a final state: {sorted(missing)}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "memory_liveness",
+            True,
+            f"all {len(started)} replicas reported a final state",
+        if not msg.startswith("ack:"):
+            continue
+        parts = msg.split(":", 3)
+        if len(parts) < 3:
+            continue
+        mid, status = parts[1], parts[2]
+        preserved = {f for f in parts[3].split(",") if f} if len(parts) > 3 else set[str]()
+        acks[mid] = (status, preserved)
+    return acks
+
+
+def validate_comms_reject_unknown_major(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must reject envelopes whose major version they don't speak.
+
+    Catches the *silent-accept* attack: ``nest_native`` ignores
+    ``schema_version`` and decodes a breaking v2.0 envelope into a
+    plausible-but-wrong message, whereas ``versioned`` rejects it.
+
+    Example::
+
+        results = validate_comms_reject_unknown_major(events)
+    """
+    wire = _collect_comms_wire(events)
+    acks = _collect_comms_acks(events)
+    violations: list[str] = []
+    checked = 0
+    for mid, info in wire.items():
+        major = info["major"]
+        if major is None or major <= _COMMS_KNOWN_MAJOR:
+            continue
+        checked += 1
+        status = acks.get(mid)
+        if status is None or status[0] != "rejected_major":
+            got = "no ack" if status is None else status[0]
+            violations.append(f"{mid}: unknown major {info['version']} not rejected (got {got})")
+    if violations:
+        return [ValidationResult("comms_reject_unknown_major", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_reject_unknown_major",
+            True,
+            f"{checked} unknown-major envelope(s) correctly rejected",
+        )
+    ]
+
+
+def validate_comms_no_silent_drop(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must preserve unknown fields from newer-minor peers.
+
+    Catches the *silent-drop* attack: ``nest_native`` reads only the fields it
+    knows and discards a field a newer peer added with no trace, whereas
+    ``versioned`` preserves it for round-trip re-emission.
+
+    Example::
+
+        results = validate_comms_no_silent_drop(events)
+    """
+    wire = _collect_comms_wire(events)
+    acks = _collect_comms_acks(events)
+    violations: list[str] = []
+    checked = 0
+    for mid, info in wire.items():
+        if info["major"] != _COMMS_KNOWN_MAJOR or not info["unknown_fields"]:
+            continue
+        checked += 1
+        status = acks.get(mid)
+        if status is None:
+            unknown = sorted(info["unknown_fields"])
+            violations.append(f"{mid}: carried unknown {unknown} but no ack")
+            continue
+        outcome, preserved = status
+        if outcome != "accepted" or not info["unknown_fields"] <= preserved:
+            dropped = sorted(info["unknown_fields"] - preserved)
+            violations.append(f"{mid}: silently dropped {dropped} (status {outcome})")
+    if violations:
+        return [ValidationResult("comms_no_silent_drop", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_no_silent_drop",
+            True,
+            f"{checked} forward-compat envelope(s) preserved all unknown fields",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
 
 VALIDATORS: dict[str, list[Any]] = {
+    "comms_versioning": [
+        validate_comms_reject_unknown_major,
+        validate_comms_no_silent_drop,
+    ],
     "marketplace": [
         validate_marketplace_no_double_sell,
         validate_marketplace_responses,
@@ -919,5 +1479,13 @@ VALIDATORS: dict[str, list[Any]] = {
     "reputation": [
         validate_reputation_scoring,
         validate_reputation_warnings,
+    ],
+    "memory_concurrent_writers": [
+        validate_memory_convergence,
+        validate_memory_liveness,
+    "streaming_payments": [
+        validate_streaming_conservation,
+        validate_streaming_no_drain_after_close,
+        validate_streaming_no_overbill_on_partition,
     ],
 }

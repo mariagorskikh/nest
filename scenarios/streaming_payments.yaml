@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# Streaming payments scenario: buyers stream payments to sellers.
+# Tests conservation of funds, mid-stream cancellation, and drain-after-close.
+
+name: streaming_payments
+description: |
+  Five buyers open streams to five sellers over 100 rounds with 5% message drop.
+  All three validators must pass: conservation, no-drain-after-close,
+  and no-overbill-on-partition.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+      config:
+        initial_balance: 5000
+    - name: seller
+      count: 5
+      config:
+        initial_balance: 100
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: streaming
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: streaming_payments
+  config:
+    rounds: 100
+
+failures:
+  message_drop: 0.05
+  byzantine_agents: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/streaming_payments.jsonl

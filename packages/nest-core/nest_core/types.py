@@ -151,6 +151,7 @@ class PaymentStatus(enum.Enum):
 
     PENDING = "pending"
     CONFIRMED = "confirmed"
+    STREAMING = "streaming"
     FAILED = "failed"
     REFUNDED = "refunded"
 
