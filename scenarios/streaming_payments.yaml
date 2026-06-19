@@ -1,4 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
+<<<<<<< HEAD
+# Streaming payments scenario: 5 buyers, 5 sellers, rolling streams, 5% message drop.
+name: streaming_payments
+description: >
+  5 buyers open streaming payment channels to 5 sellers with
+  per-tick metering.  Buyers open and close streams dynamically
+  while 5% of messages are dropped to simulate adversarial
+  network conditions.
+=======
 # Streaming payments scenario: buyers stream payments to sellers.
 # Tests conservation of funds, mid-stream cancellation, and drain-after-close.
 
@@ -7,6 +16,7 @@ description: |
   Five buyers open streams to five sellers over 100 rounds with 5% message drop.
   All three validators must pass: conservation, no-drain-after-close,
   and no-overbill-on-partition.
+>>>>>>> 2c00cf854e3591edeb9cd98d9aef6a4b80640967
 
 tier: 1
 seed: 42
@@ -17,12 +27,17 @@ agents:
   roles:
     - name: buyer
       count: 5
+<<<<<<< HEAD
+    - name: seller
+      count: 5
+=======
       config:
         initial_balance: 5000
     - name: seller
       count: 5
       config:
         initial_balance: 100
+>>>>>>> 2c00cf854e3591edeb9cd98d9aef6a4b80640967
 
 layers:
   transport: in_memory
@@ -39,6 +54,26 @@ layers:
   datafacts: datafacts_v1
 
 task:
+<<<<<<< HEAD
+  type: streaming_marketplace
+  config:
+    streams_per_buyer: 2
+    max_rate_per_tick: 10
+    max_total_per_stream: 500
+    ticks: 200
+
+failures:
+  message_drop: 0.05
+
+duration: "ticks: 500"
+
+metrics:
+  - success_rate
+  - mean_latency
+  - message_count
+  - total_streams_opened
+  - total_streams_closed
+=======
   type: streaming_payments
   config:
     rounds: 100
@@ -52,6 +87,7 @@ duration: "ticks: 10000"
 metrics:
   - message_count
   - agent_count
+>>>>>>> 2c00cf854e3591edeb9cd98d9aef6a4b80640967
 
 output:
   trace: ./traces/streaming_payments.jsonl

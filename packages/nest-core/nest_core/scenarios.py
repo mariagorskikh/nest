@@ -71,6 +71,12 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.reputation import reputation_factory
 
         register_scenario("reputation", reputation_factory)
+<<<<<<< HEAD
+    elif name == "streaming_payments":
+        from nest_core.scenarios_builtin.streaming_payments import streaming_payments_factory
+
+        register_scenario("streaming_payments", streaming_payments_factory)
+=======
     elif name == "identity_rotation":
         from nest_core.scenarios_builtin.identity_rotation import (
             identity_rotation_factory,
@@ -97,3 +103,4 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("receipt_reputation", receipt_reputation_factory)
+>>>>>>> 2c00cf854e3591edeb9cd98d9aef6a4b80640967
