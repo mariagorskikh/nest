@@ -166,6 +166,21 @@ class TestSelectiveDisclosure:
             return
         raise AssertionError("inconsistent witness unexpectedly proved")  # pragma: no cover
 
+    async def test_random_salts_by_default_are_unlinkable_but_verify(self) -> None:
+        """With no salt_seed the salts are random: two commitments of the same
+        fields differ (unlinkable), yet each still proves and verifies."""
+        alice = _mk("alice")
+        fields = {"age": "21", "country": "NG"}
+        root1, salts1 = commit_credential(fields)
+        root2, _ = commit_credential(fields)
+        assert root1 != root2
+        statement = Statement(
+            predicate="selective_disclosure", public_inputs={"root": root1, "reveal": "age"}
+        )
+        witness = Witness(private_inputs={**fields, "__salts__": _dumps(salts1)})
+        proof = await alice.prove(statement, witness)
+        assert await alice.verify_proof(statement, proof)
+
 
 # ---------------------------------------------------------------------------
 # 2. Adversarial discrimination — validators pass vs hybrid, fail vs noop

@@ -72,7 +72,6 @@ Example::
     bob = HybridX25519Privacy(AgentId("bob"), seed=b"b", deterministic=True)
     alice.register_peer(AgentId("bob"), bob.public_key)
     env = await alice.encrypt(b"sealed-bid:1700", [AgentId("bob")])
-    bob.register_self_as(AgentId("bob"))  # bob already knows its own key
     assert await bob.decrypt(env) == b"sealed-bid:1700"
 """
 
@@ -81,6 +80,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -192,7 +192,7 @@ def _canon(obj: dict[str, Any]) -> bytes:
 
 
 def _b64(raw: bytes) -> str:
-    """URL-safe base64 (no padding loss) for embedding bytes in the envelope."""
+    """Standard base64 for embedding raw bytes as ASCII inside the JSON envelope."""
     return base64.b64encode(raw).decode("ascii")
 
 
@@ -231,6 +231,18 @@ def _raw_private(key: X25519PrivateKey) -> bytes:
 def _key_id(public_key: bytes) -> str:
     """Stable short identifier for a public key (first 16 hex of its SHA-256)."""
     return hashlib.sha256(public_key).hexdigest()[:16]
+
+
+def _wrap_key(shared: bytes, eph_pub: bytes, recipient_key_id: str) -> bytes:
+    """Derive a per-recipient key-wrap key from an ECDH shared secret.
+
+    Binds the **ephemeral public key** and the recipient identity into the HKDF
+    ``info`` (HPKE-style key schedule), so a wrap is cryptographically tied to
+    this exact encapsulation and recipient — not reusable across messages or
+    recipients even if a shared secret somehow recurred.
+    """
+    info = b"veil-wrap|" + eph_pub + b"|" + recipient_key_id.encode("ascii")
+    return _hkdf(shared, info)
 
 
 # ---------------------------------------------------------------------------
@@ -311,27 +323,35 @@ def _root_from_path(leaf: bytes, path: list[tuple[str, bool]]) -> bytes:
 
 
 def commit_credential(
-    fields: dict[str, str], *, salt_seed: bytes = b""
+    fields: dict[str, str], *, salt_seed: bytes | None = None
 ) -> tuple[str, dict[str, str]]:
     """Issuer helper: commit a multi-field credential to a single root.
 
     Returns ``(root_hex, salts)`` where ``salts`` maps each field name to a hex
-    salt. Fields are ordered by sorted name so the commitment is deterministic.
-    With a non-empty ``salt_seed`` the salts (and thus the root) are reproducible
-    for trace tests; with the default empty seed they are derived from the field
-    content alone (still hiding, since values include entropy in practice — pass
-    a seed for unlinkable commitments across credentials).
+    16-byte salt; fields are ordered by sorted name. The salt is what makes a
+    leaf *hiding*: without it, a low-entropy field (``age``, a country code)
+    could be recovered by hashing every candidate.
+
+    **Secure default:** with ``salt_seed=None`` the salts are drawn from the
+    system RNG, so the commitment is hiding and unlinkable across credentials.
+    Pass an explicit ``salt_seed`` *only* for reproducible Tier-1 trace tests —
+    that makes the salts deterministic (and, for a publicly known seed, publicly
+    re-derivable), trading hiding for replayability. Production issuers must use
+    the random default.
 
     Example::
 
-        root, salts = commit_credential({"age": "21", "country": "NG"}, salt_seed=b"s")
+        root, salts = commit_credential({"age": "21", "country": "NG"})
         assert len(root) == 64 and set(salts) == {"age", "country"}
     """
     names = sorted(fields)
     salts: dict[str, str] = {}
     leaves: list[bytes] = []
     for name in names:
-        salt = _hkdf(salt_seed, b"veil-salt|" + name.encode("utf-8"), length=16)
+        if salt_seed is None:
+            salt = os.urandom(16)
+        else:
+            salt = _hkdf(salt_seed, b"veil-salt|" + name.encode("utf-8"), length=16)
         salts[name] = salt.hex()
         leaves.append(_leaf(name, fields[name], salt))
     return _merkle_root(leaves).hex(), salts
@@ -495,18 +515,6 @@ class HybridX25519Privacy:
         """
         self._directory[agent_id] = public_key
 
-    def register_self_as(self, agent_id: AgentId) -> None:
-        """Alias this agent's own key under *agent_id* (no-op convenience).
-
-        Useful in tests where the sender addresses the recipient by id and the
-        recipient wants its own key indexed under the same id.
-
-        Example::
-
-            bob.register_self_as(AgentId("bob"))
-        """
-        self._directory[agent_id] = self._public
-
     def revoke(self, agent_id: AgentId) -> int:
         """Revoke *agent_id*: advance the epoch and exclude it from future wraps.
 
@@ -540,8 +548,6 @@ class HybridX25519Privacy:
                 b"veil-nonce|" + msg_id.encode("utf-8") + b"|" + str(index).encode("ascii"),
                 length=_NONCE_BYTES,
             )
-        import os
-
         return os.urandom(_NONCE_BYTES)
 
     def _content_key(self, msg_id: str, eph_pub: bytes) -> bytes:
@@ -550,8 +556,6 @@ class HybridX25519Privacy:
                 _raw_private(self._private),
                 b"veil-cek|" + msg_id.encode("utf-8") + b"|" + eph_pub,
             )
-        import os
-
         return os.urandom(_KEY_BYTES)
 
     # -- Privacy protocol: encryption -----------------------------------------
@@ -604,7 +608,7 @@ class HybridX25519Privacy:
         for index, aid in enumerate(recipients):
             peer_pub = self._directory[aid]
             shared = eph_priv.exchange(X25519PublicKey.from_public_bytes(peer_pub))
-            wrap_key = _hkdf(shared, b"veil-wrap|" + _key_id(peer_pub).encode("ascii"))
+            wrap_key = _wrap_key(shared, eph_pub, _key_id(peer_pub))
             wrap_nonce = self._nonce(msg_id, index + 1)
             wrapped = ChaCha20Poly1305(wrap_key).encrypt(wrap_nonce, content_key, aad)
             wraps.append({"kid": _key_id(peer_pub), "n": _b64(wrap_nonce), "w": _b64(wrapped)})
@@ -650,7 +654,7 @@ class HybridX25519Privacy:
             }
         )
         shared = self._private.exchange(X25519PublicKey.from_public_bytes(env.eph_pub))
-        wrap_key = _hkdf(shared, b"veil-wrap|" + self._key_id.encode("ascii"))
+        wrap_key = _wrap_key(shared, env.eph_pub, self._key_id)
         try:
             content_key = ChaCha20Poly1305(wrap_key).decrypt(wrap.nonce, wrap.wrapped, aad)
             plaintext = ChaCha20Poly1305(content_key).decrypt(env.nonce, env.ciphertext, aad)
