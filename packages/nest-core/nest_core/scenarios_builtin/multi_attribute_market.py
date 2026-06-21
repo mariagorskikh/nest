@@ -1,28 +1,36 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Multi-attribute market scenario — price + deadline bilateral negotiation.
+"""Multi-attribute market scenario — price + deadline, asymmetric evaluation.
 
-Ten buyer-seller pairs each negotiate over two issues, *price* and *deadline*,
-driving the configured ``negotiation`` plugin. The pairs are seeded with
-deliberately *asymmetric* preferences (Raiffa's integrative / logrolling
-structure): the buyer is almost entirely price-driven while the seller is almost
-entirely deadline-driven. A price-only haggler leaves value on the table here;
-a multi-attribute negotiator can trade the issue each side cares little about
-(buyer concedes the deadline, seller concedes the price) and reach a
-Pareto-efficient deal.
+Ten negotiations, each between a *fixed* buyer counterpart and a *configured*
+seller plugin under test. This is the ANAC-style asymmetric evaluation: holding
+one side fixed turns the other side's ``respond`` into the discriminator, so the
+trace shows whether the plugin reasons about the *full* multi-attribute Terms or
+only price.
 
-Every exchanged bundle and each agent's *otherwise private* utility parameters
-are written to the trace as colon-delimited frames, so an offline validator can
-reconstruct each agent's utility and check the agreement for Pareto-optimality.
-Frame grammar (floats are formatted to 6 dp for byte-determinism)::
+The buyer is deliberately **indifferent to the deadline** (``w_deadline = 0``):
+it cares only about price, conceding price monotonically from its best toward a
+midpoint over the rounds. Because the deadline costs the buyer nothing, it hands
+the deadline-loving seller a long-deadline bundle *early* and cheaply (Raiffa's
+integrative / logrolling structure: trade the issue you don't value for the one
+your counterpart does). A deadline-aware seller grabs that early bundle and
+settles on a Pareto-efficient logroll; a deadline-blind, timeout-driven seller
+(e.g. the reference ``alternating_offers``, which never reads
+``conditions['deadline_days']`` and only accepts at its round limit) holds out
+and closes on a late short-deadline bundle that the early gift dominates.
+
+Every exchanged bundle and each agent's private utility parameters are written
+to the trace, so the offline validator can reconstruct utilities and check the
+agreement for Pareto-optimality. Frame grammar (floats to 6 dp for
+byte-determinism)::
 
     mautil:<agent>:<side>:<w_price>:<w_deadline>:<plo>:<phi>:<dlo>:<dhi>:<reservation>
     offer:<sid>:<agent>:<side>:<round>:<price>:<deadline>
     agree:<sid>:<price>:<deadline>:<accepting_agent>
     breakdown:<sid>:<rounds>
 
-The whole bargaining loop runs synchronously inside each buyer's ``on_start``,
-so there is no cross-agent event interleaving to make non-deterministic; the
-frames are still emitted as real ``ctx.send`` calls, so the trace is authentic.
+The buyer drives the whole exchange synchronously inside ``on_start`` (no
+cross-agent event interleaving to make non-deterministic), emitting authentic
+``ctx.send`` frames. All randomness is seeded only from ``(config.seed, pair)``.
 
 Example::
 
@@ -51,19 +59,44 @@ DEADLINE_RANGE = (1, 30)
 """Feasible deadline interval (days), shared by every pair."""
 
 PATIENCE = 0.9
-"""Concession discount per round (see ParetoNegotiation aspiration schedule)."""
+"""Concession discount per round for the seller plugin under test."""
 
 RESERVATION = 0.0
 """Walk-away utility floor for every agent."""
 
-MAX_ROUNDS = 12
+MAX_ROUNDS = 10
 """Maximum bargaining rounds before a negotiation is declared a breakdown."""
 
 WEIGHT_LOW = 0.85
-"""Lower bound of the dominant attribute's weight."""
+"""Lower bound of the seller's dominant (deadline) weight."""
 
 WEIGHT_HIGH = 0.95
-"""Upper bound of the dominant attribute's weight."""
+"""Upper bound of the seller's dominant (deadline) weight."""
+
+BUYER_WEIGHTS = {"price": 1.0, "deadline": 0.0}
+"""The fixed buyer counterpart: price-driven, wholly indifferent to deadline."""
+
+MIDPOINT_PRICE = 100
+"""Price the buyer concedes toward by the final round (from its low-price best)."""
+
+GIFT_ROUNDS = (2, 3)
+"""Rounds where the buyer offers the maximum deadline -- the integrative gift.
+
+Two rounds, not one: a deadline-aware seller's aspiration ``patience ** (r-1)``
+is ``0.9`` at round 2 (which a low-deadline-weight seller's utility for the gift
+does not always clear) but ``0.81`` at round 3 (which every weight in
+``[WEIGHT_LOW, WEIGHT_HIGH]`` clears). Offering the long deadline in both rounds
+guarantees the seller accepts a non-dominated frontier bundle regardless of its
+drawn weight, while keeping the round-2 anchor the spec calls for.
+"""
+
+SHORT_DEADLINE_MAX = 5
+"""Upper bound for the buyer's deadline on non-gift rounds.
+
+Late rounds carry a short deadline, so whichever late bundle a timeout-driven
+seller closes on is dominated by the early long-deadline gift -- the dominance
+holds for every seed and every seller weight, not just by luck.
+"""
 
 
 def _mautil_frame(
@@ -121,19 +154,42 @@ def _construct_negotiator(neg_cls: Any, agent_id: AgentId, candidate: dict[str, 
 
     Example::
 
-        neg = _construct_negotiator(ParetoNegotiation, AgentId("buyer-0"), candidate)
+        neg = _construct_negotiator(ParetoNegotiation, AgentId("seller-0"), candidate)
     """
     params = inspect.signature(neg_cls.__init__).parameters
     accepted = {key: value for key, value in candidate.items() if key in params}
     return neg_cls(agent_id, **accepted)
 
 
-class MarketSellerAgent(StateMachineAgent):
-    """Passive counterparty: exists for addressing and topology only.
+def _buyer_schedule(
+    rng: random.Random, bounds: tuple[int, int, int, int], max_rounds: int
+) -> list[tuple[int, int]]:
+    """Build the buyer's deterministic, price-monotonic concession schedule.
 
-    The seller's negotiation plugin is driven by its paired buyer's ``on_start``
-    loop, so the seller agent itself does no work; it only needs to be a real
-    addressable node in the simulation.
+    Price rises from just above the floor toward the midpoint (the buyer
+    conceding on the only issue it values). The deadline is the maximum on the
+    gift rounds and a short, seeded value otherwise -- the buyer gives the
+    deadline away early because it is indifferent to it.
+
+    Example::
+
+        schedule = _buyer_schedule(random.Random("42:0"), (50, 150, 1, 30), 10)
+    """
+    plo, _phi, dlo, dhi = bounds
+    short_hi = max(dlo, min(dhi, SHORT_DEADLINE_MAX))
+    schedule: list[tuple[int, int]] = []
+    for r in range(1, max_rounds + 1):
+        price = round(plo + (MIDPOINT_PRICE - plo) * r / max_rounds)
+        deadline = dhi if r in GIFT_ROUNDS else rng.randint(dlo, short_hi)
+        schedule.append((price, deadline))
+    return schedule
+
+
+class MarketSellerAgent(StateMachineAgent):
+    """Passive counterparty node: the seller plugin is driven by the buyer's loop.
+
+    The seller agent does no work itself; it only needs to be a real addressable
+    node so the buyer's ``ctx.send`` frames have a destination.
 
     Example::
 
@@ -145,19 +201,20 @@ class MarketSellerAgent(StateMachineAgent):
 
 
 class MarketBuyerAgent(StateMachineAgent):
-    """Drives one bilateral price+deadline negotiation to completion.
+    """The fixed buyer counterpart that drives one negotiation against the plugin.
 
-    Holds both its own and its paired seller's negotiation-plugin instances and
-    runs the full alternating concession loop in ``on_start``. Each plugin still
-    only ever sees its own private utility plus the incoming :class:`Terms`, so
-    the information asymmetry of real bargaining is preserved.
+    Holds the seller's configured negotiation-plugin instance and a precomputed
+    price-monotonic concession schedule, and runs the full exchange in
+    ``on_start``: it presents each scheduled offer to the seller's ``respond``
+    and records every bundle. The buyer never acts on the seller's counteroffers
+    (it follows its own schedule), which keeps the evaluation a clean test of the
+    seller's ``respond`` rather than an echo loop.
 
     Example::
 
         agent = MarketBuyerAgent(
-            AgentId("buyer-0"), AgentId("seller-0"), "pair-0",
-            buyer_neg, seller_neg, buyer_weights, seller_weights,
-            (50, 150, 1, 30), 0.0,
+            AgentId("buyer-0"), AgentId("seller-0"), "pair-0", seller_neg,
+            BUYER_WEIGHTS, seller_weights, (50, 150, 1, 30), 0.0, schedule, 10,
         )
     """
 
@@ -166,37 +223,31 @@ class MarketBuyerAgent(StateMachineAgent):
         buyer_id: AgentId,
         seller_id: AgentId,
         sid: str,
-        buyer_neg: Any,
         seller_neg: Any,
         buyer_weights: dict[str, float],
         seller_weights: dict[str, float],
         bounds: tuple[int, int, int, int],
         reservation: float,
+        schedule: list[tuple[int, int]],
+        max_rounds: int,
     ) -> None:
         self._buyer_id = buyer_id
         self._seller_id = seller_id
         self._sid = sid
-        self._buyer_neg = buyer_neg
         self._seller_neg = seller_neg
         self._buyer_weights = buyer_weights
         self._seller_weights = seller_weights
         self._bounds = bounds
         self._reservation = reservation
-
-    async def _emit_offer(
-        self, ctx: AgentContext, agent_id: AgentId, side: str, rnd: int, terms: Terms
-    ) -> None:
-        price, deadline = _terms_pd(terms)
-        frame = _offer_frame(self._sid, agent_id, side, rnd, price, deadline)
-        await ctx.send(self._seller_id, frame.encode())
+        self._schedule = schedule
+        self._max_rounds = max_rounds
 
     async def on_start(self, ctx: AgentContext) -> None:
-        """Reveal both agents' utilities, then bargain to agreement or breakdown.
+        """Reveal both utilities, then walk the buyer's schedule against the seller.
 
-        Opening offers are each side's best-for-self bundle (the buyer wants the
-        lowest price and shortest deadline; the seller the highest price and
-        longest deadline). Thereafter the two plugins alternate concessions until
-        one accepts or ``MAX_ROUNDS`` is exhausted.
+        The buyer concedes price round by round; the seller plugin evaluates each
+        offer. The negotiation ends the moment the seller accepts (agreement) or
+        the schedule is exhausted (breakdown).
 
         Example::
 
@@ -234,60 +285,42 @@ class MarketBuyerAgent(StateMachineAgent):
             ).encode(),
         )
 
-        buyer_opener = Terms(price=Money(amount=plo), conditions={"deadline_days": dlo})
+        # The seller opens from its best-for-self position; the buyer's scheduled
+        # offers then drive the exchange.
         seller_opener = Terms(price=Money(amount=phi), conditions={"deadline_days": dhi})
+        session = await self._seller_neg.open(self._buyer_id, seller_opener)
 
-        buyer_session = await self._buyer_neg.open(self._seller_id, buyer_opener)
-        seller_session = await self._seller_neg.open(self._buyer_id, seller_opener)
+        for rnd, (price, deadline) in enumerate(self._schedule, start=1):
+            buyer_offer = Terms(price=Money(amount=price), conditions={"deadline_days": deadline})
+            await self._seller_neg.offer(session, buyer_offer)
+            resp = await self._seller_neg.respond(session)
 
-        await self._emit_offer(ctx, self._buyer_id, "buyer", 0, buyer_opener)
-        await self._emit_offer(ctx, self._seller_id, "seller", 0, seller_opener)
+            offer_frame = _offer_frame(self._sid, self._buyer_id, "buyer", rnd, price, deadline)
+            await ctx.send(self._seller_id, offer_frame.encode())
 
-        buyer_last: Terms = buyer_opener
-        seller_last: Terms = seller_opener
-
-        for rnd in range(1, MAX_ROUNDS + 1):
-            # Buyer evaluates the seller's latest offer.
-            await self._buyer_neg.offer(buyer_session, seller_last)
-            b_resp = await self._buyer_neg.respond(buyer_session)
-            if b_resp.accepted:
-                price, deadline = _terms_pd(seller_last)
-                frame = _agree_frame(self._sid, price, deadline, self._buyer_id)
-                await ctx.send(self._seller_id, frame.encode())
+            if resp.accepted:
+                agree = _agree_frame(self._sid, price, deadline, self._seller_id)
+                await ctx.send(self._seller_id, agree.encode())
                 return
-            if b_resp.counter_terms is None:
-                break
-            buyer_last = b_resp.counter_terms
-            await self._emit_offer(ctx, self._buyer_id, "buyer", rnd, buyer_last)
 
-            # Seller evaluates the buyer's latest offer.
-            await self._seller_neg.offer(seller_session, buyer_last)
-            s_resp = await self._seller_neg.respond(seller_session)
-            if s_resp.accepted:
-                price, deadline = _terms_pd(buyer_last)
-                frame = _agree_frame(self._sid, price, deadline, self._seller_id)
-                await ctx.send(self._seller_id, frame.encode())
-                return
-            if s_resp.counter_terms is None:
-                break
-            seller_last = s_resp.counter_terms
-            await self._emit_offer(ctx, self._seller_id, "seller", rnd, seller_last)
+            if resp.counter_terms is not None:
+                cp, cd = _terms_pd(resp.counter_terms)
+                counter = _offer_frame(self._sid, self._seller_id, "seller", rnd, cp, cd)
+                await ctx.send(self._seller_id, counter.encode())
 
-        await ctx.send(self._seller_id, _breakdown_frame(self._sid, MAX_ROUNDS).encode())
+        await ctx.send(self._seller_id, _breakdown_frame(self._sid, self._max_rounds).encode())
 
 
 def multi_attribute_market_factory(
     config: ScenarioConfig, plugins: dict[str, Any]
 ) -> dict[AgentId, Any]:
-    """Build ten buyer-seller pairs with seeded, asymmetric multi-attribute utilities.
+    """Build ten pairs: a fixed price-driven buyer against the configured seller.
 
-    The configured ``negotiation`` plugin class (``plugins["negotiation"]``) is
-    instantiated once per agent, so swapping the ``negotiation:`` layer in the
-    YAML swaps the strategy under test. Per-agent instances are also injected via
-    the ``_agent_plugins`` override channel so each agent's ``ctx`` carries its
-    own negotiator. Each pair's weights are drawn from a generator seeded only
-    from ``(config.seed, pair_index)`` — never the global RNG, never wall-clock —
-    so the run is fully deterministic.
+    Each pair's seller weights and buyer schedule are derived from a generator
+    seeded only from ``(config.seed, pair_index)``. The seller is the configured
+    ``negotiation`` plugin, instantiated through :func:`_construct_negotiator` so
+    swapping the layer in the YAML swaps the strategy under test; its instance is
+    also injected via ``_agent_plugins`` so the seller node's ``ctx`` carries it.
 
     Example::
 
@@ -307,20 +340,11 @@ def multi_attribute_market_factory(
         sid = f"pair-{i}"
 
         rng = random.Random(f"{config.seed}:{i}")
-        w_price_buyer = rng.uniform(WEIGHT_LOW, WEIGHT_HIGH)
-        buyer_weights = {"price": w_price_buyer, "deadline": 1.0 - w_price_buyer}
         w_deadline_seller = rng.uniform(WEIGHT_LOW, WEIGHT_HIGH)
         seller_weights = {"price": 1.0 - w_deadline_seller, "deadline": w_deadline_seller}
+        buyer_weights = dict(BUYER_WEIGHTS)
+        schedule = _buyer_schedule(rng, bounds, MAX_ROUNDS)
 
-        buyer_candidate: dict[str, Any] = {
-            "weights": buyer_weights,
-            "price_range": PRICE_RANGE,
-            "deadline_range": DEADLINE_RANGE,
-            "side": "buyer",
-            "patience": PATIENCE,
-            "reservation": RESERVATION,
-            "max_rounds": MAX_ROUNDS,
-        }
         seller_candidate: dict[str, Any] = {
             "weights": seller_weights,
             "price_range": PRICE_RANGE,
@@ -330,22 +354,21 @@ def multi_attribute_market_factory(
             "reservation": RESERVATION,
             "max_rounds": MAX_ROUNDS,
         }
-        buyer_neg = _construct_negotiator(neg_cls, buyer_id, buyer_candidate)
         seller_neg = _construct_negotiator(neg_cls, seller_id, seller_candidate)
 
         agents[buyer_id] = MarketBuyerAgent(
             buyer_id,
             seller_id,
             sid,
-            buyer_neg,
             seller_neg,
             buyer_weights,
             seller_weights,
             bounds,
             RESERVATION,
+            schedule,
+            MAX_ROUNDS,
         )
         agents[seller_id] = MarketSellerAgent(seller_id)
-        overrides[buyer_id] = {"negotiation": buyer_neg}
         overrides[seller_id] = {"negotiation": seller_neg}
 
     plugins["_agent_plugins"] = overrides
