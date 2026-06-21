@@ -33,6 +33,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("negotiation", "alternating_offers"): (
         f"{_REF}.negotiation.alternating_offers:AlternatingOffers"
     ),
+    ("negotiation", "pareto"): f"{_REF}.negotiation.pareto:ParetoNegotiation",
     ("memory", "blackboard"): f"{_REF}.memory.blackboard:Blackboard",
     ("memory", "lww_register"): f"{_REF}.memory.lww_register:LwwRegisterMemory",
     ("privacy", "noop"): f"{_REF}.privacy.noop:NoopPrivacy",
