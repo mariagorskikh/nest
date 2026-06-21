@@ -33,6 +33,7 @@ Example::
 
 from __future__ import annotations
 
+import inspect
 import random
 from typing import Any
 
@@ -105,6 +106,26 @@ def _terms_pd(terms: Terms) -> tuple[int, int]:
     price = terms.price.amount if terms.price is not None else 0
     deadline = int(terms.conditions.get("deadline_days", 0))
     return price, deadline
+
+
+def _construct_negotiator(neg_cls: Any, agent_id: AgentId, candidate: dict[str, Any]) -> Any:
+    """Instantiate any Negotiation plugin, passing only the kwargs it accepts.
+
+    The Negotiation protocol does not define ``__init__``, so plugins have
+    different constructor signatures: ``ParetoNegotiation`` wants the full
+    multi-attribute config while the reference ``AlternatingOffers`` takes only
+    ``patience``. We introspect ``neg_cls.__init__`` and forward each candidate
+    kwarg that names a real parameter, dropping the rest, so swapping the
+    ``negotiation:`` layer in the YAML never raises a ``TypeError``. ``agent_id``
+    is always passed positionally.
+
+    Example::
+
+        neg = _construct_negotiator(ParetoNegotiation, AgentId("buyer-0"), candidate)
+    """
+    params = inspect.signature(neg_cls.__init__).parameters
+    accepted = {key: value for key, value in candidate.items() if key in params}
+    return neg_cls(agent_id, **accepted)
 
 
 class MarketSellerAgent(StateMachineAgent):
@@ -291,26 +312,26 @@ def multi_attribute_market_factory(
         w_deadline_seller = rng.uniform(WEIGHT_LOW, WEIGHT_HIGH)
         seller_weights = {"price": 1.0 - w_deadline_seller, "deadline": w_deadline_seller}
 
-        buyer_neg = neg_cls(
-            buyer_id,
-            weights=buyer_weights,
-            price_range=PRICE_RANGE,
-            deadline_range=DEADLINE_RANGE,
-            side="buyer",
-            patience=PATIENCE,
-            reservation=RESERVATION,
-            max_rounds=MAX_ROUNDS,
-        )
-        seller_neg = neg_cls(
-            seller_id,
-            weights=seller_weights,
-            price_range=PRICE_RANGE,
-            deadline_range=DEADLINE_RANGE,
-            side="seller",
-            patience=PATIENCE,
-            reservation=RESERVATION,
-            max_rounds=MAX_ROUNDS,
-        )
+        buyer_candidate: dict[str, Any] = {
+            "weights": buyer_weights,
+            "price_range": PRICE_RANGE,
+            "deadline_range": DEADLINE_RANGE,
+            "side": "buyer",
+            "patience": PATIENCE,
+            "reservation": RESERVATION,
+            "max_rounds": MAX_ROUNDS,
+        }
+        seller_candidate: dict[str, Any] = {
+            "weights": seller_weights,
+            "price_range": PRICE_RANGE,
+            "deadline_range": DEADLINE_RANGE,
+            "side": "seller",
+            "patience": PATIENCE,
+            "reservation": RESERVATION,
+            "max_rounds": MAX_ROUNDS,
+        }
+        buyer_neg = _construct_negotiator(neg_cls, buyer_id, buyer_candidate)
+        seller_neg = _construct_negotiator(neg_cls, seller_id, seller_candidate)
 
         agents[buyer_id] = MarketBuyerAgent(
             buyer_id,
