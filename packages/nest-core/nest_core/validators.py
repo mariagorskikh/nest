@@ -2848,3 +2848,106 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_escrow_no_payout_without_delivery,
     ],
 }
+
+
+# ---------------------------------------------------------------------------
+# Delegated Auth validators
+# ---------------------------------------------------------------------------
+
+
+def validate_no_scope_escalation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Assert that no scope-escalated token was successfully verified.
+
+    Example::
+
+        results = validate_no_scope_escalation(events)
+    """
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("verify_success:leaf-4:") and msg.endswith(":escalated"):
+            return [
+                ValidationResult(
+                    "no_scope_escalation",
+                    False,
+                    "Scope escalation attack succeeded (leaf-4 verified escalated token)",
+                )
+            ]
+    return [
+        ValidationResult(
+            "no_scope_escalation",
+            True,
+            "Scope escalation attack was blocked successfully",
+        )
+    ]
+
+
+def validate_no_stale_parent(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Assert that no token is verified if any of its ancestors are revoked or stale.
+
+    Example::
+
+        results = validate_no_stale_parent(events)
+    """
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("verify_success:leaf-0:") and msg.endswith(":stale"):
+            return [
+                ValidationResult(
+                    "no_stale_parent",
+                    False,
+                    "Stale parent attack succeeded (leaf-0 verified grandchild of revoked token)",
+                )
+            ]
+    return [
+        ValidationResult(
+            "no_stale_parent",
+            True,
+            "Stale parent attack was blocked successfully",
+        )
+    ]
+
+
+def validate_no_audience_confusion(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Assert that no token is verified if presented by a different agent than audience.
+
+    Example::
+
+        results = validate_no_audience_confusion(events)
+    """
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("verify_success:leaf-2:") and msg.endswith(":confused"):
+            return [
+                ValidationResult(
+                    "no_audience_confusion",
+                    False,
+                    "Audience confusion attack succeeded (leaf-2 verified token of leaf-1)",
+                )
+            ]
+    return [
+        ValidationResult(
+            "no_audience_confusion",
+            True,
+            "Audience confusion attack was blocked successfully",
+        )
+    ]
+
+
+# Append our validators to registry
+VALIDATORS["delegated_auth"] = [
+    validate_no_scope_escalation,
+    validate_no_stale_parent,
+    validate_no_audience_confusion,
+]
