@@ -3,12 +3,12 @@
 
 Two layers:
 
-1. **Validator direct-call** — hand-built event lists drive each branch of
+1. **Validator direct-call**, hand-built event lists drive each branch of
    ``validate_multi_attribute_pareto_optimal`` (dominated agreement fails, a
    clean frontier passes, a breakdown is not a dominance failure) and of
    ``validate_multi_attribute_individually_rational`` (a sub-reservation
    agreement fails).
-2. **End-to-end discrimination** (the core deliverable) — boot the real
+2. **End-to-end discrimination** (the core deliverable), boot the real
    ``multi_attribute_market`` scenario through ``ScenarioRunner`` under seeds
    42, 7, 1337. With ``negotiation: pareto`` every validator PASSES; with
    ``negotiation: alternating_offers`` (a deadline-blind, timeout-driven plugin)
@@ -43,9 +43,7 @@ def _send(msg: str) -> dict[str, Any]:
     return {"kind": "send", "msg": msg, "agent": "driver", "to": "peer"}
 
 
-# ---------------------------------------------------------------------------
 # Validator direct-call tests
-# ---------------------------------------------------------------------------
 
 
 def test_pareto_validator_flags_dominated_agreement() -> None:
@@ -113,9 +111,7 @@ def test_individual_rationality_flags_below_reservation() -> None:
     assert "buyer" in result.detail
 
 
-# ---------------------------------------------------------------------------
 # End-to-end discrimination gate
-# ---------------------------------------------------------------------------
 
 
 def _run_scenario(seed: int, negotiation: str) -> list[ValidationResult]:

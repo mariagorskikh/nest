@@ -1850,8 +1850,8 @@ class _AgentUtility:
     Reproduces the plugin's scoring *verbatim* (Keeney & Raiffa additive MAUT):
     inputs are clamped into the feasible ranges, then each issue's normalized
     value function is weighted and summed. The directional convention matches
-    the plugin exactly -- the buyer values low price / short deadline, the seller
-    high price / long deadline -- so a bundle scores identically here and inside
+    the plugin exactly (the buyer values low price / short deadline, the seller
+    high price / long deadline) so a bundle scores identically here and inside
     ``ParetoNegotiation``.
 
     Example::
@@ -1896,8 +1896,8 @@ class _AgentUtility:
 class _MarketSession:
     """Everything a single negotiation session contributed to the trace.
 
-    ``bundles`` is the set of every (price, deadline) exchanged in the session
-    -- the trace-observed evidence the dominance frontier is computed from.
+    ``bundles`` is the set of every (price, deadline) exchanged in the session,
+    the trace-observed evidence the dominance frontier is computed from.
     ``buyer``/``seller`` are resolved from the ``side`` tag on the offers.
 
     Example::
@@ -2022,12 +2022,12 @@ def validate_multi_attribute_pareto_optimal(
     Scope is deliberately *trace-evidence-bounded*: the frontier is computed from
     the bundles actually observed on the wire, never from the full feasible grid.
     An agreement this validator passes could in principle still be dominated by a
-    feasible bundle that was never offered -- consistent with Nanda Town's rule
+    feasible bundle that was never offered, consistent with Nanda Town's rule
     that validators judge trace evidence, not theorems. The adversarial power is
     real nonetheless: the reference ``alternating_offers`` plugin never reads
     ``conditions['deadline_days']``, so it accepts (or holds out for) a
     price-acceptable bundle while a same-or-better-price, longer-deadline bundle
-    sits in the very same exchange -- a bundle that dominates the agreement and
+    sits in the very same exchange, a bundle that dominates the agreement and
     trips this check. ``ParetoNegotiation`` passes because its trade-off
     counteroffers move along the iso-utility curve toward the opponent's revealed
     preference, settling on a non-dominated logroll.

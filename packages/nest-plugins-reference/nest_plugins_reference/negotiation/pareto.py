@@ -35,8 +35,8 @@ class ParetoNegotiation:
     """Multi-attribute, Pareto-seeking bilateral negotiation.
 
     Each agent knows only its *own* private utility configuration (weights,
-    feasible ranges, reservation level) and negotiates over two issues — price
-    and deadline — that ride in ``terms.price`` and ``terms.conditions``.
+    feasible ranges, reservation level) and negotiates over two issues (price
+    and deadline) that ride in ``terms.price`` and ``terms.conditions``.
 
     The strategy combines three classical results:
 
@@ -121,7 +121,7 @@ class ParetoNegotiation:
         Reads the opponent's latest offer from ``session.current_terms``. If its
         own-utility is at least this round's aspiration ``alpha(t)`` the offer is
         accepted; otherwise the agent returns the aspiration-satisfying grid
-        bundle nearest (in normalized issue space) to the opponent's offer — a
+        bundle nearest (in normalized issue space) to the opponent's offer, a
         Faratin–Sierra–Jennings trade-off move along the iso-utility curve. When
         aspiration exceeds the agent's reachable maximum it counters with its
         single most-preferred bundle.

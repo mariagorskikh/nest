@@ -3,12 +3,12 @@
 
 Three property families (Hypothesis):
 
-* **Determinism** — identical construction + identical offer sequence yields an
+* **Determinism**, identical construction + identical offer sequence yields an
   identical run (no wall-clock, no RNG).
-* **Monotonic concession** — a single agent's own counter-offer utilities are
+* **Monotonic concession**, a single agent's own counter-offer utilities are
   non-increasing across rounds (Rosenschein & Zlotkin's Monotonic Concession
   Protocol / Zeuthen).
-* **No dominated self-play** — two ParetoNegotiation agents with asymmetric
+* **No dominated self-play**, two ParetoNegotiation agents with asymmetric
   weights never settle on an agreement Pareto-dominated by a bundle they
   exchanged.
 """
@@ -43,9 +43,7 @@ def _dominates(ub_x: float, us_x: float, ub_y: float, us_y: float) -> bool:
     return no_worse and strictly_better
 
 
-# ---------------------------------------------------------------------------
 # Unit tests
-# ---------------------------------------------------------------------------
 
 
 def test_utility_directional_buyer() -> None:
@@ -146,9 +144,7 @@ def test_respond_counter_then_accept() -> None:
     assert result[2][0] is True  # utility 0.85 >= aspiration 0.81
 
 
-# ---------------------------------------------------------------------------
 # Property tests (Hypothesis)
-# ---------------------------------------------------------------------------
 
 
 class _Cfg(NamedTuple):
@@ -307,8 +303,8 @@ def test_selfplay_agreement_individually_rational(cfg: _Cfg) -> None:
     An agent only accepts (and only counters with) bundles whose own utility
     meets its aspiration ``reservation + (1 - reservation) * patience ** t``,
     which is bounded below by ``reservation``. So neither side ever agrees to a
-    bundle it strictly prefers walking away from -- individual rationality, the
-    invariant the FSJ trade-off mechanism *does* guarantee.
+    bundle it strictly prefers walking away from (individual rationality, the
+    invariant the FSJ trade-off mechanism *does* guarantee).
     """
     buyer = _make_buyer(cfg, max_rounds=25)
     seller = _make_seller(cfg, max_rounds=25)
@@ -345,13 +341,13 @@ def test_fsj_tradeoff_does_not_guarantee_pareto_optimality() -> None:
     joint gains and *approach* the Pareto frontier, but do not *guarantee* it
     under incomplete information: a Pareto-improving bundle offered early can be
     rejected (the recipient's aspiration is still above it) and gone by the time
-    aspiration falls enough to accept -- the bundle is ephemeral. A hard guarantee
+    aspiration falls enough to accept. The bundle is ephemeral. A hard guarantee
     would require the MCP/Zeuthen optimal-deal search (exponential in the issue
     grid per round); ParetoNegotiation deliberately trades that guarantee for
     tractable, deterministic concession.
 
     This test pins the configuration Hypothesis found and asserts the agreement
-    IS dominated by a bundle exchanged earlier in the same session -- documenting
+    IS dominated by a bundle exchanged earlier in the same session, documenting
     the limit as an intentional design boundary, not a bug. (The end-to-end
     asymmetric gate asserts Pareto-efficiency where the design *does* secure it.)
     """

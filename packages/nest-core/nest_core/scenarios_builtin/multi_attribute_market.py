@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Multi-attribute market scenario — price + deadline, asymmetric evaluation.
+"""Multi-attribute market scenario, price + deadline, asymmetric evaluation.
 
 Ten negotiations, each between a *fixed* buyer counterpart and a *configured*
 seller plugin under test. This is the ANAC-style asymmetric evaluation: holding
@@ -80,7 +80,7 @@ MIDPOINT_PRICE = 100
 """Price the buyer concedes toward by the final round (from its low-price best)."""
 
 GIFT_ROUNDS = (2, 3)
-"""Rounds where the buyer offers the maximum deadline -- the integrative gift.
+"""Rounds where the buyer offers the maximum deadline, the integrative gift.
 
 Two rounds, not one: a deadline-aware seller's aspiration ``patience ** (r-1)``
 is ``0.9`` at round 2 (which a low-deadline-weight seller's utility for the gift
@@ -94,7 +94,7 @@ SHORT_DEADLINE_MAX = 5
 """Upper bound for the buyer's deadline on non-gift rounds.
 
 Late rounds carry a short deadline, so whichever late bundle a timeout-driven
-seller closes on is dominated by the early long-deadline gift -- the dominance
+seller closes on is dominated by the early long-deadline gift. The dominance
 holds for every seed and every seller weight, not just by luck.
 """
 
@@ -168,7 +168,7 @@ def _buyer_schedule(
 
     Price rises from just above the floor toward the midpoint (the buyer
     conceding on the only issue it values). The deadline is the maximum on the
-    gift rounds and a short, seeded value otherwise -- the buyer gives the
+    gift rounds and a short, seeded value otherwise. The buyer gives the
     deadline away early because it is indifferent to it.
 
     Example::
