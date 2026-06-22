@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Provenance supply-chain scenario: content-addressed datasets flow through
+# multiple stages.  Each hop publishes a content-addressed dataset referencing
+# the upstream hash as a parent, and the retailer verifies the full chain.
+name: provenance_supply_chain
+description: "4-stage supply chain with content-addressed provenance: supplier -> manufacturer -> distributor -> retailer."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 4
+  brain: state-machine
+  roles:
+    - name: supplier
+      count: 1
+    - name: manufacturer
+      count: 1
+    - name: distributor
+      count: 1
+    - name: retailer
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: content_addressed
+
+task:
+  type: supply_chain
+  config:
+    items_per_round: 3
+    rounds: 5
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/provenance_supply_chain.jsonl

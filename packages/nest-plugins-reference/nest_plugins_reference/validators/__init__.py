@@ -11,11 +11,21 @@ Example::
     from nest_plugins_reference.validators import (
         check_no_cross_partition_leak,
         check_converged,
+        check_no_substitution,
     )
 """
 
 from __future__ import annotations
 
+from nest_plugins_reference.validators.datafacts_validators import (
+    BrokenProvenanceError,
+    DataFactsValidatorReport,
+    StaleFreshnessError,
+    SubstitutionError,
+    check_no_stale_freshness,
+    check_no_substitution,
+    check_provenance_chain_intact,
+)
 from nest_plugins_reference.validators.gossip_validators import (
     ConvergenceFailureError,
     PartitionLeakError,
@@ -25,9 +35,16 @@ from nest_plugins_reference.validators.gossip_validators import (
 )
 
 __all__ = [
+    "BrokenProvenanceError",
     "ConvergenceFailureError",
+    "DataFactsValidatorReport",
     "PartitionLeakError",
+    "StaleFreshnessError",
+    "SubstitutionError",
     "ValidatorReport",
     "check_converged",
     "check_no_partition_view_leak",
+    "check_no_stale_freshness",
+    "check_no_substitution",
+    "check_provenance_chain_intact",
 ]
