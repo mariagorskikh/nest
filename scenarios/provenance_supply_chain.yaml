@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# Provenance supply-chain scenario: a 4-hop dataset pipeline, then 3 attacks.
+#
+# source-0 -> refine-0 -> aggregate-0 -> verify-0, each hop publishing a
+# dataset that declares the upstream one as its provenance parent. verify-0
+# walks the chain back, checks freshness, then attempts substitution, forged
+# freshness, and broken-provenance attacks as an outsider.
+#
+# Verify::
+#
+#     nest run scenarios/provenance_supply_chain.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/provenance_supply_chain.jsonl'), 'provenance_supply_chain')]"
+#
+# Swap `layers.datafacts` to `datafacts_v1` to see the adversarial validators
+# flip to FAIL -- that plugin has no content-addressing, signed freshness, or
+# provenance concept at all.
+name: provenance_supply_chain
+description: "4-hop dataset pipeline with provenance; an outsider then attempts substitution, forged-freshness, and broken-provenance attacks."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 4
+  brain: state-machine
+  roles:
+    - name: source
+      count: 1
+    - name: refine
+      count: 1
+    - name: aggregate
+      count: 1
+    - name: verify
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: cid_facts
+
+task:
+  type: provenance_supply_chain
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/provenance_supply_chain.jsonl

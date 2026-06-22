@@ -755,6 +755,7 @@ class TestValidatorRegistry:
             "comms_versioning",
             "receipt_reputation",
             "multi_attribute_market",
+            "provenance_supply_chain",
         }
         assert set(VALIDATORS.keys()) == expected
 

@@ -2090,6 +2090,58 @@ def validate_multi_attribute_pareto_optimal(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Provenance supply-chain validators
+# ---------------------------------------------------------------------------
+
+
+def _provenance_field_msg(events: list[dict[str, Any]], prefix: str) -> list[list[str]]:
+    """Collect ``|``-delimited fields from every send carrying ``prefix``.
+
+    The ``provenance_supply_chain`` scenario uses ``|`` (not ``:``) as its
+    field delimiter, since its payloads are ``df://sha256-<hex>`` URLs that
+    already contain a colon.
+
+    Example::
+
+        rows = _provenance_field_msg(events, "chain_ok|")
+    """
+    rows: list[list[str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith(prefix):
+            rows.append(msg.split("|"))
+    return rows
+
+
+def validate_provenance_chain_integrity(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The verifier walks the full parent chain back to the source without a break.
+
+    Example::
+
+        results = validate_provenance_chain_integrity(events)
+    """
+    broken = _provenance_field_msg(events, "chain_broken|")
+    if broken:
+        detail = "; ".join(f"{row[1]} could not resolve parent {row[2]}" for row in broken)
+        return [ValidationResult("provenance_chain_integrity", False, detail)]
+    ok = _provenance_field_msg(events, "chain_ok|")
+    if not ok:
+        return [ValidationResult("provenance_chain_integrity", False, "no chain_ok recorded")]
+    depth = ok[0][2]
+    return [
+        ValidationResult(
+            "provenance_chain_integrity",
+            True,
+            f"chain resolved to depth {depth}",
+        )
+    ]
+
+
 def validate_multi_attribute_individually_rational(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -2154,6 +2206,111 @@ def validate_multi_attribute_individually_rational(
     ]
 
 
+def validate_provenance_substitution_resistant(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An outsider republishing different content must not land on the source's URL.
+
+    Catches the *substitution* attack: a name-addressed registry
+    (``datafacts_v1``) lets anyone overwrite ``df://<name>`` with new bytes;
+    a content-addressed one (``cid_facts``) cannot alias two different
+    contents onto the same URL.
+
+    Example::
+
+        results = validate_provenance_substitution_resistant(events)
+    """
+    rows = _provenance_field_msg(events, "attack_substitution|")
+    if not rows:
+        return [ValidationResult("provenance_substitution_resistant", False, "no attack recorded")]
+    source_url, attacker_url, collided = rows[0][1], rows[0][2], rows[0][3]
+    if collided != "0":
+        return [
+            ValidationResult(
+                "provenance_substitution_resistant",
+                False,
+                f"attacker's republish landed on the source URL {source_url} "
+                f"(attacker url {attacker_url})",
+            )
+        ]
+    return [
+        ValidationResult(
+            "provenance_substitution_resistant",
+            True,
+            f"attacker's differing content resolved to a distinct URL ({attacker_url})",
+        )
+    ]
+
+
+def validate_provenance_freshness_unforgeable(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A freshness claim signed by someone other than the owner must be rejected.
+
+    Catches the *stale-claim* attack: an unauthenticated wall-clock check
+    (``datafacts_v1``) treats any recent republish as proof of freshness,
+    regardless of who did it; a signature-backed check (``cid_facts``) only
+    accepts a proof whose signer is the dataset's declared owner.
+
+    Example::
+
+        results = validate_provenance_freshness_unforgeable(events)
+    """
+    rows = _provenance_field_msg(events, "attack_forged_freshness|")
+    if not rows:
+        return [ValidationResult("provenance_freshness_unforgeable", False, "no attack recorded")]
+    url, fresh = rows[0][1], rows[0][2]
+    if fresh != "0":
+        return [
+            ValidationResult(
+                "provenance_freshness_unforgeable",
+                False,
+                f"forged freshness claim for {url} was accepted",
+            )
+        ]
+    return [
+        ValidationResult(
+            "provenance_freshness_unforgeable",
+            True,
+            f"forged freshness claim for {url} was correctly rejected",
+        )
+    ]
+
+
+def validate_provenance_chain_unforgeable(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A dataset declaring a never-published parent must be rejected at publish time.
+
+    Catches *provenance washing*: a registry with no lineage concept
+    (``datafacts_v1``) accepts a "derived" dataset whose claimed parent does
+    not exist anywhere in the trace; ``cid_facts`` refuses to publish it.
+
+    Example::
+
+        results = validate_provenance_chain_unforgeable(events)
+    """
+    rows = _provenance_field_msg(events, "attack_provenance|")
+    if not rows:
+        return [ValidationResult("provenance_chain_unforgeable", False, "no attack recorded")]
+    phantom_parent, rejected = rows[0][1], rows[0][2]
+    if rejected != "1":
+        return [
+            ValidationResult(
+                "provenance_chain_unforgeable",
+                False,
+                f"publish with phantom parent {phantom_parent} was not rejected",
+            )
+        ]
+    return [
+        ValidationResult(
+            "provenance_chain_unforgeable",
+            True,
+            f"publish with phantom parent {phantom_parent} was correctly rejected",
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
@@ -2212,5 +2369,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
         validate_multi_attribute_individually_rational,
+    ],
+    "provenance_supply_chain": [
+        validate_provenance_chain_integrity,
+        validate_provenance_substitution_resistant,
+        validate_provenance_freshness_unforgeable,
+        validate_provenance_chain_unforgeable,
     ],
 }
