@@ -515,9 +515,21 @@ class Proof(BaseModel):
 class DatasetMetadata(BaseModel):
     """Metadata about a dataset published via DataFacts.
 
+    ``parents`` records the content-addressed provenance DAG: the hashes of
+    every dataset this one was derived from. It defaults to an empty list, so
+    existing callers (e.g. ``datafacts_v1``) and the 12-layer reference
+    scenarios keep working unchanged. Content-addressed plugins such as
+    ``nest_plugins_reference.datafacts.content_addressed`` fold ``parents`` into
+    the dataset's content hash, making the provenance trail tamper-evident: a
+    forged or substituted ancestor changes every descendant's URL.
+
     Example::
 
-        meta = DatasetMetadata(name="weather-2024", owner=AgentId("a1"), schema_version="1.0")
+        raw = DatasetMetadata(name="weather-2024", owner=AgentId("a1"), schema_version="1.0")
+        derived = DatasetMetadata(
+            name="weather-clean", owner=AgentId("a2"),
+            parents=[DataFactsUrl("df://sha256-abc123")],
+        )
     """
 
     name: str
@@ -530,6 +542,7 @@ class DatasetMetadata(BaseModel):
     size_bytes: int | None = None
     checksum: str | None = None
     access_tier: str = "public"
+    parents: list[DataFactsUrl] = Field(default_factory=lambda: list[DataFactsUrl]())
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

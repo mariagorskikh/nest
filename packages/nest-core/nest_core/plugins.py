@@ -37,6 +37,9 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("memory", "lww_register"): f"{_REF}.memory.lww_register:LwwRegisterMemory",
     ("privacy", "noop"): f"{_REF}.privacy.noop:NoopPrivacy",
     ("datafacts", "datafacts_v1"): f"{_REF}.datafacts.datafacts_v1:DataFactsV1",
+    ("datafacts", "content_addressed"): (
+        f"{_REF}.datafacts.content_addressed:ContentAddressedDataFacts"
+    ),
 }
 
 

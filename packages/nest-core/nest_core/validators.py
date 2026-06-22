@@ -1835,6 +1835,179 @@ def validate_receipt_reputation_honest_confidence(
 
 
 # ---------------------------------------------------------------------------
+# DataFacts provenance validators (provenance_supply_chain scenario)
+# ---------------------------------------------------------------------------
+#
+# These parse the `:`-delimited line protocol emitted by
+# `nest_core.scenarios_builtin.provenance_supply_chain`. URL tokens are
+# scheme-stripped content ids (`sha256-<hex>` for the content-addressed plugin,
+# or a bare name for `datafacts_v1`), so they are colon-free and split cleanly.
+
+
+def _provenance_sends(events: list[dict[str, Any]], prefix: str) -> list[list[str]]:
+    """Return ``:``-split fields for every ``send`` whose body starts with ``prefix``.
+
+    Example::
+
+        rows = _provenance_sends(events, "publish:")
+    """
+    rows: list[list[str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        body = _message_body(ev)
+        if body.startswith(prefix):
+            rows.append(body.split(":"))
+    return rows
+
+
+def validate_datafacts_content_addressing(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every dataset is addressed by its content hash, and substitution is impossible.
+
+    Catches the *substitution* attack: ``datafacts_v1`` addresses by
+    publisher-chosen name (``df://<name>``), so republishing different bytes under
+    the same name silently overwrites — the validator sees a non-``sha256-`` URL
+    and a substitution attempt landing at the *same* address. ``content_addressed``
+    derives the URL from the content, so different bytes get a different address;
+    the attack lands at a distinct URL and is deflected.
+
+    Example::
+
+        results = validate_datafacts_content_addressing(events)
+    """
+    violations: list[str] = []
+    publishes = 0
+    deflected = 0
+    for f in _provenance_sends(events, "publish:"):
+        if len(f) < 5:
+            continue
+        publishes += 1
+        agent, url = f[1], f[2]
+        if not url.startswith("sha256-"):
+            violations.append(f"{agent} published non-content-addressed url {url!r}")
+    for f in _provenance_sends(events, "attack:substitution:"):
+        if len(f) < 5:
+            continue
+        agent, url1, url2 = f[2], f[3], f[4]
+        if url1 == url2:
+            violations.append(f"{agent} substituted different content at same address {url1!r}")
+        else:
+            deflected += 1
+    if violations:
+        return [ValidationResult("datafacts_content_addressing", False, "; ".join(violations))]
+    detail = (
+        f"{publishes} publish(es) content-addressed; {deflected} substitution attempt(s) deflected"
+    )
+    return [ValidationResult("datafacts_content_addressing", True, detail)]
+
+
+def validate_datafacts_freshness_proofs(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every freshness claim is backed by a current signed proof; stale claims are detectable.
+
+    Catches the *stale-freshness* attack: ``datafacts_v1`` "proves" freshness with
+    a bare wall-clock comparison, so a publisher re-touching a timestamp without
+    re-publishing looks fresh (no proof tick at all — ``none``).
+    ``content_addressed`` requires a signature binding *(content-hash, tick,
+    signer)*, so an honest ``ok`` claim carries a proof minted at the observed
+    tick, and a stale claim's proof tick lags the observed tick and is caught.
+
+    Example::
+
+        results = validate_datafacts_freshness_proofs(events)
+    """
+    violations: list[str] = []
+    fresh_ok = 0
+    stale_detected = 0
+    for f in _provenance_sends(events, "freshness:"):
+        if len(f) < 6:
+            continue
+        agent, url, proof_tick, observed, verdict = f[1], f[2], f[3], f[4], f[5]
+        if verdict == "ok":
+            fresh_ok += 1
+            if proof_tick == "none":
+                violations.append(f"{agent} claimed freshness for {url} with no signed proof")
+            elif proof_tick != observed:
+                violations.append(
+                    f"{agent} claimed current freshness for {url} but proof tick "
+                    f"{proof_tick} != observed {observed}"
+                )
+        elif verdict == "stale":
+            if proof_tick != "none" and proof_tick == observed:
+                violations.append(
+                    f"{agent} stale claim for {url} is indistinguishable from current"
+                )
+            else:
+                stale_detected += 1
+    if violations:
+        return [ValidationResult("datafacts_freshness_proofs", False, "; ".join(violations))]
+    detail = (
+        f"{fresh_ok} fresh claim(s) backed by current signed proofs; "
+        f"{stale_detected} stale claim(s) detected"
+    )
+    return [ValidationResult("datafacts_freshness_proofs", True, detail)]
+
+
+def validate_datafacts_provenance_chain(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every derived dataset's ancestry resolves to published hashes; orphans are rejected.
+
+    Catches the *broken-provenance* attack: a derived dataset whose ``parents``
+    reference a hash nobody published. ``content_addressed`` folds parents into the
+    child hash and rejects a publish with a dangling parent (the attack is
+    ``rejected``); ``datafacts_v1`` ignores provenance entirely, so the orphan
+    publish lands (``accepted``) and dangles. Also confirms the retailer's
+    end-to-end verification of the honest chain succeeds.
+
+    Example::
+
+        results = validate_datafacts_provenance_chain(events)
+    """
+    violations: list[str] = []
+    published: set[str] = set()
+    chain_links = 0
+    for f in _provenance_sends(events, "publish:"):
+        if len(f) < 5:
+            continue
+        agent, url, parents_tok = f[1], f[2], f[3]
+        parents = [] if parents_tok == "-" else parents_tok.split("|")
+        for parent in parents:
+            chain_links += 1
+            if parent not in published:
+                violations.append(f"{agent}: dataset {url} references unpublished parent {parent}")
+        published.add(url)
+    rejected = 0
+    for f in _provenance_sends(events, "attack:broken:"):
+        if len(f) < 5:
+            continue
+        agent, ghost, verdict = f[2], f[3], f[4]
+        if verdict != "rejected":
+            violations.append(f"{agent}: broken-provenance publish accepted (ghost parent {ghost})")
+        else:
+            rejected += 1
+    verified = 0
+    for f in _provenance_sends(events, "verify:"):
+        if len(f) < 4:
+            continue
+        agent, url, verdict = f[1], f[2], f[3]
+        if verdict != "ok":
+            violations.append(f"{agent}: end-to-end provenance verification returned {verdict!r}")
+        else:
+            verified += 1
+    if violations:
+        return [ValidationResult("datafacts_provenance_chain", False, "; ".join(violations))]
+    detail = (
+        f"{chain_links} provenance link(s) anchored across {len(published)} dataset(s); "
+        f"{rejected} broken-provenance attempt(s) rejected; {verified} end-to-end verify(s) ok"
+    )
+    return [ValidationResult("datafacts_provenance_chain", True, detail)]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -1888,5 +2061,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "receipt_reputation": [
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
+    ],
+    "provenance_supply_chain": [
+        validate_datafacts_content_addressing,
+        validate_datafacts_freshness_proofs,
+        validate_datafacts_provenance_chain,
     ],
 }
