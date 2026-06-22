@@ -49,17 +49,15 @@ if TYPE_CHECKING:
     from nest_core.layers.identity import Identity
 
 
-class ContentSubstitutionError(ValueError):
-    """Raised if a publish would bind a hash to content that disagrees with it.
-
-    Cannot happen through normal use (the hash *is* derived from the content),
-    but guards against a caller mutating a ``DatasetMetadata`` in place after
-    publishing it under the URL the old content produced.
-    """
-
-
 class ProvenanceError(ValueError):
-    """Raised when a dataset declares a parent URL this registry never published."""
+    """Raised when a dataset declares a parent URL this registry never published.
+
+    Example::
+
+        with pytest.raises(ProvenanceError):
+            await facts.publish(DatasetMetadata(name="x", owner=AgentId("a1"),
+                                                 metadata={"parents": ["df://sha256-deadbeef"]}))
+    """
 
 
 class SharedClock:

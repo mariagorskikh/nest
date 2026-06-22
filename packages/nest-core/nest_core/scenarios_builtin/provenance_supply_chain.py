@@ -47,7 +47,13 @@ _PHANTOM_PARENT = "df://sha256-" + "0" * 64
 
 
 class SourceAgent(StateMachineAgent):
-    """Publishes the root dataset (no provenance parents) and hands off its URL."""
+    """Publishes the root dataset (no provenance parents) and hands off its URL.
+
+    Example::
+
+        source = SourceAgent(AgentId("source-0"), next_stage=AgentId("refine-0"),
+                              name="raw_sensor_readings", description="batch-A")
+    """
 
     def __init__(self, agent_id: AgentId, next_stage: AgentId, name: str, description: str) -> None:
         self._id = agent_id
@@ -56,6 +62,12 @@ class SourceAgent(StateMachineAgent):
         self._description = description
 
     async def on_start(self, ctx: AgentContext) -> None:
+        """Publish the root dataset and hand its URL to the next stage.
+
+        Example::
+
+            await source.on_start(ctx)
+        """
         facts = ctx.plugins.get("datafacts")
         if facts is None:
             return
@@ -65,7 +77,13 @@ class SourceAgent(StateMachineAgent):
 
 
 class RefineAgent(StateMachineAgent):
-    """Publishes a derived dataset whose provenance parent is the upstream URL."""
+    """Publishes a derived dataset whose provenance parent is the upstream URL.
+
+    Example::
+
+        refine = RefineAgent(AgentId("refine-0"), next_stage=AgentId("aggregate-0"),
+                              name="cleaned_sensor_readings")
+    """
 
     def __init__(self, agent_id: AgentId, next_stage: AgentId, name: str) -> None:
         self._id = agent_id
@@ -73,6 +91,12 @@ class RefineAgent(StateMachineAgent):
         self._name = name
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
+        """Publish a derived dataset parented on the lineage URL just received.
+
+        Example::
+
+            await refine.on_message(ctx, AgentId("source-0"), b"lineage|df://sha256-x|source-0")
+        """
         msg = payload.decode("utf-8", errors="replace")
         if not msg.startswith("lineage|"):
             return
@@ -90,7 +114,13 @@ class RefineAgent(StateMachineAgent):
 
 
 class VerifyAndAttackAgent(StateMachineAgent):
-    """Verifies the happy-path chain, then attempts three attacks as an outsider."""
+    """Verifies the happy-path chain, then attempts three attacks as an outsider.
+
+    Example::
+
+        verify = VerifyAndAttackAgent(AgentId("verify-0"), source_id=AgentId("source-0"),
+                                       source_name="raw_sensor_readings")
+    """
 
     def __init__(self, agent_id: AgentId, source_id: AgentId, source_name: str) -> None:
         self._id = agent_id
@@ -98,6 +128,12 @@ class VerifyAndAttackAgent(StateMachineAgent):
         self._source_name = source_name
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
+        """Verify the received chain's integrity and freshness, then run the three attacks.
+
+        Example::
+
+            await verify.on_message(ctx, AgentId("aggregate-0"), b"lineage|df://sha256-x|aggregate-0")
+        """
         msg = payload.decode("utf-8", errors="replace")
         if not msg.startswith("lineage|"):
             return
