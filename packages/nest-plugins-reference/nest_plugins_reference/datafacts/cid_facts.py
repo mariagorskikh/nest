@@ -193,14 +193,26 @@ class CidFacts:
         if ``dataset.metadata["parents"]`` names a URL this registry has not
         itself published.
 
+        Provenance is a DAG, not a tree -- a dataset can declare more than
+        one parent (e.g. a join of two upstream datasets). Parent order is
+        not semantically meaningful, so it is normalized (sorted) before
+        hashing and storing: declaring the same two parents in either order
+        produces the same address.
+
         Example::
 
             url = await facts.publish(DatasetMetadata(name="raw", owner=AgentId("a1")))
         """
-        for parent in parents_of(dataset):
+        parents = parents_of(dataset)
+        for parent in parents:
             if parent not in self._datasets:
                 msg = f"unknown provenance parent {parent!r} for dataset {dataset.name!r}"
                 raise ProvenanceError(msg)
+
+        if parents:
+            normalized_metadata = dict(dataset.metadata)
+            normalized_metadata["parents"] = sorted(str(p) for p in parents)
+            dataset = dataset.model_copy(update={"metadata": normalized_metadata})
 
         digest = content_hash(dataset)
         url = DataFactsUrl(f"df://sha256-{digest}")

@@ -10,6 +10,8 @@ registry wiring.
 from __future__ import annotations
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from nest_core.layers.datafacts import DataFacts
 from nest_core.plugins import PluginRegistry
 from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
@@ -141,6 +143,66 @@ class TestProvenance:
         assert depth == 3
         assert url == root
 
+    @pytest.mark.asyncio
+    async def test_join_of_two_parents_succeeds(self) -> None:
+        """Provenance is a DAG: a dataset may declare more than one parent."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+        left = await facts.publish(DatasetMetadata(name="orders", owner=AgentId("a1")))
+        right = await facts.publish(
+            DatasetMetadata(name="customers", owner=AgentId("a1"), description="x")
+        )
+        joined = DatasetMetadata(
+            name="orders_with_customers",
+            owner=AgentId("a1"),
+            metadata={"parents": [str(left), str(right)]},
+        )
+        url = await facts.publish(joined)
+        fetched = await facts.fetch(url)
+        assert set(fetched.metadata["parents"]) == {str(left), str(right)}
+
+    @pytest.mark.asyncio
+    async def test_join_is_rejected_if_either_parent_is_unknown(self) -> None:
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+        known = await facts.publish(DatasetMetadata(name="orders", owner=AgentId("a1")))
+        phantom = "df://sha256-" + "f" * 64
+        joined = DatasetMetadata(
+            name="orders_with_customers",
+            owner=AgentId("a1"),
+            metadata={"parents": [str(known), phantom]},
+        )
+        with pytest.raises(ProvenanceError):
+            await facts.publish(joined)
+        # The rejected join must not have been partially registered.
+        assert phantom not in [str(u) for u in facts.known_urls()]
+
+    @pytest.mark.asyncio
+    async def test_join_address_is_independent_of_parent_declaration_order(self) -> None:
+        """The same join declared as [A, B] or [B, A] must resolve to one URL.
+
+        Parent order is an artifact of how the publishing agent happened to
+        build the list, not part of the dataset's identity -- two joins over
+        the same inputs should be the same address regardless of which side
+        was listed first.
+        """
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+        left = await facts.publish(DatasetMetadata(name="orders", owner=AgentId("a1")))
+        right = await facts.publish(
+            DatasetMetadata(name="customers", owner=AgentId("a1"), description="x")
+        )
+
+        forward = DatasetMetadata(
+            name="joined", owner=AgentId("a1"), metadata={"parents": [str(left), str(right)]}
+        )
+        backward = DatasetMetadata(
+            name="joined", owner=AgentId("a1"), metadata={"parents": [str(right), str(left)]}
+        )
+        url_forward = await facts.publish(forward)
+        url_backward = await facts.publish(backward)
+        assert url_forward == url_backward
+
 
 # ---------------------------------------------------------------------------
 # Signed freshness, including the forged-claim rejection
@@ -245,6 +307,55 @@ class TestAccessControl:
         )
         grant = await facts.request_access(url, AgentId("a1"))
         assert grant.tier == "read"
+
+
+# ---------------------------------------------------------------------------
+# content_hash properties (the substitution defense rests on these holding)
+# ---------------------------------------------------------------------------
+
+_descriptions = st.text(max_size=20)
+_owners = st.sampled_from(["a1", "a2", "owner", "attacker"])
+_schema_versions = st.sampled_from(["1.0", "1.1", "2.0"])
+
+
+class TestContentHashProperties:
+    @settings(max_examples=50)
+    @given(owner=_owners, description=_descriptions, schema_version=_schema_versions)
+    def test_deterministic_for_identical_fields(
+        self, owner: str, description: str, schema_version: str
+    ) -> None:
+        """Same content fields, hashed twice, must agree -- republishing depends on this."""
+        a = DatasetMetadata(
+            name="raw", owner=AgentId(owner), description=description, schema_version=schema_version
+        )
+        b = DatasetMetadata(
+            name="raw", owner=AgentId(owner), description=description, schema_version=schema_version
+        )
+        assert content_hash(a) == content_hash(b)
+
+    @settings(max_examples=50)
+    @given(owner=_owners, description=_descriptions)
+    def test_name_does_not_affect_address(self, owner: str, description: str) -> None:
+        """The label is not content -- renaming a dataset must not change its address."""
+        a = DatasetMetadata(name="raw", owner=AgentId(owner), description=description)
+        b = DatasetMetadata(name="renamed", owner=AgentId(owner), description=description)
+        assert content_hash(a) == content_hash(b)
+
+    @settings(max_examples=50)
+    @given(schema_version=_schema_versions)
+    def test_schema_version_bump_changes_address(self, schema_version: str) -> None:
+        """A schema bump changes content; pinned consumers must not silently see new data."""
+        baseline = DatasetMetadata(name="raw", owner=AgentId("a1"), schema_version="1.0")
+        if schema_version == "1.0":
+            return
+        bumped = DatasetMetadata(name="raw", owner=AgentId("a1"), schema_version=schema_version)
+        assert content_hash(baseline) != content_hash(bumped)
+
+    def test_owner_change_changes_address(self) -> None:
+        """Re-attributing the same bytes to a new owner is a different claim -- new address."""
+        a = DatasetMetadata(name="raw", owner=AgentId("a1"))
+        b = DatasetMetadata(name="raw", owner=AgentId("a2"))
+        assert content_hash(a) != content_hash(b)
 
 
 # ---------------------------------------------------------------------------
