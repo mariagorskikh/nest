@@ -278,6 +278,33 @@ class CidFacts:
             return False
         return (self._clock.tick - proof.tick) <= self._freshness_window
 
+    def ancestors(self, url: DataFactsUrl) -> set[DataFactsUrl]:
+        """Return every transitive provenance ancestor of ``url`` (excluding itself).
+
+        Walks all parents, not just the first, so it is correct on a diamond
+        (``A -> B``, ``A -> C``, ``{B, C} -> D``): ``D``'s ancestors are
+        ``{A, B, C}`` with ``A`` counted once. Unknown parents are simply not
+        expanded (an unpublishable dataset never reached this registry).
+
+        Example::
+
+            assert facts.ancestors(report_url) == {raw_url, cleaned_url}
+        """
+        seen: set[DataFactsUrl] = set()
+        stack: list[DataFactsUrl] = []
+        root_meta = self._datasets.get(url)
+        if root_meta is not None:
+            stack.extend(parents_of(root_meta))
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            meta = self._datasets.get(current)
+            if meta is not None:
+                stack.extend(parents_of(meta))
+        return seen
+
     def freshness_proof(self, url: DataFactsUrl) -> FreshnessProof | None:
         """Return the raw freshness proof for ``url``, for tests/validators.
 

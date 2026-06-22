@@ -1,10 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-# Provenance supply-chain scenario: a 4-hop dataset pipeline, then 3 attacks.
+# Provenance scenario: a diamond dataset pipeline, then four attacks.
 #
-# source-0 -> refine-0 -> aggregate-0 -> verify-0, each hop publishing a
-# dataset that declares the upstream one as its provenance parent. verify-0
-# walks the chain back, checks freshness, then attempts substitution, forged
-# freshness, and broken-provenance attacks as an outsider.
+#                source-0
+#               /        \
+#          refine-a      refine-b
+#               \        /
+#              aggregate-0   (join: parents = [refine-a, refine-b])
+#                   |
+#                verify-0
+#
+# Each hop publishes a dataset declaring its upstream input(s) as provenance
+# parents. verify-0 walks the whole DAG back to the root, then runs
+# substitution, forged-freshness, and broken-provenance attacks as an outsider.
 #
 # Verify::
 #
@@ -17,19 +24,19 @@
 # flip to FAIL -- that plugin has no content-addressing, signed freshness, or
 # provenance concept at all.
 name: provenance_supply_chain
-description: "4-hop dataset pipeline with provenance; an outsider then attempts substitution, forged-freshness, and broken-provenance attacks."
+description: "Diamond dataset pipeline with provenance; an outsider then attempts substitution, forged-freshness, and broken-provenance attacks."
 
 tier: 1
 seed: 42
 
 agents:
-  count: 4
+  count: 5
   brain: state-machine
   roles:
     - name: source
       count: 1
     - name: refine
-      count: 1
+      count: 2
     - name: aggregate
       count: 1
     - name: verify

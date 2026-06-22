@@ -205,6 +205,86 @@ class TestProvenance:
 
 
 # ---------------------------------------------------------------------------
+# DAG shape: diamond ancestry, acyclicity, and Merkle tamper-evidence
+# ---------------------------------------------------------------------------
+
+
+class TestDagProperties:
+    @pytest.mark.asyncio
+    async def test_diamond_ancestor_set_counts_shared_root_once(self) -> None:
+        """A -> B, A -> C, {B, C} -> D: D's ancestors are {A, B, C}, A once."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+        a = await facts.publish(DatasetMetadata(name="raw", owner=AgentId("a1")))
+        b = await facts.publish(
+            DatasetMetadata(name="b", owner=AgentId("a1"), metadata={"parents": [str(a)]})
+        )
+        c = await facts.publish(
+            DatasetMetadata(name="c", owner=AgentId("a1"), metadata={"parents": [str(a)]})
+        )
+        d = await facts.publish(
+            DatasetMetadata(name="d", owner=AgentId("a1"), metadata={"parents": [str(b), str(c)]})
+        )
+        assert facts.ancestors(d) == {a, b, c}
+
+    @pytest.mark.asyncio
+    async def test_self_reference_is_impossible(self) -> None:
+        """A dataset cannot list its own (future) URL as a parent.
+
+        Its URL is the hash of its content *including* parents, so the URL
+        isn't known until after the parents are fixed -- you can't close the
+        loop. Listing the URL a no-parent version would have produces a
+        *different* (and unpublished) URL, so publish rejects it.
+        """
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+        would_be = content_hash(DatasetMetadata(name="x", owner=AgentId("a1")))
+        self_ref = DatasetMetadata(
+            name="x", owner=AgentId("a1"), metadata={"parents": [f"df://sha256-{would_be}"]}
+        )
+        with pytest.raises(ProvenanceError):
+            await facts.publish(self_ref)
+
+    @pytest.mark.asyncio
+    async def test_no_cycle_can_be_formed(self) -> None:
+        """B parents on A; a new A' parenting on B is a *different* node, so A<->B is no cycle."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+        a = await facts.publish(DatasetMetadata(name="a", owner=AgentId("a1")))
+        b = await facts.publish(
+            DatasetMetadata(name="b", owner=AgentId("a1"), metadata={"parents": [str(a)]})
+        )
+        a_prime = await facts.publish(
+            DatasetMetadata(name="a", owner=AgentId("a1"), metadata={"parents": [str(b)]})
+        )
+        # a_prime is a distinct address; the original a does not point back at b.
+        assert a_prime != a
+        assert facts.ancestors(a) == set()
+        assert b not in facts.ancestors(a)
+
+    @pytest.mark.asyncio
+    async def test_altering_an_ancestor_re_addresses_every_descendant(self) -> None:
+        """Merkle property: tamper with deep history and all downstream URLs change."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+        root = await facts.publish(DatasetMetadata(name="raw", owner=AgentId("a1")))
+        child = await facts.publish(
+            DatasetMetadata(name="c", owner=AgentId("a1"), metadata={"parents": [str(root)]})
+        )
+
+        tampered_root = await facts.publish(
+            DatasetMetadata(name="raw", owner=AgentId("a1"), description="tampered")
+        )
+        tampered_child = await facts.publish(
+            DatasetMetadata(
+                name="c", owner=AgentId("a1"), metadata={"parents": [str(tampered_root)]}
+            )
+        )
+        assert tampered_root != root
+        assert tampered_child != child
+
+
+# ---------------------------------------------------------------------------
 # Signed freshness, including the forged-claim rejection
 # ---------------------------------------------------------------------------
 

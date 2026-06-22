@@ -3,13 +3,14 @@
 
 The core claim under test: the three adversarial validators FAIL against the
 default ``datafacts_v1`` layer (name-addressed, unauthenticated freshness, no
-provenance concept) and PASS against ``cid_facts`` -- driven both from
-synthetic traces and from a real simulator run.
+provenance) and PASS against ``cid_facts`` -- driven both from synthetic traces
+and from a real simulator run over a diamond DAG.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,19 @@ class TestScenarioEndToEnd:
         results = validate_trace(out, "provenance_supply_chain")
         assert results, "expected validators to run"
         assert all(r.passed for r in results), [r.detail for r in results if not r.passed]
+
+    def test_diamond_walk_visits_all_four_nodes(self, tmp_path: Path) -> None:
+        """The full DAG walk must count both refiner branches, not just one spine."""
+        out = tmp_path / "cid_facts.jsonl"
+        _run("cid_facts", out)
+        chain_ok = [
+            msg
+            for line in out.read_text().splitlines()
+            if (msg := str(json.loads(line).get("msg", ""))).startswith("chain_ok|")
+        ]
+        assert chain_ok, "no chain_ok recorded"
+        # source + refine-a + refine-b + aggregate = 4 distinct lineage nodes.
+        assert chain_ok[0].rsplit("|", 1)[-1] == "4"
 
     def test_datafacts_v1_fails_all_adversarial_checks(self, tmp_path: Path) -> None:
         out = tmp_path / "v1.jsonl"
