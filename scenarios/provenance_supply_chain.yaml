@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# Provenance supply-chain scenario.
+# Demonstrates content-addressed datasets, signed freshness proofs,
+# and end-to-end provenance-chain verification across 4 supply-chain hops.
+name: provenance_supply_chain
+description: >
+  Content-addressed provenance DAG: multiple suppliers feed multiple
+  manufacturers, manufacturers feed a distributor, and the retailer verifies
+  the full DAG with freshness proofs and provenance audit events.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 6
+  brain: state-machine
+  roles:
+    - name: supplier
+      count: 2
+    - name: manufacturer
+      count: 2
+    - name: distributor
+      count: 1
+    - name: retailer
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  # Use the content-addressed plugin — NOT datafacts_v1.
+  datafacts: cid_facts
+
+task:
+  type: provenance_supply_chain
+  config:
+    items_per_round: 2
+    rounds: 3
+    num_suppliers: 2
+    num_manufacturers: 2
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/provenance_supply_chain.jsonl

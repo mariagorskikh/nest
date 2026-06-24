@@ -1835,6 +1835,300 @@ def validate_receipt_reputation_honest_confidence(
 
 
 # ---------------------------------------------------------------------------
+# CID (content-addressed) datafacts validators
+# ---------------------------------------------------------------------------
+# These three validators operate entirely on trace events emitted by the
+# provenance_supply_chain scenario and require **no** access to plugin
+# internals.  They FAIL against datafacts_v1 traces (name-based URLs) and
+# PASS against cid_facts traces (sha256-prefixed URLs + proof events).
+#
+# Expected trace events (msg field):
+#
+#   publish:df://sha256-<hex>:<agent_id>
+#       Emitted by an agent when it successfully publishes a dataset.
+#
+#   freshness_proof:df://sha256-<hex>:<tick>:<sig_hex>
+#       Emitted alongside every publish to record the signed proof.
+#
+#   derived:df://sha256-<child>:df://sha256-<parent1>[,df://sha256-<parent2>,...]
+#       Emitted by derived-dataset publishers, listing every parent hash.
+# ---------------------------------------------------------------------------
+
+_CID_PREFIX = "df://sha256-"
+
+
+def _cid_parse_publish(msg: str) -> str | None:
+    """Extract the URL from a ``publish:<url>:<agent>`` trace message.
+
+    Returns the full URL (which may contain ``://``) or ``None`` if the
+    message does not parse correctly.
+
+    The message format is::
+
+        publish:df://sha256-<hex>:<agent_id>
+
+    A naive ``split(":")`` shatters ``df://sha256-<hex>`` into multiple
+    parts, so we strip the verb then take everything up to the *last* ``:"
+    as the URL (since agent_id never contains ``:``)::
+
+        >>> _cid_parse_publish("publish:df://sha256-abc:agent-1")
+        'df://sha256-abc'
+    """
+    if not msg.startswith("publish:"):
+        return None
+    remainder = msg[len("publish:") :]
+    # The last colon separates URL from agent_id.  Everything before it is
+    # the URL (which may itself contain colons as part of ``://``).
+    last_colon = remainder.rfind(":")
+    if last_colon < 0:
+        # No agent suffix — whole remainder is the URL.
+        return remainder
+    return remainder[:last_colon]
+
+
+def _cid_parse_freshness_proof(msg: str) -> str | None:
+    """Extract the URL from a ``freshness_proof:<url>:<tick>:<sig_hex>`` message."""
+    if not msg.startswith("freshness_proof:"):
+        return None
+    remainder = msg[len("freshness_proof:") :]
+    # Format: <url>:<tick>:<sig_hex>. URL contains ://, tick and sig_hex do not.
+    # Find first colon that is NOT part of "://".
+    # Strategy: find second occurrence of ":" after skipping the "://" inside df://
+    # Simplest: split once at the first colon that is followed by something other
+    # than "/" (i.e., not part of a scheme).  Since df://sha256-... has no colon
+    # after the scheme, we can split on ":" and rebuild the URL greedily.
+    parts = remainder.split(":")
+    # parts[0] = "df", parts[1] = "//sha256-<hex>", parts[2] = tick, parts[3] = sig
+    # The URL is parts[0] + ":" + parts[1] when it starts with "df"
+    if len(parts) < 3:
+        return None
+    if parts[0] == "df" and parts[1].startswith("//"):
+        return parts[0] + ":" + parts[1]
+    # Fallback: URL is everything before the last two colons.
+    # Find the tick field (numeric) to locate the boundary.
+    for i in range(1, len(parts)):
+        candidate_url = ":".join(parts[:i])
+        tail = ":".join(parts[i:])
+        try:
+            float(tail.split(":")[0])
+            return candidate_url
+        except ValueError:
+            continue
+    return None
+
+
+def _cid_parse_derived(msg: str) -> tuple[str, list[str]] | None:
+    """Parse ``derived:<child_url>:<parent_url1>[,<parent_url2>]``.
+
+    Returns ``(child_url, [parent_url, ...])`` or ``None``.
+
+    Like the publish parser, the challenge is that URLs contain ``://``.
+    We split into exactly three parts by finding the first colon *not*
+    part of a ``://`` scheme, i.e. the first ``:`` after position 7
+    (past ``derived:`` verb) that is not immediately followed by ``//``.
+    """
+    if not msg.startswith("derived:"):
+        return None
+    remainder = msg[len("derived:") :]
+    # Find the boundary between child URL and parents.
+    # Both child and parents start with "df://sha256-" and contain no colons
+    # except the scheme colon.  We can split on "," to get individual parents
+    # *after* we isolate the parents field.
+    #
+    # Strategy: since the format is  <child_url>:<parents_csv>  and child_url
+    # has the form df://sha256-<hex> (no colons after the scheme), the
+    # boundary colon is the *second* colon in remainder (the scheme colon
+    # of df:// is the first, so the next ":" is the separator).
+    parts = remainder.split(":")
+    # e.g. ["df", "//sha256-child", "df", "//sha256-p1,df", "//sha256-p2"]
+    # child = parts[0] + ":" + parts[1]  if parts[1] starts with "//"
+    if len(parts) < 4:
+        return None
+    if parts[0] == "df" and parts[1].startswith("//"):
+        child_url = parts[0] + ":" + parts[1]
+        parents_raw = ":".join(parts[2:])  # may be "df://sha256-p1,df://sha256-p2"
+        # Each parent has scheme "df:" so split by "," first, then reassemble.
+        parent_entries = parents_raw.split(",")
+        parents: list[str] = []
+        i = 0
+        while i < len(parent_entries):
+            entry = parent_entries[i].strip()
+            if entry == "df" and i + 1 < len(parent_entries):
+                # Re-join "df" with the next "//sha256-..." piece that was split by comma.
+                # But commas don't appear inside sha256 hashes — the split is safe.
+                parents.append(entry + ":" + parent_entries[i + 1].strip())
+                i += 2
+            else:
+                # Already a full URL or fragment
+                if entry:
+                    parents.append(entry)
+                i += 1
+        return child_url, parents
+    return None
+
+
+def validate_cid_no_substitution(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """All published dataset URLs must use the ``df://sha256-`` content-addressed scheme.
+
+    A name-based URL (``df://dataset_name``) indicates that substitution
+    resistance is *not* enforced — the publisher could republish different
+    content under the same name without detection.
+
+    This validator FAILS against ``datafacts_v1`` traces and PASSES against
+    ``cid_facts`` traces.
+    """
+    violations: list[str] = []
+    publish_count = 0
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("publish:"):
+            continue
+        url = _cid_parse_publish(msg)
+        if url is None:
+            continue
+        publish_count += 1
+        if not url.startswith(_CID_PREFIX):
+            agent = ev.get("agent", "?")
+            violations.append(f"{agent} published non-CID URL: {url!r}")
+
+    if not publish_count:
+        return [
+            ValidationResult(
+                "cid_no_substitution",
+                False,
+                "no publish events found — cannot confirm substitution resistance",
+            )
+        ]
+    if violations:
+        return [ValidationResult("cid_no_substitution", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "cid_no_substitution",
+            True,
+            f"all {publish_count} published URLs are content-addressed",
+        )
+    ]
+
+
+def validate_cid_freshness_proofs(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every published dataset must have a matching ``freshness_proof:`` trace event.
+
+    Detects the *stale-freshness* attack: a publisher claims a dataset is
+    fresh by re-touching its metadata without re-publishing — no proof
+    event is emitted, so this validator fires.
+
+    This validator FAILS against ``datafacts_v1`` traces (no proof events)
+    and PASSES against ``cid_facts`` traces.
+    """
+    published_urls: set[str] = set()
+    proved_urls: set[str] = set()
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("publish:"):
+            url = _cid_parse_publish(msg)
+            if url:
+                published_urls.add(url)
+        elif msg.startswith("freshness_proof:"):
+            url = _cid_parse_freshness_proof(msg)
+            if url:
+                proved_urls.add(url)
+
+    if not published_urls:
+        return [
+            ValidationResult(
+                "cid_freshness_proofs",
+                False,
+                "no publish events found — cannot verify freshness proofs exist",
+            )
+        ]
+
+    missing = sorted(published_urls - proved_urls)
+    if missing:
+        detail = f"{len(missing)} published dataset(s) have no freshness proof: " + ", ".join(
+            u[:30] + "..." for u in missing
+        )
+        return [ValidationResult("cid_freshness_proofs", False, detail)]
+    return [
+        ValidationResult(
+            "cid_freshness_proofs",
+            True,
+            f"all {len(published_urls)} published datasets have freshness proofs",
+        )
+    ]
+
+
+def validate_cid_provenance_chain(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every parent hash referenced in a ``derived:`` event must itself be published.
+
+    Detects *provenance washing*: a derived dataset that references a parent
+    hash which does not correspond to any published dataset in the trace.
+
+    This validator FAILS when parents are missing or when the trace contains
+    no ``derived:`` events at all (meaning provenance is not being tracked).
+    """
+    published_urls: set[str] = set()
+    broken_chains: list[str] = []
+    derived_count = 0
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("publish:"):
+            url = _cid_parse_publish(msg)
+            if url:
+                published_urls.add(url)
+
+    # Second pass: check derived events against published set.
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("derived:"):
+            continue
+        parsed = _cid_parse_derived(msg)
+        if parsed is None:
+            continue
+        child_url, parent_urls = parsed
+        derived_count += 1
+        for parent_url in parent_urls:
+            if parent_url and parent_url not in published_urls:
+                broken_chains.append(
+                    f"child {child_url[:32]}... references unpublished parent {parent_url[:32]}..."
+                )
+
+    if derived_count == 0:
+        return [
+            ValidationResult(
+                "cid_provenance_chain",
+                False,
+                "no derived: events found — provenance chain is not being tracked",
+            )
+        ]
+    if broken_chains:
+        return [ValidationResult("cid_provenance_chain", False, "; ".join(broken_chains))]
+    return [
+        ValidationResult(
+            "cid_provenance_chain",
+            True,
+            f"all {derived_count} derived datasets have valid provenance chains",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -1888,5 +2182,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "receipt_reputation": [
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
+    ],
+    "provenance_supply_chain": [
+        validate_cid_no_substitution,
+        validate_cid_freshness_proofs,
+        validate_cid_provenance_chain,
     ],
 }

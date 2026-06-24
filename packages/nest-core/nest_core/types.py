@@ -515,9 +515,23 @@ class Proof(BaseModel):
 class DatasetMetadata(BaseModel):
     """Metadata about a dataset published via DataFacts.
 
+    The ``parents`` field carries content-addressed URLs (``df://sha256-*``)
+    of every upstream dataset this one was derived from, forming a provenance
+    DAG.  Omit (or leave as the default empty list) for root datasets.
+
+    The ``metadata`` dict may include a ``"content_sha256"`` key that stores
+    a hex digest of the actual payload bytes.  The ``cid_facts`` plugin
+    incorporates this key when computing the content-addressed URL so that
+    the URL is bound to *content*, not just metadata fields.
+
     Example::
 
         meta = DatasetMetadata(name="weather-2024", owner=AgentId("a1"), schema_version="1.0")
+        derived = DatasetMetadata(
+            name="forecast",
+            owner=AgentId("a1"),
+            parents=[DataFactsUrl("df://sha256-abc123")],
+        )
     """
 
     name: str
@@ -531,6 +545,11 @@ class DatasetMetadata(BaseModel):
     checksum: str | None = None
     access_tier: str = "public"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Provenance DAG: content-addressed URLs of upstream datasets. Defaults
+    # to [] so all existing callers remain valid without changes.
+    parents: list[DataFactsUrl] = Field(  # pyright: ignore[reportUnknownVariableType]
+        default_factory=list
+    )
 
 
 class AccessGrant(BaseModel):
@@ -545,6 +564,35 @@ class AccessGrant(BaseModel):
     grantee: AgentId
     tier: str = "read"
     expires_at: float | None = None
+
+
+class FreshnessProof(BaseModel):
+    """Signed proof that a content-addressed dataset was published at logical tick *tick*.
+
+    The ``signature`` covers the canonical JSON (sorted keys, no whitespace) of::
+
+        {"publisher": <str>, "tick": <float>, "url": <str>}
+
+    using the publisher's identity-layer private key.  A verifier can confirm
+    authenticity without relying on wall-clock time by:
+
+    1. Reconstructing the canonical JSON from the proof fields.
+    2. Calling ``identity.verify(payload, proof.signature, proof.publisher)``.
+
+    Example::
+
+        proof = FreshnessProof(
+            url=DataFactsUrl("df://sha256-abc123"),
+            publisher=AgentId("supplier-0"),
+            tick=1.0,
+            signature=Signature(signer=AgentId("supplier-0"), value=b"sig"),
+        )
+    """
+
+    url: DataFactsUrl
+    publisher: AgentId
+    tick: float
+    signature: Signature
 
 
 # ---------------------------------------------------------------------------
