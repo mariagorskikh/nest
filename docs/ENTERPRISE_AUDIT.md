@@ -2,9 +2,10 @@
 
 **Version:** 3.0 (Forensic Audit)  
 **Audit Date:** 2026-06-24  
+**Audit Refresh Date:** 2026-06-25 (`platform/audit-remediation`, 6 commits ahead of `main`)  
 **Repository:** [projnanda/nandatown](https://github.com/projnanda/nandatown)  
 **Auditor Role:** Senior Enterprise Architect, Principal Software Engineer, Security Architect, AI Systems Architect  
-**Baseline:** `uv sync` + ruff + pyright + **541 passed, 1 skipped** (542 collected; local, Python 3.14.4); `nest doctor` 7/7; `nest run marketplace` trace produced
+**Baseline:** `uv sync` + ruff + pyright + **552 passed, 1 skipped** (local, Python 3.14.4); `nest doctor` 7/7; `nest run marketplace` → `trace_header` schema 1.0
 
 ---
 
@@ -23,7 +24,7 @@
 
 # 1. Executive Summary
 
-[OBSERVED] **Nanda Town** is an Apache 2.0, Alpha-status **agent-protocol testing rig** developed at MIT Media Lab. It is distributed primarily as the PyPI package `nest-core` (v0.1.4). The system spins up swarms of 10–10,000+ agents, composes a **12-layer agent stack** via pluggable Python `Protocol` interfaces, runs adversarial scenarios (marketplace, auction, voting, consensus, supply chain, reputation), and emits **byte-deterministic JSONL traces** validated by property checkers.
+[OBSERVED] **Nanda Town** is an Apache 2.0, Alpha-status **agent-protocol testing rig** developed at MIT Media Lab. It is distributed primarily as the PyPI package `nest-core` (v0.1.4). The system spins up swarms of 10–10,000+ agents, composes a **12-layer agent stack** via pluggable Python `Protocol` interfaces, runs adversarial scenarios (marketplace, auction, voting, consensus, supply chain, reputation), and emits **JSONL traces** with a versioned `trace_header` (schema 1.0) validated by property checkers. Same-seed Tier 1 runs remain byte-deterministic within schema v1.0 (traces differ from pre-1.0 files that lacked the header).
 
 [OBSERVED] This is **not** a production SaaS, multi-tenant platform, or networked microservice mesh. It is a **testing tool first, simulator second** — explicitly documented in README and `docs/concepts.md`.
 
@@ -33,7 +34,7 @@
 |-------------|-------------|
 | C-level / investors | Foundational infrastructure for the emerging agent-economy protocol layer; open-source wedge with hackathon-driven ecosystem growth |
 | Solution architects | Composable 12-layer reference architecture for MAS (multi-agent system) protocol interoperability testing |
-| Engineering | Mature dev ergonomics: uv workspace, strict pyright, 542+ tests, plugin entry points, deterministic Tier 1 regression |
+| Engineering | Mature dev ergonomics: uv workspace, strict pyright, 552 tests, plugin entry points, deterministic Tier 1 regression |
 | Security | Reference plugins are **simulation scaffolding** — must not be deployed to production without replacement |
 | AI teams | Tier 2 LLM agents (`nest-shell`), automated LLM judge panel (`scripts/judge`), research harness (`scripts/harness`) |
 
@@ -41,10 +42,10 @@
 
 **Top 5 findings:**
 
-1. **[RISK]** Default `jwt`, `did_key`, `noop` privacy, and `prepaid_credits` plugins are deliberately non-production — misuse risk if consumers skip README warnings.
-2. **[OBSERVED]** Strong determinism story: seeded RNG, JSONL traces, 30+ property validators — excellent for protocol regression.
-3. **[OBSERVED]** AI subsystems exist: ShellAgent (OpenAI/Anthropic/mock), parallel Opus judge panel, harness condition sweeps.
-4. **[MISSING]** No network transport (TCP/gRPC/HTTP), no distributed execution, no persistent datastore.
+1. **[RISK]** Default `jwt`, `did_key`, `noop` privacy, and `prepaid_credits` plugins are deliberately non-production — runtime `UserWarning` on instantiate (2026-06-24) plus README; misuse risk if consumers ignore warnings.
+2. **[OBSERVED]** Strong determinism story: seeded RNG, JSONL traces with `schema_version`, 30+ property validators — excellent for protocol regression.
+3. **[OBSERVED]** AI subsystems exist: ShellAgent (OpenAI/Anthropic/mock), parallel Opus judge panel, harness condition sweeps; stderr token telemetry via `NEST_LLM_TELEMETRY`.
+4. **[MISSING]** No network transport (TCP/gRPC/HTTP), no distributed execution, no persistent datastore — RFC-001 drafted; implementation deferred to 60-day plan.
 5. **[INFERRED]** High strategic value as **protocol CI** for agent fleets — comparable to property-based testing for distributed systems.
 
 ---
@@ -69,6 +70,7 @@
 | Data | Indexing strategy | **N/A** | Trace files are linear JSONL |
 | Data | Lineage documented | **Partial** | Section 8.6 |
 | DevOps | Deployment architecture | **Partial** | [OBSERVED] GitHub Actions CI + PyPI publish; `.railwayignore` hints optional hosting |
+| DevOps | Windows local CI | **Pass** | [OBSERVED] [`scripts/ci-local.ps1`](../scripts/ci-local.ps1) mirrors Makefile `ci-local` (2026-06-25) |
 | DevOps | Environment promotion | **Gap** | [MISSING] No dev/staging/prod tiers |
 | Governance | Dependency governance | **Partial** | [OBSERVED] uv lock, pinned pyright; CycloneDX SBOM artifact in CI (2026-06-25) |
 | Quality | Test strategy | **Pass** | [OBSERVED] pytest, hypothesis, 552 tests, `@pytest.mark.live` for external |
@@ -611,8 +613,9 @@ flowchart TB
     end
 
     subgraph cicd [GitHub Actions]
-        LintJob[ruff + pyright]
-        TestJob[pytest 542+]
+        LintJob[ruff + pyright matrix 3.12/3.13]
+        TestJob[pytest 552+ matrix]
+        SbomJob[SBOM CycloneDX 1.5]
         PublishJob[publish.yml PyPI]
     end
 
@@ -637,6 +640,7 @@ flowchart TB
     Dash --> Traces
     GHRepo --> LintJob
     GHRepo --> TestJob
+    GHRepo --> SbomJob
     LintJob --> TestJob
     TestJob --> PublishJob
     PublishJob --> PyPI
@@ -675,15 +679,17 @@ flowchart TB
 
 ## 3.8 Architecture Decision Records
 
-**ADR-001 12-Layer Decomposition** — Protocol per layer, plugin per implementation. Alternatives: monolith. Risk: boundary overlap.
+[OBSERVED] Formal ADRs in [`docs/adr/`](adr/) (accepted 2026-06-25):
 
-**ADR-002 Structural Typing** — No inheritance required. Alternatives: ABC. Risk: runtime signature mismatch.
+| ADR | Title | Summary |
+|-----|-------|---------|
+| [ADR-001](adr/ADR-001-twelve-layer-decomposition.md) | Twelve-layer decomposition | Protocol per layer, plugin per implementation |
+| [ADR-002](adr/ADR-002-structural-typing.md) | Structural typing | No inheritance required for plugins |
+| [ADR-003](adr/ADR-003-jsonl-traces.md) | JSONL traces | `trace_header` + `schema_version` 1.0 |
+| [ADR-004](adr/ADR-004-seeded-determinism.md) | Seeded determinism | Master seed drives all RNGs |
+| [ADR-005](adr/ADR-005-entry-point-plugins.md) | Entry-point discovery | `nest.plugins.<layer>` groups |
 
-**ADR-003 JSONL Traces** — Grep-able audit log. Alternatives: OTel, SQLite. Risk: large files.
-
-**ADR-004 Seeded Determinism** — Master seed drives all RNGs. Alternatives: wall clock. Risk: zero default latency.
-
-**ADR-005 Entry-Point Discovery** — `nest.plugins.<layer>` groups. Alternatives: manifest file. Risk: name collisions.
+Related: [trace schema](trace-schema.md) · [RFC-001 network transport](rfcs/RFC-001-network-transport.md)
 
 ## 3.9 Failure Mode and Resilience Notes
 
@@ -929,7 +935,8 @@ openai/anthropic: inference. nest-shell: orchestration. scripts/judge: evaluatio
 
 | Attack Vector | Surface | Exploit | Impact | Status |
 |---------------|---------|---------|--------|--------|
-| Forged sim JWT | `JwtAuth` default secret `b"nest-default-secret"` | HMAC with known secret | Bypass simulated auth | [RISK] Documented non-production |
+| Forged sim JWT | `JwtAuth` default secret `b"nest-default-secret"` | HMAC with known secret | Bypass simulated auth | [RISK] Documented non-production + `UserWarning` on init |
+| Simulation plugin misuse | Reference jwt/did_key/noop | Instantiate without reading docs | Deploy weak crypto to prod | [OBSERVED] Runtime `UserWarning` via `_simulation_warning` (2026-06-24) |
 | Token replay | In-memory `_revoked` set only | Reuse before revoke | Scope escalation in sim | Mitigated by revoke API |
 | Byzantine agents | `byzantine_fraction` config | Garbled messages | Protocol stress test | By design |
 | PR prompt injection | Judge panel diff input | Malicious PR body | LLM manipulation | [RISK] Partial — diff truncated |
@@ -949,6 +956,7 @@ openai/anthropic: inference. nest-shell: orchestration. scripts/judge: evaluatio
 | Dependency hygiene | uv lock, ruff | CI lint job |
 | Live test isolation | `@pytest.mark.live` skipped default | pytest -m "not live" |
 | Judge mock fallback | Deterministic mock without API key | test_judge.py |
+| Simulation plugin warnings | `_simulation_warning.warn_on_init` | test_plugins.py UserWarning |
 | Diff size cap | MAX_FILE_DIFF_LINES=5000 | judge_pr.py |
 
 ## 6.1 Authentication Design
@@ -1100,8 +1108,8 @@ No OAuth2/OIDC/MFA — [MISSING] not applicable to CLI test rig.
 | Breaking CLI changes | Semver on nest-core |
 | YAML schema changes | Pydantic validation errors |
 | Plugin interface changes | nest-sdk version coupling |
-| Trace format drift | [MISSING] schema version field |
-| Idempotency | Same seed → identical trace [OBSERVED] |
+| Trace format drift | [OBSERVED] `schema_version` in `trace_header` — [`trace-schema.json`](trace-schema.json), [ADR-003](adr/ADR-003-jsonl-traces.md) |
+| Idempotency | Same seed → identical trace within schema v1.0 (includes `trace_header`) [OBSERVED] |
 
 ---
 
@@ -1398,7 +1406,7 @@ See Section 5.15.
 | Durability | Trace file persisted | File exists post-run |
 | Scalability | 10,000+ Tier 1 agents | README claim; test_sim.py |
 | Accessibility | CLI terminal | [MISSING] WCAG |
-| Maintainability | Strict typing, 542 tests | CI pass |
+| Maintainability | Strict typing, 552 tests | CI pass |
 | Observability | JSONL traces | inspect/report |
 | Portability | Python 3.12+ cross-platform | Windows/Linux CI |
 | Security | Reference plugins labeled non-prod | Documentation |
@@ -1429,7 +1437,7 @@ See Section 5.15.
 | Security | [MISSING] formal SAST | [INFERRED] bandit | Not in CI |
 | Load | 10K agents | test_sim.py | CI partial |
 
-[OBSERVED] **541 passed, 1 skipped** (542 collected) in ~34s local run.
+[OBSERVED] **552 passed, 1 skipped** in ~37s local run (`platform/audit-remediation`, 2026-06-25).
 
 ## 10.2 Critical Smoke Test Cases
 
@@ -1486,7 +1494,7 @@ See Section 5.15.
 | Tier 2 LLM | API datacenter energy | mock backend default in dev | Zero API in CI |
 | Judge Opus calls | High inference cost | Rubric prompt caching | Minimize re-judging |
 | 10K agent research | Long CPU runs | Document energy-aware sweep sizing | User guidance |
-| CI runners | GitHub shared infra | Efficient pytest | 542 tests <60s |
+| CI runners | GitHub shared infra | Efficient pytest | 552 tests <60s |
 
 [INFERRED STRATEGY BASED ON MARKET STANDARD:] Publish recommended agent-count × seed-count limits for carbon-conscious research.
 
@@ -1500,7 +1508,7 @@ See Section 5.15.
 | 2 | Problem | Agent protocols untested at swarm scale |
 | 3 | Gap | No standard test rig for 12-layer agent stack |
 | 4 | Solution | Plug-in simulator + validators + traces |
-| 5 | Architecture | 12 layers, deterministic Tier 1, 542 tests |
+| 5 | Architecture | 12 layers, deterministic Tier 1, 552 tests |
 | 6 | Workflow | Write protocol → plug in → run scenario → validate |
 | 7 | Moat | Layer taxonomy + property validators + community hackathon |
 | 8 | Security | Reference plugins + adversarial testing culture |
@@ -1533,12 +1541,12 @@ See Section 5.15.
 
 | Role | Deliverables | Critical Context | Next Actions |
 |------|-------------|----------------|--------------|
-| CTO | This audit, ADRs | Alpha research tool not SaaS | Prioritize transport plugin |
-| Eng Manager | Module map, CI status | 542 tests, uv workspace | Sprint 0 checklist Phase 9.2 |
-| Lead Developer | Plugin API, runner flow | 12-layer Protocol design | Trace schema RFC |
+| CTO | This audit, ADRs | Alpha research tool not SaaS | Prioritize TCP transport plugin (RFC-001) |
+| Eng Manager | Module map, CI status | 552 tests, uv workspace, Windows ci-local.ps1 | Hackathon scoreboard; 60-day transport alpha |
+| Lead Developer | Plugin API, runner flow | 12-layer Protocol design | Trace schema v1 shipped — transport plugin next |
 | QA Lead | Test strategy, smoke tests | hypothesis + validators | Add security SAST |
-| DevOps | CI/CD, PyPI publish | GitHub Actions only | SBOM + Windows CI script |
-| CISO | Threat model Section 10 | Reference plugins unsafe for prod | Warning banners |
+| DevOps | CI/CD, PyPI publish | GitHub Actions 3.12/3.13 matrix, SBOM artifact, ci-local.ps1 | Monitor CI on merge; PyPI release cadence |
+| CISO | Threat model Section 10 | Reference plugins unsafe for prod | Runtime warnings deployed; formal SAST next |
 | CFO | [MISSING] cost model | Hackathon API costs | Token budget policy |
 | AI Lead | Section 12 architecture | Tier 2 non-deterministic | Structured output eval |
 | Legal/Compliance | Apache 2.0, [MISSING] SOC2 | Open source MIT Media Lab | License review for plugins |
@@ -1595,7 +1603,10 @@ See Section 3 Assumption Register (A-001 through A-005).
 - [x] Repository strategy — monorepo uv workspace [OBSERVED]
 - [x] Coding standards — ruff, pyright strict [OBSERVED]
 - [x] Branching model — main + hackathon/* [OBSERVED]
-- [x] CI/CD pipeline — GitHub Actions [OBSERVED]
+- [x] CI/CD pipeline — GitHub Actions (Python 3.12/3.13 matrix, SBOM job) [OBSERVED 2026-06-25]
+- [x] Windows local CI — `scripts/ci-local.ps1` [OBSERVED 2026-06-25]
+- [x] Trace schema v1 — `docs/trace-schema.json` + `trace_header` [OBSERVED 2026-06-25]
+- [x] Formal ADRs — `docs/adr/` ADR-001..005 [OBSERVED 2026-06-25]
 - [ ] Infrastructure provisioned — [MISSING] cloud
 - [ ] Secret management — env vars only
 - [ ] Design system — N/A CLI tool
@@ -1608,7 +1619,7 @@ See Section 3 Assumption Register (A-001 through A-005).
 | Phase | Duration | Goals | Team |
 |-------|----------|-------|------|
 | MVP (current) | Shipped | 12 layers, 7 scenarios, PyPI, validators | Core |
-| Stabilization | 3 months | Trace schema, transport plugin, warnings | Core + contributors |
+| Stabilization | 3 months | ~~Trace schema~~, ~~plugin warnings~~, transport plugin alpha | Core + contributors |
 | Scale | 6-12 months | Distributed runner [INFERRED], enterprise CI integration | Expanded |
 
 ---
@@ -1617,17 +1628,18 @@ See Section 3 Assumption Register (A-001 through A-005).
 
 | Evidence | Source | Date |
 |----------|--------|------|
-| 552 passed, 1 skipped | `uv run pytest -q` on `platform/audit-remediation` | 2026-06-25 |
-| trace_header schema 1.0 | `nest run marketplace` first JSONL line | 2026-06-25 |
-| ci-local.ps1 | `scripts/ci-local.ps1` | 2026-06-25 |
+| 552 passed, 1 skipped | `uv run pytest -q` (`platform/audit-remediation` refresh) | 2026-06-25 |
+| ruff clean | `uv run ruff check .` | 2026-06-25 |
+| pyright 0 errors | `uv run pyright` | 2026-06-25 |
+| 7/7 doctor checks | `uv run nest doctor` | 2026-06-25 |
+| trace_header schema 1.0 | `nest run marketplace -o traces/audit-verify.jsonl` | 2026-06-25 |
+| ci-local.ps1 all green | `.\scripts\ci-local.ps1` | 2026-06-25 |
 | Python 3.12+3.13 CI matrix | `.github/workflows/ci.yml` | 2026-06-25 |
-| SBOM CycloneDX 1.5 | `uv export --format cyclonedx1.5` | 2026-06-25 |
+| SBOM CycloneDX 1.5 | `uv export --format cyclonedx1.5` CI job | 2026-06-25 |
 | 5 ADRs + RFC-001 | `docs/adr/`, `docs/rfcs/` | 2026-06-25 |
-| LLM token telemetry | `NEST_LLM_TELEMETRY` stderr logging | 2026-06-25 |
-| 541 passed, 1 skipped | `uv run pytest -q` (prior baseline) | 2026-06-24 |
-| ruff clean | `uv run ruff check .` | 2026-06-24 |
-| pyright 0 errors | `uv run pyright` | 2026-06-24 |
-| 7/7 doctor checks | `uv run nest doctor` | 2026-06-24 |
+| LLM token telemetry | `nest_shell.telemetry`, `NEST_LLM_TELEMETRY=0` | 2026-06-25 |
+| Simulation plugin warnings | `_simulation_warning.py` UserWarning | 2026-06-24 |
+| 541 passed, 1 skipped | `uv run pytest -q` (initial audit baseline) | 2026-06-24 |
 | enterprise-audit.jsonl | `nest run marketplace -o traces/enterprise-audit.jsonl` | 2026-06-24 |
 | 9 pyproject.toml files | workspace + 8 packages | Repo |
 | 30+ validators | validators.py grep | Repo |
@@ -1644,7 +1656,9 @@ See Section 3 Assumption Register (A-001 through A-005).
 | Sequence | 4 | Section 6 (4 diagrams) |
 | Flowcharts | 6+ | Section 6 (6 diagrams) |
 | AI Diagrams | 6 | Section 12 (6 diagrams) |
+| ADR index | 5 | `docs/adr/` + Section 3.8 |
+| Trace schema spec | 1 | `docs/trace-schema.md` + `trace-schema.json` |
 
 ---
 
-*End of Enterprise Technical Documentation — Nanda Town Forensic Audit v3.0*
+*End of Enterprise Technical Documentation — Nanda Town Forensic Audit v3.0 (refreshed 2026-06-25)*
