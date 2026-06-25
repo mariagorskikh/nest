@@ -23,6 +23,14 @@ make ci-local
 `make ci-local` runs the five commands above in order and hard-fails on the
 first red command. Run it before every `git push`.
 
+**Windows (no `make`):**
+
+```powershell
+.\scripts\ci-local.ps1
+```
+
+This runs the same five steps as `make ci-local` and CI.
+
 **Why each command matters:**
 
 1. **`uv sync`** — installs/refreshes the locked dependency set. If this fails,
