@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 
 import pytest
@@ -65,6 +66,54 @@ class TestInMemoryTransport:
         _, p3 = await t3.receive()
         assert p2 == b"announce"
         assert p3 == b"announce"
+
+
+class TestTcpLoopbackTransport:
+    @pytest.mark.asyncio
+    async def test_send_receive(self) -> None:
+        from nest_plugins_reference.transport.tcp_loopback import (
+            StandaloneTcpLoopbackTransport,
+            TcpLoopbackHub,
+        )
+
+        hub = TcpLoopbackHub(seed=42)
+        t1 = StandaloneTcpLoopbackTransport(AgentId("a1"), hub)
+        t2 = StandaloneTcpLoopbackTransport(AgentId("a2"), hub)
+        try:
+            await t1.connect()
+            await t2.connect()
+            await t1.send(AgentId("a2"), b"hello")
+            sender, payload = await asyncio.wait_for(t2.receive(), timeout=5.0)
+            assert sender == AgentId("a1")
+            assert payload == b"hello"
+        finally:
+            await hub.close()
+
+    @pytest.mark.asyncio
+    async def test_partition_drops_cross_group(self) -> None:
+        from nest_plugins_reference.transport.tcp_loopback import (
+            StandaloneTcpLoopbackTransport,
+            TcpLoopbackHub,
+        )
+
+        hub = TcpLoopbackHub(seed=1)
+        hub.set_partition_groups([["a1"], ["a2"]])
+        t1 = StandaloneTcpLoopbackTransport(AgentId("a1"), hub)
+        t2 = StandaloneTcpLoopbackTransport(AgentId("a2"), hub)
+        try:
+            await t1.connect()
+            await t2.connect()
+            await t1.send(AgentId("a2"), b"nope")
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(t2.receive(), timeout=0.3)
+        finally:
+            await hub.close()
+
+    def test_plugin_registry_resolves(self) -> None:
+        from nest_core.plugins import PluginRegistry
+
+        cls = PluginRegistry().resolve("transport", "tcp_loopback")
+        assert cls.__name__ == "StandaloneTcpLoopbackTransport"
 
 
 # ---------------------------------------------------------------------------
@@ -563,3 +612,14 @@ class TestSimulationOnlyWarnings:
         assert len(caught) == 1
         assert issubclass(caught[0].category, UserWarning)
         assert "NoopPrivacy" in str(caught[0].message)
+
+    def test_prepaid_credits_warns_on_init(self) -> None:
+        from nest_plugins_reference.payments.prepaid_credits import PrepaidCredits
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            PrepaidCredits(AgentId("a1"))
+
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, UserWarning)
+        assert "PrepaidCredits" in str(caught[0].message)

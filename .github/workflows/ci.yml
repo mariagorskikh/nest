@@ -76,3 +76,17 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.json
           if-no-files-found: error
+
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - name: Bandit SAST (packages + scripts)
+        run: uv run bandit -r packages scripts -ll -q

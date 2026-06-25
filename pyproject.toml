@@ -75,6 +75,7 @@ dev-dependencies = [
     # Pinned to match local dev: newer pyright is stricter about typer's
     # dynamic Argument/Option typing and breaks CI without code changes.
     "pyright>=1.1.400,<1.1.410",
+    "bandit>=1.7",
     # nest-cli is a deprecated shim — only installed for the dev test suite
     # so the shim's smoke tests can import it.
     "nest-cli",

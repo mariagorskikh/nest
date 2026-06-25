@@ -1,6 +1,6 @@
 # RFC-001: Network Transport Plugin
 
-**Status:** Draft  
+**Status:** Draft (alpha: `tcp_loopback` plugin shipped 2026-06-25)  
 **Date:** 2026-06-25  
 **Related:** [ADR-001](../adr/ADR-001-twelve-layer-decomposition.md) · Risk R-004 in enterprise audit
 

@@ -19,6 +19,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -30,6 +31,8 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from nest_shell.telemetry import llm_telemetry_enabled, log_llm_usage
+
+from scripts.judge.limits import JudgeLimitError, global_judge_budget
 
 RUBRIC_PATH = Path(__file__).parent / "rubric.md"
 RUBRIC_VERSION = 1
@@ -57,14 +60,16 @@ def log_judge_usage(
     judge_id: int | None = None,
 ) -> None:
     """Log judge LLM token usage to stderr (see ``NEST_LLM_TELEMETRY``)."""
-    if not llm_telemetry_enabled():
-        return
     usage = getattr(response, "usage", None)
-    ctx = f"judge_id={judge_id}" if judge_id is not None else "judge"
     inp = out = None
     if usage is not None:
         inp = getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", None)
         out = getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", None)
+    with contextlib.suppress(JudgeLimitError):
+        global_judge_budget().record_tokens(inp, out)
+    if not llm_telemetry_enabled():
+        return
+    ctx = f"judge_id={judge_id}" if judge_id is not None else "judge"
     log_llm_usage(
         provider=provider,
         model=model,
@@ -296,7 +301,7 @@ def _gh_get(url: str, *, accept: str = "application/vnd.github+json") -> bytes:
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310  # nosec B310
             return cast("bytes", resp.read())
     except urllib.error.HTTPError as exc:  # pragma: no cover - network-dependent
         raise RuntimeError(f"GitHub API GET {url} failed: {exc.code} {exc.reason}") from exc
@@ -820,8 +825,18 @@ async def judge_pr(
     )
 
     async def run_one(judge_id: int) -> JudgeVerdict:
+        budget = global_judge_budget()
         try:
+            budget.before_call()
             raw = await judge_client.judge(system_blocks=system_blocks, user=user_prompt)
+        except JudgeLimitError as exc:
+            return JudgeVerdict(
+                judge_id=judge_id,
+                scores={},
+                rationale="",
+                raw_response="",
+                error=str(exc),
+            )
         except Exception as exc:  # noqa: BLE001 - judge isolation by design
             return JudgeVerdict(
                 judge_id=judge_id,

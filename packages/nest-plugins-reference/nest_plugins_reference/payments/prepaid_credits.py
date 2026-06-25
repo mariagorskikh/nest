@@ -19,6 +19,8 @@ from nest_core.types import (
     ServiceRef,
 )
 
+from nest_plugins_reference._simulation_warning import warn_simulation_only
+
 
 class PrepaidCredits:
     """Simple debit/credit ledger for payments.
@@ -36,6 +38,10 @@ class PrepaidCredits:
         balances: dict[AgentId, int] | None = None,
         payments: dict[PaymentRef, Receipt] | None = None,
     ) -> None:
+        warn_simulation_only(
+            "PrepaidCredits",
+            "in-memory ledger with no settlement or escrow guarantees",
+        )
         self._agent_id = agent_id
         self._balances = balances if balances is not None else {}
         self._balances.setdefault(agent_id, initial_balance)

@@ -42,7 +42,7 @@
 
 **Top 5 findings:**
 
-1. **[RISK]** Default `jwt`, `did_key`, `noop` privacy, and `prepaid_credits` plugins are deliberately non-production — runtime `UserWarning` on instantiate (2026-06-24) plus README; misuse risk if consumers ignore warnings.
+1. **[RISK]** Default `jwt`, `did_key`, `noop` privacy, and `prepaid_credits` plugins are deliberately non-production — runtime `UserWarning` on instantiate (2026-06-24/25) plus README; misuse risk if consumers ignore warnings.
 2. **[OBSERVED]** Strong determinism story: seeded RNG, JSONL traces with `schema_version`, 30+ property validators — excellent for protocol regression.
 3. **[OBSERVED]** AI subsystems exist: ShellAgent (OpenAI/Anthropic/mock), parallel Opus judge panel, harness condition sweeps; stderr token telemetry via `NEST_LLM_TELEMETRY`.
 4. **[MISSING]** No network transport (TCP/gRPC/HTTP), no distributed execution, no persistent datastore — RFC-001 drafted; implementation deferred to 60-day plan.
@@ -116,7 +116,7 @@
 |---------------|------------|-------|-------------------|
 | A-001 | Users understand reference plugins are non-production | README, charter | User survey / install warning |
 | A-002 | Protocol authors target one layer at a time | Plugin entry-point design | Hackathon PR analysis |
-| A-003 | JSONL traces are sufficient audit evidence | Trace schema, validators | Formal trace schema publication |
+| A-003 | JSONL traces are sufficient audit evidence | Trace schema, validators | [OBSERVED] Formal schema published — [`trace-schema.json`](trace-schema.json), ADR-003 (2026-06-25) |
 | A-004 | Python 3.12+ is acceptable floor | pyproject.toml | Monitor 3.14 compatibility |
 | A-005 | Anthropic Opus is acceptable judge model | `judge_pr.py` defaults | Cost/latency benchmarking |
 
@@ -1033,7 +1033,7 @@ No OAuth2/OIDC/MFA — [MISSING] not applicable to CLI test rig.
 |--------|---------|------------|--------|------------|
 | Misuse of reference plugins in prod | pip install defaults | Medium | High | Documentation, warnings |
 | Non-deterministic benchmark | Tier 2 shell | High if misused | Medium | README warning |
-| Judge API cost attack | Malicious PR volume | Low | Medium | Rate limits [MISSING] |
+| Judge API cost attack | Malicious PR volume | Low | Medium | `NEST_JUDGE_MAX_CALLS`, `NEST_JUDGE_TOKEN_BUDGET` env limits (2026-06-25) |
 | Trace data leak | Committed traces | Low | Low | .gitignore traces |
 
 ---
@@ -1434,7 +1434,7 @@ See Section 5.15.
 | Property | Determinism, invariants | hypothesis | CI auto |
 | Contract | Layer protocol compliance | test_layers.py | CI auto |
 | E2E live LLM | shell agents | @pytest.mark.live | Manual/skip default |
-| Security | [MISSING] formal SAST | [INFERRED] bandit | Not in CI |
+| Security | [OBSERVED] bandit SAST in CI | [INFERRED] bandit `-ll` job | CI `sast` job (2026-06-25) |
 | Load | 10K agents | test_sim.py | CI partial |
 
 [OBSERVED] **552 passed, 1 skipped** in ~37s local run (`platform/audit-remediation`, 2026-06-25).

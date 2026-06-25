@@ -47,7 +47,7 @@ def _fetch_json(url: str, timeout: float = DEFAULT_TIMEOUT) -> object:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  # nosec B310
         body = resp.read().decode("utf-8")
     return cast("object", json.loads(body))
 
