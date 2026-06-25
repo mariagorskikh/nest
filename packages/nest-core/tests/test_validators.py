@@ -16,6 +16,10 @@ from nest_core.validators import (
     validate_consensus_agreement,
     validate_consensus_no_conflict,
     validate_consensus_validity,
+    validate_escrow_bps_in_range,
+    validate_escrow_no_payout_without_delivery,
+    validate_escrow_role_binding,
+    validate_escrow_state_machine,
     validate_events,
     validate_marketplace_no_double_sell,
     validate_marketplace_price_agreement,
@@ -740,6 +744,172 @@ class TestStreamingValidators:
         assert results[0].passed  # unrelated drop, not a violation
 
 
+class TestEscrowValidators:
+    """Direct validator tests with synthetic broadcast events."""
+
+    @staticmethod
+    def _ev(agent: str, msg: str) -> dict[str, Any]:
+        return {"kind": "broadcast", "agent": agent, "msg": msg}
+
+    @staticmethod
+    def _happy(ref: str = "e1") -> list[dict[str, Any]]:
+        return [
+            TestEscrowValidators._ev(
+                "buyer",
+                f"escrow:opened:ref={ref}:payer=buyer:payee=seller:arbiter=arbiter:amount=250",
+            ),
+            TestEscrowValidators._ev("seller", f"escrow:delivered:ref={ref}:proof=sha256-cafe"),
+            TestEscrowValidators._ev("buyer", f"escrow:released:ref={ref}"),
+        ]
+
+    @staticmethod
+    def _dispute(ref: str = "e2", bps: int = 3000) -> list[dict[str, Any]]:
+        return [
+            TestEscrowValidators._ev(
+                "buyer",
+                f"escrow:opened:ref={ref}:payer=buyer:payee=seller:arbiter=arbiter:amount=400",
+            ),
+            TestEscrowValidators._ev("seller", f"escrow:delivered:ref={ref}:proof=partial"),
+            TestEscrowValidators._ev("buyer", f"escrow:disputed:ref={ref}:reason=incomplete"),
+            TestEscrowValidators._ev("arbiter", f"escrow:arbitrated:ref={ref}:payee_bps={bps}"),
+        ]
+
+    def test_state_machine_passes_happy_path(self) -> None:
+        results = validate_escrow_state_machine(self._happy())
+        assert len(results) == 1
+        assert results[0].passed, results[0].detail
+
+    def test_state_machine_passes_dispute_path(self) -> None:
+        results = validate_escrow_state_machine(self._dispute())
+        assert results[0].passed, results[0].detail
+
+    def test_state_machine_passes_combined(self) -> None:
+        results = validate_escrow_state_machine(self._happy("a") + self._dispute("b"))
+        assert results[0].passed, results[0].detail
+
+    def test_state_machine_fails_on_release_without_delivery(self) -> None:
+        events = [
+            self._ev(
+                "buyer",
+                "escrow:opened:ref=x:payer=buyer:payee=seller:arbiter=arbiter:amount=100",
+            ),
+            self._ev("buyer", "escrow:released:ref=x"),  # skipped delivered
+        ]
+        results = validate_escrow_state_machine(events)
+        assert not results[0].passed
+        assert "illegal transition" in results[0].detail
+
+    def test_state_machine_fails_on_arbitrate_without_dispute(self) -> None:
+        events = [
+            self._ev(
+                "buyer",
+                "escrow:opened:ref=y:payer=buyer:payee=seller:arbiter=arbiter:amount=100",
+            ),
+            self._ev("seller", "escrow:delivered:ref=y:proof=x"),
+            self._ev("arbiter", "escrow:arbitrated:ref=y:payee_bps=5000"),
+        ]
+        results = validate_escrow_state_machine(events)
+        assert not results[0].passed
+
+    def test_state_machine_fails_on_double_release(self) -> None:
+        events = self._happy()
+        events.append(self._ev("buyer", "escrow:released:ref=e1"))
+        results = validate_escrow_state_machine(events)
+        assert not results[0].passed
+
+    def test_state_machine_fails_when_no_escrow_events(self) -> None:
+        # Mirrors what happens under prepaid_credits (no escrow protocol).
+        events = [
+            {"kind": "payment_debited", "agent": "buyer", "amount": 100, "tick": 0},
+            {"kind": "payment_credited", "agent": "seller", "amount": 100, "tick": 0},
+        ]
+        results = validate_escrow_state_machine(events)
+        assert not results[0].passed
+        assert "no escrow lifecycle" in results[0].detail
+
+    def test_role_binding_passes_happy(self) -> None:
+        results = validate_escrow_role_binding(self._happy() + self._dispute())
+        assert results[0].passed, results[0].detail
+
+    def test_role_binding_fails_on_forged_delivery(self) -> None:
+        events = [
+            self._ev(
+                "buyer",
+                "escrow:opened:ref=e1:payer=buyer:payee=seller:arbiter=arbiter:amount=100",
+            ),
+            # An ATTACKER (not seller) tries to claim delivery.
+            self._ev("attacker", "escrow:delivered:ref=e1:proof=fake"),
+        ]
+        results = validate_escrow_role_binding(events)
+        assert not results[0].passed
+        assert "delivered" in results[0].detail and "attacker" in results[0].detail
+
+    def test_role_binding_fails_on_unauthorized_release(self) -> None:
+        events = self._happy()
+        # Replace the legitimate release with an unauthorized one.
+        events[-1] = self._ev("attacker", "escrow:released:ref=e1")
+        results = validate_escrow_role_binding(events)
+        assert not results[0].passed
+
+    def test_role_binding_fails_on_arbitrate_by_non_arbiter(self) -> None:
+        events = self._dispute()
+        events[-1] = self._ev("buyer", "escrow:arbitrated:ref=e2:payee_bps=10000")
+        results = validate_escrow_role_binding(events)
+        assert not results[0].passed
+
+    def test_bps_in_range_passes_at_bounds(self) -> None:
+        results = validate_escrow_bps_in_range(
+            self._dispute("a", bps=0) + self._dispute("b", bps=10000)
+        )
+        assert results[0].passed, results[0].detail
+
+    def test_bps_in_range_fails_negative(self) -> None:
+        events = self._dispute(bps=-1)
+        results = validate_escrow_bps_in_range(events)
+        assert not results[0].passed
+
+    def test_bps_in_range_fails_over_max(self) -> None:
+        events = self._dispute(bps=15000)
+        results = validate_escrow_bps_in_range(events)
+        assert not results[0].passed
+
+    def test_bps_in_range_fails_non_integer(self) -> None:
+        events = [
+            self._ev(
+                "buyer",
+                "escrow:opened:ref=z:payer=buyer:payee=seller:arbiter=arbiter:amount=100",
+            ),
+            self._ev("seller", "escrow:delivered:ref=z:proof=x"),
+            self._ev("buyer", "escrow:disputed:ref=z:reason=x"),
+            self._ev("arbiter", "escrow:arbitrated:ref=z:payee_bps=NaN"),
+        ]
+        results = validate_escrow_bps_in_range(events)
+        assert not results[0].passed
+        assert "non-integer" in results[0].detail
+
+    def test_no_payout_without_delivery_passes(self) -> None:
+        results = validate_escrow_no_payout_without_delivery(self._happy() + self._dispute())
+        assert results[0].passed, results[0].detail
+
+    def test_no_payout_without_delivery_fails_on_skipped_delivery(self) -> None:
+        events = [
+            self._ev(
+                "buyer",
+                "escrow:opened:ref=q:payer=buyer:payee=seller:arbiter=arbiter:amount=100",
+            ),
+            self._ev("buyer", "escrow:released:ref=q"),
+        ]
+        results = validate_escrow_no_payout_without_delivery(events)
+        assert not results[0].passed
+        assert "without prior delivered" in results[0].detail
+
+    def test_no_payout_without_delivery_fails_when_no_payouts_at_all(self) -> None:
+        # Plugin lacks escrow -- no escrow events ever emitted.
+        results = validate_escrow_no_payout_without_delivery([])
+        assert not results[0].passed
+        assert "no escrow payouts" in results[0].detail
+
+
 class TestValidatorRegistry:
     def test_all_scenario_types_registered(self) -> None:
         expected = {
@@ -757,6 +927,7 @@ class TestValidatorRegistry:
             "multi_attribute_market",
             "provenance_supply_chain",
             "bft_hotstuff",
+            "escrow_marketplace",
         }
         assert set(VALIDATORS.keys()) == expected
 

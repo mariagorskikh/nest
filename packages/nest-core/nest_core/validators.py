@@ -1709,6 +1709,252 @@ def _collect_scores(events: list[dict[str, Any]]) -> dict[str, tuple[float, floa
     return scores
 
 
+# ---------------------------------------------------------------------------
+# Escrow validators
+#
+# The escrow scenario broadcasts structured ``escrow:<kind>:<fields>`` events,
+# one per state transition, parsed by the validators below. The four checks
+# together catch the attacks the default ``prepaid_credits`` plugin would not
+# block: payouts without delivery, releases by non-payers, arbitration outside
+# the bps range, and broken state-machine transitions.
+# ---------------------------------------------------------------------------
+
+
+def _parse_escrow_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Parse trace broadcasts of the form ``escrow:<kind>:k=v:k=v...``.
+
+    Returns one dict per matching event with ``kind`` and parsed ``key=value``
+    fields. Non-matching broadcasts are skipped silently.
+    """
+    out: list[dict[str, str]] = []
+    for ev in events:
+        # Only inspect broadcast emissions (sender-recorded). Filter out the
+        # per-recipient "deliver" copies of the same payload so a 9-agent
+        # mesh does not multiply each escrow event by 8.
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("escrow:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 2:
+            continue
+        parsed: dict[str, str] = {"kind": parts[1], "agent": str(ev.get("agent", ""))}
+        for piece in parts[2:]:
+            if "=" in piece:
+                k, _, v = piece.partition("=")
+                parsed[k] = v
+        out.append(parsed)
+    return out
+
+
+def validate_escrow_state_machine(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every per-escrow transition sequence is a legal state-machine path.
+
+    Legal sequences (per escrow ``ref``):
+
+    * ``opened -> delivered -> released``
+    * ``opened -> delivered -> disputed -> arbitrated``
+    * ``opened -> refunded``
+
+    Any transition outside this graph (e.g. ``opened -> released`` with no
+    ``delivered``, or two ``released`` for the same ref) is a failure.
+    """
+    legal: dict[str, set[str]] = {
+        "_initial": {"opened"},
+        "opened": {"delivered", "refunded"},
+        "delivered": {"released", "disputed"},
+        "disputed": {"arbitrated"},
+        "released": set(),
+        "arbitrated": set(),
+        "refunded": set(),
+    }
+    state: dict[str, str] = {}
+    violations: list[str] = []
+    for ev in _parse_escrow_events(events):
+        ref = ev.get("ref", "")
+        kind = ev["kind"]
+        prev = state.get(ref, "_initial")
+        if kind not in legal.get(prev, set()):
+            violations.append(f"ref={ref!r}: illegal transition {prev!r} -> {kind!r}")
+            continue
+        state[ref] = kind
+    if violations:
+        return [ValidationResult("escrow_state_machine", False, "; ".join(violations))]
+    if not state:
+        return [
+            ValidationResult(
+                "escrow_state_machine",
+                False,
+                "no escrow lifecycle events observed in trace -- plugin lacks escrow protocol",
+            )
+        ]
+    return [
+        ValidationResult(
+            "escrow_state_machine",
+            True,
+            f"{len(state)} escrows transitioned only along legal edges",
+        )
+    ]
+
+
+def validate_escrow_role_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every state-changing event is broadcast by the role authorized to make it.
+
+    * ``opened`` MUST be broadcast by the named ``payer``.
+    * ``delivered`` MUST be broadcast by the named ``payee``.
+    * ``released``, ``disputed``, ``refunded`` MUST be broadcast by the
+      named ``payer`` (from the originating ``opened``).
+    * ``arbitrated`` MUST be broadcast by the named ``arbiter``.
+
+    Detects forged-actor attacks: a non-payee posting a fake delivery, a
+    third party trying to release someone else's escrow, etc.
+    """
+    parsed = _parse_escrow_events(events)
+    parties: dict[str, dict[str, str]] = {}
+    violations: list[str] = []
+    for ev in parsed:
+        ref = ev.get("ref", "")
+        kind = ev["kind"]
+        actor = ev.get("agent", "")
+        if kind == "opened":
+            parties[ref] = {
+                "payer": ev.get("payer", ""),
+                "payee": ev.get("payee", ""),
+                "arbiter": ev.get("arbiter", ""),
+            }
+            if actor != ev.get("payer", ""):
+                violations.append(
+                    f"ref={ref!r}: opened by {actor!r} but payer is {ev.get('payer', '')!r}"
+                )
+            continue
+        named = parties.get(ref)
+        if named is None:
+            violations.append(f"ref={ref!r}: {kind!r} without prior opened")
+            continue
+        if kind == "delivered" and actor != named["payee"]:
+            violations.append(
+                f"ref={ref!r}: delivered by {actor!r} but payee is {named['payee']!r}"
+            )
+        elif kind in ("released", "disputed", "refunded") and actor != named["payer"]:
+            violations.append(f"ref={ref!r}: {kind!r} by {actor!r} but payer is {named['payer']!r}")
+        elif kind == "arbitrated" and actor != named["arbiter"]:
+            violations.append(
+                f"ref={ref!r}: arbitrated by {actor!r} but arbiter is {named['arbiter']!r}"
+            )
+    if violations:
+        return [ValidationResult("escrow_role_binding", False, "; ".join(violations))]
+    if not parties:
+        return [
+            ValidationResult(
+                "escrow_role_binding",
+                False,
+                "no escrow opened events observed -- plugin lacks escrow protocol",
+            )
+        ]
+    return [
+        ValidationResult(
+            "escrow_role_binding",
+            True,
+            f"{len(parsed)} escrow events all signed by the correct role-holder",
+        )
+    ]
+
+
+def validate_escrow_bps_in_range(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every ``arbitrated`` event carries ``payee_bps`` strictly in ``[0, 10000]``.
+
+    Catches an arbiter (or a forged arbitrate broadcast) that attempts to
+    settle outside the allowed split window -- either negative (paying the
+    payee a negative share) or over 10000 (paying more than was escrowed).
+    """
+    parsed = _parse_escrow_events(events)
+    violations: list[str] = []
+    checked = 0
+    for ev in parsed:
+        if ev["kind"] != "arbitrated":
+            continue
+        checked += 1
+        raw = ev.get("payee_bps", "")
+        try:
+            bps = int(raw)
+        except ValueError:
+            violations.append(f"ref={ev.get('ref', '')!r}: non-integer payee_bps={raw!r}")
+            continue
+        if not 0 <= bps <= 10_000:
+            violations.append(f"ref={ev.get('ref', '')!r}: payee_bps={bps} outside [0, 10000]")
+    if violations:
+        return [ValidationResult("escrow_bps_in_range", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "escrow_bps_in_range",
+            True,
+            f"{checked} arbitration verdicts all within [0, 10000]",
+        )
+    ]
+
+
+def validate_escrow_no_payout_without_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No ``released`` or ``arbitrated`` may occur for a ref that wasn't delivered.
+
+    The escrow protocol's whole point is that the payee cannot be paid
+    until they post a delivery proof. A plugin that ships funds without
+    a preceding ``delivered`` event for the same ref bypasses the
+    contract.
+
+    Also catches the most common ``prepaid_credits`` failure mode in
+    this scenario: the plugin has no escrow concept, so the buyer falls
+    back to ``pay()``, which credits the payee with no delivery proof
+    in the trace.
+    """
+    parsed = _parse_escrow_events(events)
+    delivered: set[str] = set()
+    violations: list[str] = []
+    saw_payout = False
+    for ev in parsed:
+        ref = ev.get("ref", "")
+        kind = ev["kind"]
+        if kind == "delivered":
+            delivered.add(ref)
+        elif kind in ("released", "arbitrated"):
+            saw_payout = True
+            if ref not in delivered:
+                violations.append(f"ref={ref!r}: {kind!r} settled without prior delivered event")
+    if violations:
+        return [
+            ValidationResult(
+                "escrow_no_payout_without_delivery",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    if not saw_payout:
+        return [
+            ValidationResult(
+                "escrow_no_payout_without_delivery",
+                False,
+                "no escrow payouts observed -- plugin lacks escrow protocol",
+            )
+        ]
+    return [
+        ValidationResult(
+            "escrow_no_payout_without_delivery",
+            True,
+            "every payout was preceded by a matching delivered event",
+        )
+    ]
+
+
 def validate_receipt_reputation_ring_severed(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -2594,5 +2840,11 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_bft_no_equivocation,
         validate_bft_forged_quorum,
         validate_bft_no_stuck_view,
+    ],
+    "escrow_marketplace": [
+        validate_escrow_state_machine,
+        validate_escrow_role_binding,
+        validate_escrow_bps_in_range,
+        validate_escrow_no_payout_without_delivery,
     ],
 }
