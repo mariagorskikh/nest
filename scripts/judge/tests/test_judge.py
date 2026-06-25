@@ -29,12 +29,12 @@ from scripts.judge.judge_pr import (
     JudgeVerdict,
     OpenAIProvider,
     PRContext,
-    _log_judge_usage,
     aggregate,
     default_model_for,
     infer_layer,
     infer_persona,
     judge_pr,
+    log_judge_usage,
     make_provider,
     median_score,
     parse_verdict,
@@ -628,7 +628,7 @@ class TestJudgeTelemetry:
         from types import SimpleNamespace
 
         response = SimpleNamespace(usage=SimpleNamespace(input_tokens=100, output_tokens=50))
-        _log_judge_usage(provider="anthropic", model="claude-opus", response=response, judge_id=2)
+        log_judge_usage(provider="anthropic", model="claude-opus", response=response, judge_id=2)
         err = capsys.readouterr().err
         assert "nest-llm-telemetry" in err
         assert "judge_id=2" in err
@@ -641,7 +641,7 @@ class TestJudgeTelemetry:
 
         monkeypatch.setenv("NEST_LLM_TELEMETRY", "0")
         response = SimpleNamespace(usage=SimpleNamespace(input_tokens=1, output_tokens=1))
-        _log_judge_usage(provider="openai", model="gpt", response=response)
+        log_judge_usage(provider="openai", model="gpt", response=response)
         assert capsys.readouterr().err == ""
 
 

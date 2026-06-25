@@ -24,6 +24,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from nest_core.sim.trace import filter_simulation_events
+
 
 class ValidationResult:
     """Result of a protocol validation check."""
@@ -36,9 +38,6 @@ class ValidationResult:
     def __repr__(self) -> str:
         status = "PASS" if self.passed else "FAIL"
         return f"ValidationResult({status}: {self.name!r}, {self.detail!r})"
-
-
-from nest_core.sim.trace import filter_simulation_events
 
 
 def _load_events(path: Path) -> list[dict[str, Any]]:

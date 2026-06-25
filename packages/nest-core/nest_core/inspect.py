@@ -14,6 +14,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from nest_core.sim.trace import is_simulation_event
+
 
 @dataclass
 class AgentStats:
@@ -36,9 +38,6 @@ class TraceSummary:
     message_count: int = 0
     unique_correlations: int = 0
     agents: dict[str, AgentStats] = field(default_factory=lambda: dict[str, AgentStats]())
-
-
-from nest_core.sim.trace import is_simulation_event
 
 
 def analyze_trace(path: str | Path) -> TraceSummary:

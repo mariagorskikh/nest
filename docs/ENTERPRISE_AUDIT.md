@@ -57,21 +57,21 @@
 |----------|-------|--------|-----------------|
 | Business | Clear objective defined | **Pass** | [OBSERVED] README: test rig for agent protocols |
 | Business | Monetization model documented | **Gap** | [MISSING] No commercial model; hackathon + open source only |
-| Architecture | ADRs exist | **Gap** | [MISSING] No formal ADRs; retrospective summaries in Section 7.8 |
+| Architecture | ADRs exist | **Partial** | [OBSERVED] Formal ADRs in [`docs/adr/`](adr/) (2026-06-25) |
 | Security | Authentication documented | **Partial** | [OBSERVED] `JwtAuth` documented as simulation-only in plugin docstrings |
 | Engineering | Error handling strategy | **Partial** | [OBSERVED] Pydantic validation, `ValueError` on bad tokens; no global error taxonomy |
 | Engineering | Validation and retry logic | **Pass** | [OBSERVED] `validators.py` (65KB), hypothesis property tests |
 | Engineering | Rollback/compensation | **Gap** | [MISSING] No saga/compensation framework |
-| Operations | Observability standards | **Gap** | [MISSING] No metrics/tracing export from simulator |
-| Operations | Logging and alerting | **Gap** | [MISSING] Trace JSONL only; no structured logging pipeline |
+| Operations | Observability standards | **Partial** | [OBSERVED] Trace JSON Schema v1 + stderr LLM token telemetry (`NEST_LLM_TELEMETRY`); no OTel export |
+| Operations | Logging and alerting | **Partial** | [OBSERVED] JSONL traces + optional stderr telemetry; no alerting pipeline |
 | API | Schema and contract defined | **Partial** | [OBSERVED] Pydantic `ScenarioConfig`, trace event dicts; no OpenAPI |
 | Data | Normalization strategy | **N/A** | [OBSERVED] In-memory; no persistent DB |
 | Data | Indexing strategy | **N/A** | Trace files are linear JSONL |
 | Data | Lineage documented | **Partial** | Section 8.6 |
 | DevOps | Deployment architecture | **Partial** | [OBSERVED] GitHub Actions CI + PyPI publish; `.railwayignore` hints optional hosting |
 | DevOps | Environment promotion | **Gap** | [MISSING] No dev/staging/prod tiers |
-| Governance | Dependency governance | **Partial** | [OBSERVED] uv lock, pinned pyright; no SBOM automation |
-| Quality | Test strategy | **Pass** | [OBSERVED] pytest, hypothesis, 542 tests, `@pytest.mark.live` for external |
+| Governance | Dependency governance | **Partial** | [OBSERVED] uv lock, pinned pyright; CycloneDX SBOM artifact in CI (2026-06-25) |
+| Quality | Test strategy | **Pass** | [OBSERVED] pytest, hypothesis, 552 tests, `@pytest.mark.live` for external |
 | Reliability | SLOs/SLIs | **Gap** | [MISSING] |
 | Resilience | Chaos testing | **Partial** | [OBSERVED] Failure injection: message_drop, byzantine_agents, partitions |
 | AI | AI governance framework | **Partial** | [OBSERVED] Judge rubric v1; no NIST RMF formal mapping |
@@ -1351,7 +1351,7 @@ flowchart TD
 |-----------|---------|---------|-------|
 | Trace events | Agent action audit | JSONL | Validator FAIL |
 | Judge raw_response | Debug | JudgeVerdict object | error field |
-| [MISSING] token counts | Cost tracking | [MISSING] | [MISSING] |
+| [OBSERVED] token counts | Cost tracking (shell + judge) | stderr (`NEST_LLM_TELEMETRY`) | [MISSING] |
 
 ## 11.18 AI Package Mapping
 
@@ -1365,7 +1365,7 @@ See Section 5.15.
 4. **Parallel strategy:** Median of 3 judges for PR scoring.
 5. **Human-in-the-loop:** Required for PR merge; not for sim runs.
 6. **Top 5 AI risks:** Non-determinism, API cost, prompt injection in judge, missing token budgets, no output schema enforcement on LLM text.
-7. **Top 5 improvements:** Structured output (JSON mode), token/cost telemetry, RAG over docs for plugin authors, formal eval harness for Tier 2, MCP tool exposure for `nest run`.
+7. **Top 5 improvements:** Structured output (JSON mode), ~~token/cost telemetry~~ [OBSERVED], RAG over docs for plugin authors, formal eval harness for Tier 2, MCP tool exposure for `nest run`.
 
 ---
 
@@ -1515,18 +1515,18 @@ See Section 5.15.
 
 ## 13.1 Monday Morning Priorities
 
-1. ~~**Add runtime warnings** when reference `jwt`, `did_key`, or `noop` privacy plugins instantiate~~ **[OBSERVED: implemented 2026-06-24]** — `UserWarning` on `JwtAuth`, `DidKeyIdentity`, `NoopPrivacy` init via `nest_plugins_reference._simulation_warning`.
-2. **Publish trace JSON Schema** — formalize JSONL event contract with version field (ADR-003).
-3. **Document Windows CI path** — `make ci-local` unavailable; add PowerShell script equivalent to CONTRIBUTING.
-4. **Token/cost telemetry** for judge panel and ShellAgent — log token counts to stderr (AI observability gap).
-5. **Network transport plugin RFC** — design TCP/gRPC transport interface (R-004).
+1. ~~**Add runtime warnings** when reference `jwt`, `did_key`, or `noop` privacy plugins instantiate~~ **[OBSERVED: implemented 2026-06-24]** — `UserWarning` via `nest_plugins_reference._simulation_warning`.
+2. ~~**Publish trace JSON Schema**~~ **[OBSERVED: implemented 2026-06-25]** — [`docs/trace-schema.json`](trace-schema.json), [`docs/trace-schema.md`](trace-schema.md), `trace_header` in `TraceWriter` (ADR-003).
+3. ~~**Document Windows CI path**~~ **[OBSERVED: implemented 2026-06-25]** — [`scripts/ci-local.ps1`](../scripts/ci-local.ps1) documented in CONTRIBUTING.md.
+4. ~~**Token/cost telemetry**~~ **[OBSERVED: implemented 2026-06-25]** — `nest_shell.telemetry` + judge `log_judge_usage`; disable with `NEST_LLM_TELEMETRY=0`.
+5. ~~**Network transport plugin RFC**~~ **[OBSERVED: implemented 2026-06-25]** — [`docs/rfcs/RFC-001-network-transport.md`](rfcs/RFC-001-network-transport.md).
 
 ## 13.2 30-60-90 Day Plan
 
 | Period | Technical Goals | Business Goals | Risk Mitigation |
 |--------|-----------------|----------------|-----------------|
-| 30 days | Trace schema v1; CI on 3.12+3.13; plugin warnings | Hackathon completion; scoreboard UI | Reference plugin misuse docs |
-| 60 days | TCP transport plugin alpha; SBOM in CI | PyPI download metrics; case studies | Security review of new transport |
+| 30 days | ~~Trace schema v1; CI on 3.12+3.13; plugin warnings~~ [OBSERVED: 2026-06-25 on `platform/audit-remediation`] | Hackathon completion; scoreboard UI | Reference plugin misuse docs |
+| 60 days | TCP transport plugin alpha; ~~SBOM in CI~~ [OBSERVED: CycloneDX artifact job] | PyPI download metrics; case studies | Security review of new transport |
 | 90 days | Tier 2 structured output; MCP `nest run` tool | Partner integrations; workshop series | AI cost caps; eval framework |
 
 ## 13.3 Stakeholder Handoff Matrix
@@ -1617,7 +1617,14 @@ See Section 3 Assumption Register (A-001 through A-005).
 
 | Evidence | Source | Date |
 |----------|--------|------|
-| 541 passed, 1 skipped | `uv run pytest -q` | 2026-06-24 |
+| 552 passed, 1 skipped | `uv run pytest -q` on `platform/audit-remediation` | 2026-06-25 |
+| trace_header schema 1.0 | `nest run marketplace` first JSONL line | 2026-06-25 |
+| ci-local.ps1 | `scripts/ci-local.ps1` | 2026-06-25 |
+| Python 3.12+3.13 CI matrix | `.github/workflows/ci.yml` | 2026-06-25 |
+| SBOM CycloneDX 1.5 | `uv export --format cyclonedx1.5` | 2026-06-25 |
+| 5 ADRs + RFC-001 | `docs/adr/`, `docs/rfcs/` | 2026-06-25 |
+| LLM token telemetry | `NEST_LLM_TELEMETRY` stderr logging | 2026-06-25 |
+| 541 passed, 1 skipped | `uv run pytest -q` (prior baseline) | 2026-06-24 |
 | ruff clean | `uv run ruff check .` | 2026-06-24 |
 | pyright 0 errors | `uv run pyright` | 2026-06-24 |
 | 7/7 doctor checks | `uv run nest doctor` | 2026-06-24 |

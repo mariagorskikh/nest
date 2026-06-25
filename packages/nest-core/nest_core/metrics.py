@@ -14,6 +14,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from nest_core.sim.trace import filter_simulation_events
+
 
 def compute_metrics(
     trace_path: str | Path,
@@ -35,9 +37,6 @@ def compute_metrics(
             results[name] = func(events)
 
     return results
-
-
-from nest_core.sim.trace import filter_simulation_events
 
 
 def _load_events(path: Path) -> list[dict[str, Any]]:

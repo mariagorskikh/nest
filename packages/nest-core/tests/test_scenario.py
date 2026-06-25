@@ -12,6 +12,7 @@ import pytest
 from nest_core.plugins import PluginRegistry
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
+from nest_core.sim.trace import is_simulation_event
 from nest_core.types import AgentId
 from nest_core.validators import validate_trace
 
@@ -198,8 +199,10 @@ class TestMarketplaceScenario:
         for line in lines:
             event = json.loads(line)
             assert "ts" in event
-            assert "agent" in event
             assert "kind" in event
+            if not is_simulation_event(event):
+                continue
+            assert "agent" in event
 
     @pytest.mark.asyncio
     async def test_marketplace_yaml(self, tmp_path: Path) -> None:

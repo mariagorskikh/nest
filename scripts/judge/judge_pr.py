@@ -23,12 +23,13 @@ import json
 import os
 import re
 import statistics
-import sys
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
+
+from nest_shell.telemetry import llm_telemetry_enabled, log_llm_usage
 
 RUBRIC_PATH = Path(__file__).parent / "rubric.md"
 RUBRIC_VERSION = 1
@@ -48,30 +49,29 @@ MAX_FILE_DIFF_LINES = 5000
 GITHUB_API = "https://api.github.com"
 
 
-def _judge_telemetry_enabled() -> bool:
-    return os.environ.get("NEST_LLM_TELEMETRY", "1") != "0"
-
-
-def _log_judge_usage(
+def log_judge_usage(
     *,
     provider: str,
     model: str,
     response: Any,
     judge_id: int | None = None,
 ) -> None:
-    if not _judge_telemetry_enabled():
+    """Log judge LLM token usage to stderr (see ``NEST_LLM_TELEMETRY``)."""
+    if not llm_telemetry_enabled():
         return
     usage = getattr(response, "usage", None)
     ctx = f"judge_id={judge_id}" if judge_id is not None else "judge"
-    parts = [f"nest-llm-telemetry provider={provider} model={model} context={ctx}"]
+    inp = out = None
     if usage is not None:
         inp = getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", None)
         out = getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", None)
-        if inp is not None:
-            parts.append(f"input_tokens={inp}")
-        if out is not None:
-            parts.append(f"output_tokens={out}")
-    print(" ".join(parts), file=sys.stderr)
+    log_llm_usage(
+        provider=provider,
+        model=model,
+        input_tokens=inp,
+        output_tokens=out,
+        context=ctx,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -538,7 +538,7 @@ class AnthropicJudgeClient:
             temperature=0.0,
             max_tokens=2048,
         )
-        _log_judge_usage(provider="anthropic", model=self._model, response=response)
+        log_judge_usage(provider="anthropic", model=self._model, response=response)
         content_blocks = cast("list[Any]", getattr(response, "content", []))
         parts: list[str] = []
         for block in content_blocks:
@@ -627,7 +627,7 @@ class OpenAIProvider:
         if not self._model.startswith("gpt-5"):
             kwargs["temperature"] = 0.0
         response: Any = await client.chat.completions.create(**kwargs)
-        _log_judge_usage(provider="openai", model=self._model, response=response)
+        log_judge_usage(provider="openai", model=self._model, response=response)
         choices = cast("list[Any]", getattr(response, "choices", []))
         if not choices:
             return ""
