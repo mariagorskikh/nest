@@ -37,6 +37,9 @@ def compute_metrics(
     return results
 
 
+from nest_core.sim.trace import filter_simulation_events
+
+
 def _load_events(path: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     with path.open() as f:
@@ -44,7 +47,7 @@ def _load_events(path: Path) -> list[dict[str, Any]]:
             line = line.strip()
             if line:
                 events.append(json.loads(line))
-    return events
+    return filter_simulation_events(events)
 
 
 def _message_body(ev: dict[str, Any]) -> str:

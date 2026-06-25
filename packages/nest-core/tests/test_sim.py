@@ -138,7 +138,11 @@ class TestSimulator:
 
         import json
 
-        for line in lines:
+        header = json.loads(lines[0])
+        assert header["kind"] == "trace_header"
+        assert header["schema_version"] == "1.0"
+
+        for line in lines[1:]:
             event = json.loads(line)
             assert "ts" in event
             assert "agent" in event

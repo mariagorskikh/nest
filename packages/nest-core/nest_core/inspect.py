@@ -38,6 +38,9 @@ class TraceSummary:
     agents: dict[str, AgentStats] = field(default_factory=lambda: dict[str, AgentStats]())
 
 
+from nest_core.sim.trace import is_simulation_event
+
+
 def analyze_trace(path: str | Path) -> TraceSummary:
     """Analyze a JSONL trace file and return summary statistics.
 
@@ -62,14 +65,17 @@ def analyze_trace(path: str | Path) -> TraceSummary:
             event = json.loads(line)
             summary.total_events += 1
 
+            kind = event.get("kind", "unknown")
+            kind_counter[kind] += 1
+
+            if not is_simulation_event(event):
+                continue
+
             ts = event.get("ts", 0.0)
             if ts < min_ts:
                 min_ts = ts
             if ts > max_ts:
                 max_ts = ts
-
-            kind = event.get("kind", "unknown")
-            kind_counter[kind] += 1
 
             agent = event.get("agent", "")
             if agent:

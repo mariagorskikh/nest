@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/projnanda/nandatown/docs/trace-schema.json",
+  "title": "Nanda Town JSONL Trace",
+  "description": "One JSON object per line. First line must be trace_header.",
+  "oneOf": [
+    { "$ref": "#/definitions/trace_header" },
+    { "$ref": "#/definitions/simulation_event" }
+  ],
+  "definitions": {
+    "trace_header": {
+      "type": "object",
+      "required": ["schema_version", "kind", "ts", "generator", "generator_version"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+$" },
+        "kind": { "const": "trace_header" },
+        "ts": { "type": "number" },
+        "generator": { "type": "string" },
+        "generator_version": { "type": "string" }
+      }
+    },
+    "simulation_event": {
+      "type": "object",
+      "required": ["ts", "kind"],
+      "properties": {
+        "ts": { "type": "number" },
+        "kind": {
+          "type": "string",
+          "enum": ["start", "stop", "send", "receive", "broadcast"]
+        },
+        "agent": { "type": "string" },
+        "to": { "type": "string" },
+        "from": { "type": "string" },
+        "msg": { "type": "string" },
+        "corr": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    }
+  }
+}

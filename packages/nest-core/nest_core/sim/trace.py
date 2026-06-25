@@ -14,9 +14,30 @@ import json
 from pathlib import Path
 from typing import Any
 
+TRACE_HEADER_KIND = "trace_header"
+TRACE_SCHEMA_VERSION = "1.0"
+
+
+def is_simulation_event(event: dict[str, Any]) -> bool:
+    """Return True if *event* is a simulation event (not metadata header).
+
+    Example::
+
+        is_simulation_event({"kind": "send", ...})  # True
+        is_simulation_event({"kind": "trace_header", ...})  # False
+    """
+    return event.get("kind") != TRACE_HEADER_KIND
+
+
+def filter_simulation_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop trace header/metadata lines from an in-memory event list."""
+    return [event for event in events if is_simulation_event(event)]
+
 
 class TraceWriter:
     """Buffered JSONL trace writer.
+
+    The first line is always a ``trace_header`` event with ``schema_version``.
 
     Example::
 
@@ -30,6 +51,19 @@ class TraceWriter:
         self._buffer: list[dict[str, Any]] = []
         self._buffer_size = buffer_size
         self._file = self._path.open("w")
+        self._write_header()
+
+    def _write_header(self) -> None:
+        from nest_core import __version__
+
+        header: dict[str, Any] = {
+            "schema_version": TRACE_SCHEMA_VERSION,
+            "kind": TRACE_HEADER_KIND,
+            "ts": 0.0,
+            "generator": "nest-core",
+            "generator_version": __version__,
+        }
+        self._file.write(json.dumps(header, sort_keys=True, separators=(",", ":")) + "\n")
 
     def record(self, event: dict[str, Any]) -> None:
         """Record an event to the trace buffer.
