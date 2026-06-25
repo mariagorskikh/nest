@@ -29,6 +29,7 @@ from scripts.judge.judge_pr import (
     JudgeVerdict,
     OpenAIProvider,
     PRContext,
+    _log_judge_usage,
     aggregate,
     default_model_for,
     infer_layer,
@@ -620,6 +621,28 @@ class TestOpenAIProvider:
         as_dict = result.to_dict()
         assert as_dict["model"] == "gpt-5.5"
         assert as_dict["rubric_version"] == RUBRIC_VERSION
+
+
+class TestJudgeTelemetry:
+    def test_log_judge_usage_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(usage=SimpleNamespace(input_tokens=100, output_tokens=50))
+        _log_judge_usage(provider="anthropic", model="claude-opus", response=response, judge_id=2)
+        err = capsys.readouterr().err
+        assert "nest-llm-telemetry" in err
+        assert "judge_id=2" in err
+        assert "input_tokens=100" in err
+
+    def test_log_judge_usage_disabled(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from types import SimpleNamespace
+
+        monkeypatch.setenv("NEST_LLM_TELEMETRY", "0")
+        response = SimpleNamespace(usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+        _log_judge_usage(provider="openai", model="gpt", response=response)
+        assert capsys.readouterr().err == ""
 
 
 # --------------------------------------------------------------------------- #

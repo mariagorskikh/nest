@@ -13,6 +13,8 @@ import warnings
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast, runtime_checkable
 
+from nest_shell.telemetry import log_anthropic_usage, log_openai_usage
+
 
 @runtime_checkable
 class LLMBackend(Protocol):
@@ -77,6 +79,7 @@ class OpenAIBackend:
             temperature=self._temperature,
             max_tokens=self._max_tokens,
         )
+        log_openai_usage(model=self._model, response=response, context="shell")
         return str(response.choices[0].message.content or "")
 
 
@@ -131,6 +134,7 @@ class AnthropicBackend:
             temperature=self._temperature,
             max_tokens=self._max_tokens,
         )
+        log_anthropic_usage(model=self._model, response=response, context="shell")
         content_blocks = cast("list[Any]", getattr(response, "content", []))
         block = content_blocks[0] if content_blocks else None
         return str(getattr(block, "text", "")) if block else ""
