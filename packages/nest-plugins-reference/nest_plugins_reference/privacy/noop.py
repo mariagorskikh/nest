@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from nest_core.types import AgentId, Proof, Statement, Witness
 
+from nest_plugins_reference._simulation_warning import warn_simulation_only
+
 
 class NoopPrivacy:
     """Transparent passthrough — no encryption, mock proofs always valid.
@@ -21,6 +23,12 @@ class NoopPrivacy:
         priv = NoopPrivacy()
         ct = await priv.encrypt(b"data", [AgentId("a1")])
     """
+
+    def __init__(self) -> None:
+        warn_simulation_only(
+            "NoopPrivacy",
+            "no encryption; data passes through unchanged",
+        )
 
     async def encrypt(self, data: bytes, audience: list[AgentId]) -> bytes:
         """Return data unchanged (no encryption).

@@ -17,6 +17,8 @@ import time
 
 from nest_core.types import AgentId, AuthContext, Token
 
+from nest_plugins_reference._simulation_warning import warn_simulation_only
+
 
 class JwtAuth:
     """Simplified JWT-style auth using HMAC-SHA256.
@@ -28,6 +30,10 @@ class JwtAuth:
     """
 
     def __init__(self, secret: bytes = b"nest-default-secret", clock: float | None = None) -> None:
+        warn_simulation_only(
+            "JwtAuth",
+            "HMAC pipe-delimited tokens, not RFC 7519 JWT",
+        )
         self._secret = secret
         self._clock = clock
         self._revoked: set[str] = set()

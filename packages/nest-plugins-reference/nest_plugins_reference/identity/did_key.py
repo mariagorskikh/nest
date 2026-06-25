@@ -20,6 +20,8 @@ import math
 
 from nest_core.types import AgentId, AgentIdentity, Signature
 
+from nest_plugins_reference._simulation_warning import warn_simulation_only
+
 
 class DidKeyIdentity:
     """Public-verifiable identity for simulation.
@@ -31,6 +33,10 @@ class DidKeyIdentity:
     """
 
     def __init__(self, agent_id: AgentId, seed: bytes = b"") -> None:
+        warn_simulation_only(
+            "DidKeyIdentity",
+            "deterministic simulation crypto, not Ed25519",
+        )
         self._agent_id = agent_id
         self._seed = seed
         self._public_numbers, self._private_exponent = _derive_keypair(seed, agent_id)

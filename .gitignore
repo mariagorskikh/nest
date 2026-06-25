@@ -10,6 +10,9 @@ build/
 uv.lock
 traces/
 
+# Generated enterprise audit export (source of truth is ENTERPRISE_AUDIT.md).
+docs/ENTERPRISE_AUDIT.pdf
+
 # Research-harness outputs (per-cell JSONLs, aggregated dataset, plots).
 data/hackathon-runs/*.jsonl
 data/hackathon-runs/*.png

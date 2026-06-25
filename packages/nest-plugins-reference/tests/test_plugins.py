@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 from nest_core.types import (
     AgentCard,
@@ -520,3 +522,44 @@ class TestDataFactsV1:
         df = DataFactsV1()
         with pytest.raises(KeyError):
             await df.fetch(DataFactsUrl("df://missing"))
+
+
+# ---------------------------------------------------------------------------
+# Simulation-only plugin warnings
+# ---------------------------------------------------------------------------
+
+
+class TestSimulationOnlyWarnings:
+    def test_jwt_auth_warns_on_init(self) -> None:
+        from nest_plugins_reference.auth.jwt_auth import JwtAuth
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            JwtAuth(secret=b"test-secret")
+
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, UserWarning)
+        assert "JwtAuth" in str(caught[0].message)
+        assert "simulation-only" in str(caught[0].message)
+
+    def test_did_key_identity_warns_on_init(self) -> None:
+        from nest_plugins_reference.identity.did_key import DidKeyIdentity
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            DidKeyIdentity(AgentId("a1"), seed=b"seed")
+
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, UserWarning)
+        assert "DidKeyIdentity" in str(caught[0].message)
+
+    def test_noop_privacy_warns_on_init(self) -> None:
+        from nest_plugins_reference.privacy.noop import NoopPrivacy
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            NoopPrivacy()
+
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, UserWarning)
+        assert "NoopPrivacy" in str(caught[0].message)
