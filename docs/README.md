@@ -42,6 +42,9 @@ where to look for inspiration.
 
 ## Going further
 
+- **[trace-schema.md](trace-schema.md)** — JSONL trace format and `schema_version` 1.0.
+- **[adr/](adr/)** — Architecture Decision Records.
+- **[rfcs/](rfcs/)** — Design RFCs (e.g. network transport).
 - **[CONTRIBUTING.md](../CONTRIBUTING.md)** — Development setup
   (`uv sync`), code style, how to add a *built-in* scenario, CI
   checks.

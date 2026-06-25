@@ -70,7 +70,7 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: |
           uv sync
-          uv export --format cyclonedx1.5 --all-packages -o sbom.json
+          uv export --preview-features sbom-export --format cyclonedx1.5 --all-packages -o sbom.json
       - uses: actions/upload-artifact@v4
         with:
           name: sbom-cyclonedx
