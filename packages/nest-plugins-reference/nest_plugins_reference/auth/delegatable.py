@@ -49,7 +49,6 @@ class DelegatableAuth:
         self._secret = secret
         self._clock = clock
         self._revoked_ids: set[str] = set()
-        self._token_keys: dict[str, bytes] = {}
 
     def set_clock(self, clock: Any) -> None:
         """Dynamically set or update the clock.
@@ -72,16 +71,9 @@ class DelegatableAuth:
                 return float(cast("float", self._clock.time))
         return time.time()
 
-    def _derive_key_chain(self, frames: list[dict[str, Any]]) -> bytes:
-        if not frames:
-            msg = "Empty frames list"
-            raise ValueError(msg)
-        # Start by deriving root key from master secret and root token_id
-        key = hmac.new(self._secret, frames[0]["token_id"].encode(), hashlib.sha256).digest()
-        # Chaining: child key = hmac(parent_key, child_token_id)
-        for frame in frames[1:]:
-            key = hmac.new(key, frame["token_id"].encode(), hashlib.sha256).digest()
-        return key
+    def _serialize(self, obj: dict[str, Any]) -> bytes:
+        """Produce a perfectly stable canonical string (sorted keys, no spaces)."""
+        return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
         """Issue a root auth token for a subject with given scopes.
@@ -91,10 +83,9 @@ class DelegatableAuth:
             token = await auth.issue(AgentId("a1"), ["read", "write"])
         """
         now = self._now()
-        token_id = str(uuid.uuid4())
-        payload = {
-            "token_id": token_id,
-            "parent_id": None,
+        root_id = str(uuid.uuid4())
+        root_payload = {
+            "root_id": root_id,
             "subject": str(subject),
             "audience": str(subject),
             "scopes": scopes,
@@ -102,16 +93,15 @@ class DelegatableAuth:
             "expires_at": now + 3600.0,
         }
 
-        # Derive root key
-        root_key = hmac.new(self._secret, token_id.encode(), hashlib.sha256).digest()
-        self._token_keys[token_id] = root_key
+        # Derive root signature
+        sig_0 = hmac.new(self._secret, self._serialize(root_payload), hashlib.sha256).digest()
 
-        # Sign payload
-        payload_str = json.dumps(payload, sort_keys=True)
-        sig = hmac.new(root_key, payload_str.encode(), hashlib.sha256).hexdigest()
-
-        frame = {**payload, "sig": sig}
-        return Token(json.dumps([frame]))
+        token_dict = {
+            **root_payload,
+            "caveats": [],
+            "sig": sig_0.hex(),
+        }
+        return Token(json.dumps(token_dict))
 
     async def delegate(
         self,
@@ -127,26 +117,45 @@ class DelegatableAuth:
             child = await auth.delegate(parent, AgentId("b"), ["read"], ttl=60.0)
         """
         try:
-            raw_frames = json.loads(str(parent_token))
-            if not isinstance(raw_frames, list) or not raw_frames:
-                msg = "Invalid token format"
-                raise ValueError(msg)
-            parent_frames = cast("list[dict[str, Any]]", raw_frames)
+            raw_data = json.loads(str(parent_token))
+            if not isinstance(raw_data, dict):
+                raise ValueError("Invalid token format: root must be an object")
+            required_keys = {
+                "root_id",
+                "subject",
+                "audience",
+                "scopes",
+                "issued_at",
+                "expires_at",
+                "caveats",
+                "sig",
+            }
+            if not all(k in raw_data for k in required_keys):
+                raise ValueError("Invalid token format: missing root keys")
+            parent = cast("dict[str, Any]", raw_data)
+            if not isinstance(parent["caveats"], list):
+                raise ValueError("Invalid token format: caveats must be a list")
         except Exception as e:
-            msg = "Invalid token format"
-            raise ValueError(msg) from e
+            raise ValueError(f"Invalid token format: {e}") from e
 
-        parent_frame: dict[str, Any] = parent_frames[-1]
+        # Get parent scopes and expiration bounds from the end of the chain
+        parent_scopes: list[str]
+        parent_exp: float
+        if parent["caveats"]:
+            last_caveat = cast("dict[str, Any]", parent["caveats"][-1])
+            parent_scopes = cast("list[str]", last_caveat["scopes"])
+            parent_exp = cast("float", last_caveat["expires_at"])
+        else:
+            parent_scopes = cast("list[str]", parent["scopes"])
+            parent_exp = cast("float", parent["expires_at"])
 
         # Verify parent scopes
-        parent_scopes: list[str] = parent_frame["scopes"]
         if not set(scopes_subset).issubset(set(parent_scopes)):
             msg = "Scope escalation: child scopes must be a subset of parent scopes"
             raise ValueError(msg)
 
         # Verify parent TTL
         now = self._now()
-        parent_exp: float = parent_frame["expires_at"]
         if now > parent_exp:
             msg = "Parent token has expired"
             raise ValueError(msg)
@@ -154,40 +163,33 @@ class DelegatableAuth:
             msg = "Child TTL exceeds parent remaining lifetime"
             raise ValueError(msg)
 
-        parent_token_id: str = parent_frame["token_id"]
-
-        # Get or derive parent key
-        parent_key: bytes | None = self._token_keys.get(parent_token_id)
-        if parent_key is None:
-            parent_key = self._derive_key_chain(parent_frames)
-            self._token_keys[parent_token_id] = parent_key
-
-        # Create child token
-        child_token_id = str(uuid.uuid4())
-        child_payload: dict[str, Any] = {
-            "token_id": child_token_id,
-            "parent_id": parent_token_id,
-            "subject": parent_frame["subject"],
+        # Create new caveat
+        new_caveat = {
+            "token_id": str(uuid.uuid4()),
             "audience": str(audience),
             "scopes": scopes_subset,
-            "issued_at": now,
             "expires_at": now + ttl,
         }
 
-        # Derive child key
-        child_key = hmac.new(parent_key, child_token_id.encode(), hashlib.sha256).digest()
-        self._token_keys[child_token_id] = child_key
+        # Chained HMAC delegation signature (Offline: no master secret required!)
+        parent_sig_bytes = bytes.fromhex(parent["sig"])
+        new_sig_bytes = hmac.new(
+            parent_sig_bytes, self._serialize(new_caveat), hashlib.sha256
+        ).digest()
 
-        # Sign payload
-        payload_str = json.dumps(child_payload, sort_keys=True)
-        sig = hmac.new(child_key, payload_str.encode(), hashlib.sha256).hexdigest()
+        child_token: dict[str, Any] = {
+            "root_id": parent["root_id"],
+            "subject": parent["subject"],
+            "audience": parent["audience"],
+            "scopes": parent["scopes"],
+            "issued_at": parent["issued_at"],
+            "expires_at": parent["expires_at"],
+            "caveats": parent["caveats"] + [new_caveat],
+            "sig": new_sig_bytes.hex(),
+        }
+        return Token(json.dumps(child_token))
 
-        child_frame: dict[str, Any] = {**child_payload, "sig": sig}
-
-        # New token has all parent frames + child frame
-        return Token(json.dumps(parent_frames + [child_frame]))
-
-    async def verify(self, token: Token, presenter: AgentId | None = None) -> AuthContext:
+    async def verify(self, token: Token, presenter: AgentId) -> AuthContext:
         """Verify a token and return its verified context.
 
         Example::
@@ -196,81 +198,104 @@ class DelegatableAuth:
         """
         raw = str(token)
         try:
-            raw_frames = json.loads(raw)
-            if not isinstance(raw_frames, list) or not raw_frames:
-                msg = "Invalid token format"
-                raise ValueError(msg)
-            frames = cast("list[dict[str, Any]]", raw_frames)
-        except Exception as e:
-            msg = "Invalid token format"
-            raise ValueError(msg) from e
+            raw_data = json.loads(raw)
+            if not isinstance(raw_data, dict):
+                raise ValueError("Invalid token format: root must be a JSON object")
+            required_keys = {
+                "root_id",
+                "subject",
+                "audience",
+                "scopes",
+                "issued_at",
+                "expires_at",
+                "caveats",
+                "sig",
+            }
+            if not all(k in raw_data for k in required_keys):
+                raise ValueError("Invalid token format: missing root keys")
+            data = cast("dict[str, Any]", raw_data)
+            if not isinstance(data["caveats"], list):
+                raise ValueError("Invalid token format: caveats must be a list")
+
+            required_caveat = {"token_id", "audience", "scopes", "expires_at"}
+            caveats: list[dict[str, Any]] = []
+            caveats_raw = cast("list[Any]", data["caveats"])
+            for caveat_raw in caveats_raw:
+                if not isinstance(caveat_raw, dict):
+                    raise ValueError("Invalid token format: caveat must be an object")
+                caveat = cast("dict[str, Any]", caveat_raw)
+                if not all(k in caveat for k in required_caveat):
+                    raise ValueError("Invalid token format: missing caveat keys")
+                caveats.append(caveat)
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            raise ValueError(f"Invalid token format: {e}") from e
 
         # 1. Cascading revocation check
-        for frame in frames:
-            tid: str = frame["token_id"]
-            if tid in self._revoked_ids:
-                msg = f"Token or an ancestor has been revoked: {tid}"
-                raise RevokedAncestorError(msg)
+        if data["root_id"] in self._revoked_ids:
+            raise RevokedAncestorError("Token or an ancestor has been revoked")
+        for caveat in caveats:
+            if caveat["token_id"] in self._revoked_ids:
+                raise RevokedAncestorError("Token or an ancestor has been revoked")
 
         # 2. Expiration check on all frames in the chain
         now = self._now()
-        for frame in frames:
-            exp_time: float = frame["expires_at"]
-            if exp_time < now:
-                msg = "Token or an ancestor has expired"
-                raise ValueError(msg)
+        if data["expires_at"] < now:
+            raise ValueError("Token or an ancestor has expired")
+        for caveat in caveats:
+            if caveat["expires_at"] < now:
+                raise ValueError("Token or an ancestor has expired")
 
-        # 3. Transitive scope narrowing check
-        for i in range(1, len(frames)):
-            parent_scopes: list[str] = frames[i - 1]["scopes"]
-            child_scopes: list[str] = frames[i]["scopes"]
-            if not set(child_scopes).issubset(set(parent_scopes)):
-                msg = "Transitive scope escalation detected in token chain"
-                raise ValueError(msg)
+        # 3. Transitive scope & TTL monotonicity check
+        parent_scopes = cast("list[str]", data["scopes"])
+        parent_exp = cast("float", data["expires_at"])
+        for caveat in caveats:
+            caveat_scopes = cast("list[str]", caveat["scopes"])
+            if not set(caveat_scopes).issubset(set(parent_scopes)):
+                raise ValueError("Transitive scope escalation detected in token chain")
+            caveat_exp = cast("float", caveat["expires_at"])
+            if caveat_exp > parent_exp:
+                raise ValueError("Transitive TTL escalation detected in token chain")
+            parent_scopes = caveat_scopes
+            parent_exp = caveat_exp
 
-        # 4. Signature verification along the chain
-        root_frame: dict[str, Any] = frames[0]
-        root_tid: str = root_frame["token_id"]
-        # Derive root key
-        root_key = hmac.new(self._secret, root_tid.encode(), hashlib.sha256).digest()
-        # Verify root signature
-        root_payload: dict[str, Any] = {k: v for k, v in root_frame.items() if k != "sig"}
-        root_payload_str = json.dumps(root_payload, sort_keys=True)
-        expected_sig = hmac.new(root_key, root_payload_str.encode(), hashlib.sha256).hexdigest()
-        root_sig: str = root_frame["sig"]
-        if not hmac.compare_digest(root_sig, expected_sig):
-            msg = "Invalid root signature"
-            raise ValueError(msg)
+        # 4. Signature verification chain re-derivation (reconstruct from root down to tail)
+        root_payload = {
+            "root_id": data["root_id"],
+            "subject": data["subject"],
+            "audience": data["audience"],
+            "scopes": data["scopes"],
+            "issued_at": data["issued_at"],
+            "expires_at": data["expires_at"],
+        }
+        current_sig = hmac.new(self._secret, self._serialize(root_payload), hashlib.sha256).digest()
+        for caveat in caveats:
+            current_sig = hmac.new(current_sig, self._serialize(caveat), hashlib.sha256).digest()
 
-        current_key = root_key
-        # Verify children signatures
-        for i in range(1, len(frames)):
-            frame = frames[i]
-            tid: str = frame["token_id"]
-            current_key = hmac.new(current_key, tid.encode(), hashlib.sha256).digest()
-            payload: dict[str, Any] = {k: v for k, v in frame.items() if k != "sig"}
-            payload_str = json.dumps(payload, sort_keys=True)
-            expected_sig = hmac.new(current_key, payload_str.encode(), hashlib.sha256).hexdigest()
-            frame_sig: str = frame["sig"]
-            if not hmac.compare_digest(frame_sig, expected_sig):
-                msg = f"Invalid signature at delegation index {i}"
-                raise ValueError(msg)
+        expected_sig_hex = current_sig.hex()
+        if not hmac.compare_digest(data["sig"], expected_sig_hex):
+            raise ValueError("Invalid token signature chain")
 
-        # 5. Check audience constraint if presenter is provided
-        last_frame: dict[str, Any] = frames[-1]
-        if presenter is not None and last_frame["audience"] != str(presenter):
-            msg = (
-                f"Audience confusion: token intended for {last_frame['audience']} "
-                f"but presented by {presenter}"
-            )
+        # 5. Check audience constraint
+        if caveats:
+            last_caveat = caveats[-1]
+            last_aud = cast("str", last_caveat["audience"])
+            last_scopes = cast("list[str]", last_caveat["scopes"])
+            last_exp = cast("float", last_caveat["expires_at"])
+        else:
+            last_aud = cast("str", data["audience"])
+            last_scopes = cast("list[str]", data["scopes"])
+            last_exp = cast("float", data["expires_at"])
+
+        if last_aud != str(presenter):
+            msg = f"Audience confusion: token intended for {last_aud} but presented by {presenter}"
             raise ValueError(msg)
 
         # 6. Return AuthContext
         return AuthContext(
-            subject=AgentId(last_frame["subject"]),
-            scopes=last_frame["scopes"],
-            issued_at=last_frame["issued_at"],
-            expires_at=last_frame["expires_at"],
+            subject=AgentId(data["subject"]),
+            scopes=last_scopes,
+            issued_at=data["issued_at"],
+            expires_at=last_exp,
         )
 
     async def revoke(self, token: Token) -> None:
@@ -281,11 +306,13 @@ class DelegatableAuth:
             await auth.revoke(token)
         """
         try:
-            raw_frames = json.loads(str(token))
-            if isinstance(raw_frames, list) and raw_frames:
-                frames = cast("list[dict[str, Any]]", raw_frames)
-                last_frame = frames[-1]
-                tid: str = last_frame["token_id"]
+            raw_data = json.loads(str(token))
+            if isinstance(raw_data, dict):
+                data = cast("dict[str, Any]", raw_data)
+                if data.get("caveats"):
+                    tid: str = data["caveats"][-1]["token_id"]
+                else:
+                    tid = data["root_id"]
                 self._revoked_ids.add(tid)
             else:
                 self._revoked_ids.add(str(token))

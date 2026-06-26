@@ -34,12 +34,12 @@ class Auth(Protocol):
         """
         ...
 
-    async def verify(self, token: Token) -> AuthContext:
+    async def verify(self, token: Token, presenter: AgentId) -> AuthContext:
         """Verify a token and return its auth context.
 
         Example::
 
-            ctx = await auth.verify(token)
+            ctx = await auth.verify(token, AgentId("a1"))
         """
         ...
 

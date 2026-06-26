@@ -32,13 +32,7 @@ class CoordinatorAgent(StateMachineAgent):
     async def _verify(self, auth: Any, token: Token, presenter: AgentId) -> None:
         if not hasattr(auth, "verify"):
             return
-        import inspect
-
-        sig = inspect.signature(auth.verify)
-        if "presenter" in sig.parameters:
-            await auth.verify(token, presenter=presenter)
-        else:
-            await auth.verify(token)
+        await auth.verify(token, presenter)
 
     async def on_start(self, ctx: AgentContext) -> None:
         auth = ctx.plugins.get("auth")

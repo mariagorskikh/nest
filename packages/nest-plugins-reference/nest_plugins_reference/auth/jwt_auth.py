@@ -60,12 +60,12 @@ class JwtAuth:
         sig = self._sign(payload)
         return Token(f"{payload}|{sig}")
 
-    async def verify(self, token: Token) -> AuthContext:
+    async def verify(self, token: Token, presenter: AgentId) -> AuthContext:
         """Verify a token and return its context.
 
         Example::
 
-            ctx = await auth.verify(token)
+            ctx = await auth.verify(token, AgentId("a1"))
             assert ctx.subject == AgentId("a1")
         """
         raw = str(token)
@@ -88,8 +88,14 @@ class JwtAuth:
         if data["exp"] < self._now():
             msg = "Token has expired"
             raise ValueError(msg)
+
+        subject = AgentId(data["sub"])
+        if subject != presenter:
+            msg = f"Presenter {presenter} does not match token subject {subject}"
+            raise ValueError(msg)
+
         return AuthContext(
-            subject=AgentId(data["sub"]),
+            subject=subject,
             scopes=data["scopes"],
             issued_at=data["iat"],
             expires_at=data["exp"],

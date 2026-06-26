@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
-from nest_core.types import AgentId
+from nest_core.types import AgentId, Token
 from nest_plugins_reference.auth.delegatable import DelegatableAuth, RevokedAncestorError
 
 
@@ -95,3 +98,81 @@ async def test_leaf_scopes_subset_of_root() -> None:
     # leaf tries to delegate write (raises ScopeEscalation since parent only has read)
     with pytest.raises(ValueError, match="Scope escalation"):
         await auth.delegate(parent, AgentId("c1"), ["write"], ttl=10.0)
+
+
+@pytest.mark.asyncio
+async def test_truncation_attack_fails() -> None:
+    auth = DelegatableAuth(secret=b"test-secret", clock=100.0)
+    root = await auth.issue(AgentId("alice"), ["read", "write", "admin"])
+    bob = await auth.delegate(root, AgentId("bob"), ["read"], ttl=100.0)
+
+    # Bob tries to strip the delegation frame, leaving only the root
+    bob_data = json.loads(str(bob))
+    # Create forged token with caveats removed (only root remains) and Bob keeping root signature
+    forged_data: dict[str, Any] = {
+        "root_id": bob_data["root_id"],
+        "subject": bob_data["subject"],
+        "audience": bob_data["audience"],
+        "scopes": bob_data["scopes"],
+        "issued_at": bob_data["issued_at"],
+        "expires_at": bob_data["expires_at"],
+        "caveats": [],
+        "sig": bob_data["sig"],  # The tail signature of the delegated token
+    }
+    forged = Token(json.dumps(forged_data))
+
+    # Verification must fail because root signature calculated by verify will mismatch the tail sig
+    with pytest.raises(ValueError, match="signature"):
+        await auth.verify(forged, presenter=AgentId("alice"))
+
+
+@pytest.mark.asyncio
+async def test_middle_frame_re_escalation_fails() -> None:
+    auth = DelegatableAuth(secret=b"test-secret", clock=100.0)
+    root = await auth.issue(AgentId("alice"), ["read", "write", "admin"])
+    # Delegated: Alice -> Bob [read, write] -> Bob [read]
+    bob_mid = await auth.delegate(root, AgentId("bob"), ["read", "write"], ttl=100.0)
+    bob_low = await auth.delegate(bob_mid, AgentId("bob"), ["read"], ttl=100.0)
+
+    low_data = json.loads(str(bob_low))
+    # Bob tries to strip the final caveat to gain [read, write] using low_data's sig
+    forged_mid_data = {
+        "root_id": low_data["root_id"],
+        "subject": low_data["subject"],
+        "audience": low_data["audience"],
+        "scopes": low_data["scopes"],
+        "issued_at": low_data["issued_at"],
+        "expires_at": low_data["expires_at"],
+        "caveats": [low_data["caveats"][0]],
+        "sig": low_data["sig"],  # Bob attempts to reuse the tail signature
+    }
+    forged = Token(json.dumps(forged_mid_data))
+
+    with pytest.raises(ValueError, match="signature"):
+        await auth.verify(forged, presenter=AgentId("bob"))
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_raises_value_error() -> None:
+    auth = DelegatableAuth(secret=b"test-secret", clock=100.0)
+    for bad_input in [
+        "[{}",
+        "123",
+        "[123]",
+        '{"token_id": "x"}',
+        "[]",
+        json.dumps(
+            {
+                "root_id": "x",
+                "subject": "a",
+                "audience": "a",
+                "scopes": [],
+                "issued_at": 100,
+                "expires_at": 200,
+                "caveats": 123,
+                "sig": "abc",
+            }
+        ),
+    ]:
+        with pytest.raises(ValueError, match="Invalid token format"):
+            await auth.verify(Token(bad_input), presenter=AgentId("alice"))
