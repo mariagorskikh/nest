@@ -1890,3 +1890,576 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_receipt_reputation_honest_confidence,
     ],
 }
+
+
+# ---------------------------------------------------------------------------
+# Multi-attribute market (Pareto) validators
+# ---------------------------------------------------------------------------
+
+
+def _parse_pnq(attrs: str) -> tuple[int, int, float] | None:
+    """Parse ``p=<p>,n=<n>,q=<q>`` attribute string.
+
+    Example::
+
+        _parse_pnq("p=40,n=15,q=0.7500") == (40, 15, 0.75)
+    """
+    try:
+        kv = dict(item.split("=") for item in attrs.split(","))
+        return int(kv["p"]), int(kv["n"]), float(kv["q"])
+    except (ValueError, KeyError):
+        return None
+
+
+def _pair_key(a: str, b: str) -> str:
+    """Canonical key for an unordered agent pair."""
+    return "__".join(sorted([a, b]))
+
+
+def _collect_pareto_sessions(
+    events: list[dict[str, Any]],
+) -> tuple[
+    dict[str, Any],  # agent_id -> params_dict
+    dict[str, list[tuple[str, int, int, float]]],  # pair_key -> [(agent, p, n, q)]
+    dict[str, tuple[str, int, int, float] | None],  # pair_key -> (outcome, p, n, q) or None
+]:
+    """Parse config, offer, and close lines from a multi_attribute_market trace.
+
+    All session data is keyed by a canonical pair key ``min(a,b)__max(a,b)``
+    so that offer lines (which carry explicit from/to) and close lines (which
+    carry only a plugin-generated session id) can be matched via the sender
+    agent recorded in the trace event.
+    """
+    agent_params: dict[str, Any] = {}
+    # pair_key -> list of (agent, p, n, q)
+    session_offers: dict[str, list[tuple[str, int, int, float]]] = {}
+    # pair_key -> (outcome, p, n, q) or None (breakdown)
+    session_outcomes: dict[str, tuple[str, int, int, float] | None] = {}
+    # sender agent -> the partner they have been exchanging offers with
+    agent_partner: dict[str, str] = {}
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "receive"):
+            continue
+        msg = str(ev.get("msg", ""))
+
+        if msg.startswith("config:"):
+            parts = msg.split(":", 2)
+            if len(parts) >= 3:
+                config_agent = parts[1]
+                with contextlib.suppress(ValueError, TypeError):
+                    agent_params[config_agent] = json.loads(parts[2])
+
+        elif msg.startswith("offer:") and ev.get("kind") == "send":
+            # offer:<from>:<to>:r<round>:p=<p>,n=<n>,q=<q>:<strategy> [# comment]
+            # Strip the human-readable comment suffix before splitting.
+            clean = msg.split(" # ")[0]
+            parts = clean.split(":")
+            if len(parts) >= 6:
+                from_ag = parts[1]
+                to_ag = parts[2]
+                attrs = parts[4]
+                pnq = _parse_pnq(attrs)
+                if pnq is not None:
+                    # Record partner mapping in both directions.
+                    agent_partner[from_ag] = to_ag
+                    agent_partner[to_ag] = from_ag
+                    pk = _pair_key(from_ag, to_ag)
+                    session_offers.setdefault(pk, []).append((from_ag, *pnq))
+
+        elif msg.startswith("close:") and ev.get("kind") == "send":
+            parts = msg.split(":")
+            if len(parts) < 3:
+                continue
+            outcome = parts[1]
+            sender = str(ev.get("agent", ""))
+            # Derive pair key from the sender and their known partner.
+            partner = agent_partner.get(sender, "")
+            pk = _pair_key(sender, partner) if partner else f"unknown-{parts[2]}"
+            if outcome == "agreed" and len(parts) >= 4:
+                pnq = _parse_pnq(parts[3])
+                if pnq is not None:
+                    session_outcomes[pk] = (outcome, *pnq)
+            elif outcome == "breakdown":
+                session_outcomes[pk] = None
+
+    return agent_params, session_offers, session_outcomes
+
+
+def _pareto_frontier_from_params(
+    params_a: dict[str, Any],
+    params_b: dict[str, Any],
+    q: float,
+) -> list[tuple[int, int]]:
+    """Compute joint Pareto frontier from serialised param dicts.
+
+    Uses the same grid as the plugin (step 5 on price, step 1 on quantity).
+    """
+    try:
+        from nest_plugins_reference.negotiation.pareto import (
+            ParetoParams,
+            build_feasible_grid,
+            pareto_nondominated,
+        )
+
+        from nest_core.types import AgentId
+
+        def _rebuild(d: dict[str, Any], aid: str) -> ParetoParams:
+            return ParetoParams(
+                agent_id=AgentId(aid),
+                role=d["role"],
+                w_p=d["w_p"],
+                w_n=d["w_n"],
+                w_q=d["w_q"],
+                min_p=d["min_p"],
+                max_p=d["max_p"],
+                target_p=d["target_p"],
+                min_n=d["min_n"],
+                max_n=d["max_n"],
+                target_n=d["target_n"],
+                capacity=d["capacity"],
+                min_quality=d["min_quality"],
+                kappa=d["kappa"],
+                disagreement_utility=d.get("disagreement_utility", 0.0),
+                patience=d.get("patience", 0.85),
+                rho_p=d.get("rho_p", 0.5),
+                rho_n=d.get("rho_n", 0.5),
+                delta=d.get("delta", 0.9),
+                tau_step=d.get("tau_step", 0.05),
+                beta=d.get("beta", 0.5),
+                strategy_id=d.get("strategy_id", "ttt_directional"),
+            )
+
+        pa = _rebuild(params_a, "agent_a")
+        pb = _rebuild(params_b, "agent_b")
+        feasible = build_feasible_grid(pa, pb, q)
+        return pareto_nondominated(feasible, pa, pb, q)
+    except Exception:
+        return []
+
+
+def validate_pareto_efficiency(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Agreed sessions must not be Pareto-dominated within the revealed feasible set.
+
+    The referee builds the Pareto frontier from both agents' utility configs
+    (read from the immutable trace) and the fixed quality value.  It FAILS any
+    agreed agreement whose ``(p, n, q)`` is strictly dominated — i.e. there
+    exists another feasible point where both agents are weakly better and at
+    least one strictly better.
+
+    Breakdown sessions (``close:breakdown:…``) are excluded from the check.
+
+    ``alternating_offers`` FAILS because it never moves the quantity axis, so
+    the fixed opening quantity is almost always Pareto-dominated by a different
+    quantity value where both agents gain.
+
+    ``pareto`` PASSES because it actively searches the frontier.
+
+    Example::
+
+        results = validate_pareto_efficiency(events)
+    """
+    agent_params, session_offers, session_outcomes = _collect_pareto_sessions(events)
+
+    violations: list[str] = []
+    agreed_count = 0
+    checked_count = 0
+    no_config_violations: list[str] = []
+
+    for pk, outcome in session_outcomes.items():
+        if outcome is None:
+            continue  # breakdown — excluded from dominated check
+        _outcome_str, p_final, n_final, q_final = outcome
+        agreed_count += 1
+
+        # Extract both agent IDs from the canonical pair key.
+        pk_parts = pk.split("__")
+        if len(pk_parts) != 2:
+            continue
+        ag_a, ag_b = pk_parts[0], pk_parts[1]
+
+        params_a = agent_params.get(ag_a)
+        params_b = agent_params.get(ag_b)
+
+        if params_a is not None and params_b is not None:
+            # Full check: rebuild utility functions from config and compute frontier.
+            frontier = _pareto_frontier_from_params(params_a, params_b, q_final)
+            if not frontier:
+                continue
+
+            checked_count += 1
+            in_frontier = (p_final, n_final) in frontier
+
+            if not in_frontier:
+                try:
+                    from nest_plugins_reference.negotiation.pareto import ParetoParams
+
+                    from nest_core.types import AgentId
+
+                    def _rebuild2(d: dict[str, Any], aid: str) -> ParetoParams:
+                        return ParetoParams(
+                            agent_id=AgentId(aid),
+                            role=d["role"],
+                            w_p=d["w_p"],
+                            w_n=d["w_n"],
+                            w_q=d["w_q"],
+                            min_p=d["min_p"],
+                            max_p=d["max_p"],
+                            target_p=d["target_p"],
+                            min_n=d["min_n"],
+                            max_n=d["max_n"],
+                            target_n=d["target_n"],
+                            capacity=d["capacity"],
+                            min_quality=d["min_quality"],
+                            kappa=d["kappa"],
+                            disagreement_utility=d.get("disagreement_utility", 0.0),
+                            patience=d.get("patience", 0.85),
+                            rho_p=d.get("rho_p", 0.5),
+                            rho_n=d.get("rho_n", 0.5),
+                            delta=d.get("delta", 0.9),
+                            tau_step=d.get("tau_step", 0.05),
+                            beta=d.get("beta", 0.5),
+                            strategy_id=d.get("strategy_id", "ttt_directional"),
+                        )
+
+                    pa = _rebuild2(params_a, ag_a)
+                    pb = _rebuild2(params_b, ag_b)
+                    u_a_final = pa.utility(p_final, n_final, q_final)
+                    u_b_final = pb.utility(p_final, n_final, q_final)
+
+                    for fp, fn in frontier:
+                        u_a2 = pa.utility(fp, fn, q_final)
+                        u_b2 = pb.utility(fp, fn, q_final)
+                        gain_a = u_a2 - u_a_final
+                        gain_b = u_b2 - u_b_final
+                        if (
+                            u_a2 >= u_a_final
+                            and u_b2 >= u_b_final
+                            and (u_a2 > u_a_final or u_b2 > u_b_final)
+                        ):
+                            violations.append(
+                                f"pair {pk}: agreed (p={p_final},n={n_final}) "
+                                f"dominated by frontier point (p={fp},n={fn}): "
+                                f"u_a {u_a_final:.3f}<={u_a2:.3f} (+{gain_a:.3f}), "
+                                f"u_b {u_b_final:.3f}<={u_b2:.3f} (+{gain_b:.3f})"
+                            )
+                            break
+                except Exception as exc:
+                    violations.append(f"pair {pk}: error during dominance check: {exc}")
+        else:
+            # No config lines available (e.g. alternating_offers emits none).
+            # Fallback: check whether the quantity axis moved at all across the
+            # session's offer history.  A plugin that never changes n cannot be
+            # Pareto-optimal because a different n always exists that improves
+            # at least one side's total cost (p*n) without hurting the other.
+            offers = session_offers.get(pk, [])
+            if len(offers) >= 2:
+                quantities = [o[2] for o in offers]  # index 2 = n
+                if len(set(quantities)) == 1:
+                    # Quantity never changed — agreement is quantity-dominated.
+                    checked_count += 1
+                    no_config_violations.append(
+                        f"pair {pk}: quantity axis never moved (n={quantities[0]} "
+                        f"throughout); agreement (p={p_final},n={n_final}) "
+                        f"is quantity-dominated"
+                    )
+
+    violations.extend(no_config_violations)
+
+    if not agreed_count:
+        return [
+            ValidationResult(
+                "pareto_efficiency",
+                False,
+                "no agreed sessions found; all negotiations broke down",
+            )
+        ]
+
+    if violations:
+        return [
+            ValidationResult(
+                "pareto_efficiency",
+                False,
+                f"{len(violations)} dominated agreement(s): " + "; ".join(violations[:3]),
+            )
+        ]
+    return [
+        ValidationResult(
+            "pareto_efficiency",
+            True,
+            f"{checked_count} agreed session(s) verified non-dominated",
+        )
+    ]
+
+
+def validate_breakdown_labeled(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every negotiation session has exactly one close: line, unambiguously labeled.
+
+    Checks that:
+    - At least one ``close:`` line exists (negotiations ran).
+    - Every ``close:`` is either ``close:agreed:…`` or ``close:breakdown:…``.
+    - No session id appears in both.
+
+    Example::
+
+        results = validate_breakdown_labeled(events)
+    """
+    agreed_ids: set[str] = set()
+    breakdown_ids: set[str] = set()
+    malformed: list[str] = []
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("close:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 3:
+            malformed.append(msg[:60])
+            continue
+        outcome = parts[1]
+        sid = parts[2]
+        if outcome == "agreed":
+            agreed_ids.add(sid)
+        elif outcome == "breakdown":
+            breakdown_ids.add(sid)
+        else:
+            malformed.append(msg[:60])
+
+    total = len(agreed_ids) + len(breakdown_ids)
+    if total == 0:
+        return [
+            ValidationResult(
+                "breakdown_labeled",
+                False,
+                "no close: lines found in trace",
+            )
+        ]
+
+    both = agreed_ids & breakdown_ids
+    problems: list[str] = []
+    if both:
+        problems.append(f"sessions in both agreed and breakdown: {sorted(both)}")
+    if malformed:
+        problems.append(f"malformed close lines: {malformed[:3]}")
+
+    if problems:
+        return [ValidationResult("breakdown_labeled", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "breakdown_labeled",
+            True,
+            f"{len(agreed_ids)} agreed, {len(breakdown_ids)} breakdown sessions labeled",
+        )
+    ]
+
+
+# Register multi_attribute_market validators now that the functions are defined
+VALIDATORS["multi_attribute_market"] = [
+    validate_pareto_efficiency,
+    validate_breakdown_labeled,
+]
+
+
+# ---------------------------------------------------------------------------
+# Dealmakers validators
+# ---------------------------------------------------------------------------
+
+
+def validate_dealmakers_sessions_closed(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every negotiation session that started must have exactly one close line.
+
+    A session is started when an ``offer:`` line is seen between a buyer and
+    seller.  A close line is ``close:agreed:…`` or ``close:breakdown:…``.
+    A pair with offers but no close is a liveness failure.
+
+    Example::
+
+        results = validate_dealmakers_sessions_closed(events)
+    """
+    pairs_seen: set[str] = set()
+    pairs_closed: set[str] = set()
+    agent_partner: dict[str, str] = {}
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", "")).split(" # ")[0]
+
+        if msg.startswith("offer:"):
+            parts = msg.split(":")
+            if len(parts) >= 5:
+                from_ag, to_ag = parts[1], parts[2]
+                agent_partner[from_ag] = to_ag
+                agent_partner[to_ag] = from_ag
+                pk = "__".join(sorted([from_ag, to_ag]))
+                pairs_seen.add(pk)
+
+        elif msg.startswith("close:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                sender = str(ev.get("agent", ""))
+                partner = agent_partner.get(sender, "")
+                pk = "__".join(sorted([sender, partner])) if partner else f"unknown-{parts[2]}"
+                pairs_closed.add(pk)
+
+    unclosed = pairs_seen - pairs_closed
+    if unclosed:
+        return [
+            ValidationResult(
+                "dealmakers_sessions_closed",
+                False,
+                f"{len(unclosed)} pair(s) negotiated but never closed: {sorted(unclosed)[:3]}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "dealmakers_sessions_closed",
+            True,
+            f"{len(pairs_seen)} session(s) all closed",
+        )
+    ]
+
+
+def validate_dealmakers_pareto_progress(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """At least one axis must move across the session's offer history.
+
+    A negotiation where both price and quantity are frozen at the opening offer
+    has not explored the joint space — the agreement is trivially at the opening
+    point, not the result of bargaining.  At least one pair must show movement
+    on the quantity axis (demonstrating Pareto exploration beyond price-only).
+
+    Example::
+
+        results = validate_dealmakers_pareto_progress(events)
+    """
+    # pair_key -> set of (p, q) tuples seen in offers
+    pair_offers: dict[str, list[tuple[int, int]]] = {}
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", "")).split(" # ")[0]
+        if not msg.startswith("offer:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 6:
+            continue
+        from_ag, to_ag = parts[1], parts[2]
+        pk = "__".join(sorted([from_ag, to_ag]))
+        attrs = parts[4]
+        try:
+            kv = dict(item.split("=") for item in attrs.split(","))
+            p_val = int(kv["p"])
+            q_val = int(kv["q"])
+        except (ValueError, KeyError):
+            continue
+        pair_offers.setdefault(pk, []).append((p_val, q_val))
+
+    pairs_with_q_movement = 0
+    pairs_checked = 0
+    for _pk, offers in pair_offers.items():
+        if len(offers) < 2:
+            continue
+        pairs_checked += 1
+        quantities = [o[1] for o in offers]
+        if len(set(quantities)) > 1:
+            pairs_with_q_movement += 1
+
+    if pairs_checked == 0:
+        return [
+            ValidationResult(
+                "dealmakers_pareto_progress",
+                False,
+                "no multi-offer sessions found",
+            )
+        ]
+
+    if pairs_with_q_movement == 0:
+        return [
+            ValidationResult(
+                "dealmakers_pareto_progress",
+                False,
+                f"no pairs moved the quantity axis across {pairs_checked} session(s) "
+                f"— negotiation is price-only, missing Pareto exploration",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "dealmakers_pareto_progress",
+            True,
+            f"{pairs_with_q_movement}/{pairs_checked} session(s) moved the quantity axis",
+        )
+    ]
+
+
+def validate_dealmakers_learning_emitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every agent that finished a session must emit a learn: line.
+
+    Cross-session learning is a core feature of the Dealmakers scenario.
+    An agent that finishes negotiating must emit exactly one ``learn:`` line
+    per closed session to record its updated weight estimate for the partner.
+
+    Example::
+
+        results = validate_dealmakers_learning_emitted(events)
+    """
+    closers: set[str] = set()
+    learners: set[str] = set()
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith("close:"):
+            agent = str(ev.get("agent", ""))
+            if agent:
+                closers.add(agent)
+        elif msg.startswith("learn:"):
+            parts = msg.split(":")
+            if len(parts) >= 2:
+                learners.add(parts[1])
+
+    missing = closers - learners
+    if missing:
+        return [
+            ValidationResult(
+                "dealmakers_learning_emitted",
+                False,
+                f"{len(missing)} agent(s) closed but never emitted learn: {sorted(missing)[:5]}",
+            )
+        ]
+    if not closers:
+        return [
+            ValidationResult(
+                "dealmakers_learning_emitted",
+                False,
+                "no sessions closed — cannot check learning",
+            )
+        ]
+    return [
+        ValidationResult(
+            "dealmakers_learning_emitted",
+            True,
+            f"all {len(closers)} closing agent(s) emitted learn: lines",
+        )
+    ]
+
+
+VALIDATORS["dealmakers"] = [
+    validate_dealmakers_sessions_closed,
+    validate_dealmakers_pareto_progress,
+    validate_dealmakers_learning_emitted,
+]

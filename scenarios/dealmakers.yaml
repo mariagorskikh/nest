@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# The Dealmakers: multi-attribute bargaining over price × quantity.
+#
+# Attribute semantics
+# -------------------
+# p — price (credits, int 0–100)
+#     Buyers prefer low; sellers prefer high.
+# q — quantity (units, int 1–50)
+#     Buyers have a convex sweet-spot (target_q); sellers prefer larger volumes.
+#
+# The integrative tension
+# -----------------------
+# A buyer's ideal quantity differs from a seller's preferred quantity, and both
+# utility functions respond in opposite directions.  The Pareto-optimal contract
+# is strictly better for BOTH parties than either side's opening position, but
+# only strategies that move both axes simultaneously find it.
+#
+# Cross-session learning
+# ----------------------
+# Each agent maintains a cross-session EMA weight estimate for each partner.
+# After every closed session the agent emits a ``learn:`` trace line recording
+# the updated estimate.  In subsequent sessions the estimate biases
+# counter-proposals toward the opponent's revealed preferences.
+#
+# Strategies
+# ----------
+# logrolling   — stay on iso-utility contour, maximise estimated opponent utility
+# ttt_mirror   — mirror the opponent's last per-axis move
+# nash_split   — propose the midpoint, biased toward own reservation with rounds
+name: dealmakers
+description: >
+  8 buyer-seller pairs negotiate price and quantity simultaneously.
+  Agents learn opponent preferences across sessions via EMA weight tracking.
+  Three built-in strategies (logrolling, TTT-mirror, Nash-split) explore the
+  Pareto frontier — agreements that price-only bargaining cannot reach.
+
+tier: 1
+seed: 13
+
+agents:
+  count: 16
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 8
+    - name: seller
+      count: 8
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: dealmakers
+  config:
+    rounds: 10
+    pairs: 8
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 5000"
+
+output:
+  trace: ./traces/dealmakers.jsonl

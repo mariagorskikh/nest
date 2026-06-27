@@ -97,3 +97,13 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("receipt_reputation", receipt_reputation_factory)
+    elif name == "multi_attribute_market":
+        from nest_core.scenarios_builtin.multi_attribute_market import (
+            multi_attribute_market_factory,
+        )
+
+        register_scenario("multi_attribute_market", multi_attribute_market_factory)
+    elif name == "dealmakers":
+        from nest_core.scenarios_builtin.dealmakers import dealmakers_factory
+
+        register_scenario("dealmakers", dealmakers_factory)
