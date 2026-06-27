@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for The Dealmakers scenario — multi-attribute bargaining with learning."""
+"""Tests for The Dealmakers scenario — multi-attribute bargaining over price and quantity."""
 
 from __future__ import annotations
 
@@ -113,54 +113,6 @@ class TestDealmakerStrategies:
 
         assert decode_offer("config:buyer-0:{}") is None
         assert decode_offer("offer:only:three") is None
-
-
-class TestDealmakerLearning:
-    def test_weight_update_ema(self) -> None:
-        from nest_core.scenarios_builtin.dealmakers import DealmakerAgent, DealParams
-
-        p = DealParams.for_buyer(AgentId("buyer-0"), seed=42, pair_index=0)
-        agent = DealmakerAgent(
-            agent_id=AgentId("buyer-0"),
-            role="buyer",
-            partner_id=AgentId("seller-0"),
-            params=p,
-            rounds=10,
-            open_p=40,
-            open_q=20,
-        )
-        # Initial weights are equal
-        wp, wq = agent.opp_weights("seller-0")
-        assert abs(wp - 0.5) < 1e-9
-        assert abs(wq - 0.5) < 1e-9
-
-        # After a price-heavy session, price weight should increase
-        agent.update_opp_weights("seller-0", [10, 8, 6], [1, 0, 1])
-        wp2, wq2 = agent.opp_weights("seller-0")
-        assert wp2 > 0.5, "price-heavy session should push est_w_p above 0.5"
-        assert abs(wp2 + wq2 - 1.0) < 0.01  # weights sum to ~1
-
-    def test_weight_update_persists_per_partner(self) -> None:
-        from nest_core.scenarios_builtin.dealmakers import DealmakerAgent, DealParams
-
-        p = DealParams.for_buyer(AgentId("buyer-1"), seed=7, pair_index=1)
-        agent = DealmakerAgent(
-            agent_id=AgentId("buyer-1"),
-            role="buyer",
-            partner_id=AgentId("seller-1"),
-            params=p,
-            rounds=10,
-            open_p=40,
-            open_q=20,
-        )
-        agent.update_opp_weights("seller-1", [5, 4], [2, 1])
-        agent.update_opp_weights("seller-2", [1, 1], [8, 9])
-
-        wp1, _ = agent.opp_weights("seller-1")
-        _, wq2 = agent.opp_weights("seller-2")
-        # seller-1 is price-heavy; seller-2 is quantity-heavy
-        assert wp1 > 0.5
-        assert wq2 > 0.5
 
 
 class TestDealmakerScenario:

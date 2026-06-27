@@ -3361,63 +3361,7 @@ def validate_dealmakers_pareto_progress(
     ]
 
 
-def validate_dealmakers_learning_emitted(
-    events: list[dict[str, Any]],
-) -> list[ValidationResult]:
-    """Every agent that finished a session must emit a learn: line.
-
-    Cross-session learning is a core feature of the Dealmakers scenario.
-    An agent that finishes negotiating must emit exactly one ``learn:`` line
-    per closed session to record its updated weight estimate for the partner.
-
-    Example::
-
-        results = validate_dealmakers_learning_emitted(events)
-    """
-    closers: set[str] = set()
-    learners: set[str] = set()
-
-    for ev in events:
-        if ev.get("kind") != "send":
-            continue
-        msg = str(ev.get("msg", ""))
-        if msg.startswith("close:"):
-            agent = str(ev.get("agent", ""))
-            if agent:
-                closers.add(agent)
-        elif msg.startswith("learn:"):
-            parts = msg.split(":")
-            if len(parts) >= 2:
-                learners.add(parts[1])
-
-    missing = closers - learners
-    if missing:
-        return [
-            ValidationResult(
-                "dealmakers_learning_emitted",
-                False,
-                f"{len(missing)} agent(s) closed but never emitted learn: {sorted(missing)[:5]}",
-            )
-        ]
-    if not closers:
-        return [
-            ValidationResult(
-                "dealmakers_learning_emitted",
-                False,
-                "no sessions closed — cannot check learning",
-            )
-        ]
-    return [
-        ValidationResult(
-            "dealmakers_learning_emitted",
-            True,
-            f"all {len(closers)} closing agent(s) emitted learn: lines",
-        )
-    ]
-
-
 VALIDATORS["dealmakers"] = [
     validate_dealmakers_sessions_closed,
     validate_dealmakers_pareto_progress,
-    validate_dealmakers_learning_emitted,
 ]

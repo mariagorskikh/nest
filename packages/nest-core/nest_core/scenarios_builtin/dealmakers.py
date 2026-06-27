@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The Dealmakers — multi-attribute bargaining with Pareto frontier and cross-session learning.
+"""The Dealmakers — multi-attribute bargaining over price and quantity.
 
 Agents negotiate simultaneously over two axes:
 
@@ -15,14 +15,6 @@ utility functions respond in opposite directions.  The Pareto-optimal contract
 is strictly better for BOTH parties than either side's opening position, but
 only strategies that move both axes simultaneously find it.
 
-Cross-session learning
-----------------------
-Each agent maintains a cross-session weight estimate for each partner, updated
-via EMA after every completed (or broken) session.  In subsequent sessions the
-agent uses the updated weight estimate to bias its counter-proposals toward
-the opponent's revealed preferences.  The learning state lives on the agent
-instance so it persists across multiple negotiations with the same partner.
-
 Trace line protocol
 -------------------
 ``config:<agent_id>:<json_params>``
@@ -36,11 +28,6 @@ Trace line protocol
 
 ``close:breakdown:<session_id>``
     Emitted on breakdown (round limit, no mutual gain, or reservation clash).
-
-``learn:<agent_id>:partner=<partner_id>:est_w_p=<w>:est_w_q=<w>``
-    Emitted after each session to record updated weight estimates for the
-    partner.  Cross-session learning produces different estimates across
-    sessions with the same partner.
 
 Example::
 
@@ -341,17 +328,13 @@ def nash_split_counter(
 # Dealmaker agent
 # ---------------------------------------------------------------------------
 
-_EMA_ALPHA = 0.35  # learning rate for cross-session weight EMA
-
 
 class DealmakerAgent(StateMachineAgent):
-    """A buyer or seller that bargains over price and quantity, learning across sessions.
+    """A buyer or seller that bargains over price and quantity.
 
-    The agent:
-    1.  Uses one of three built-in strategies to generate counter-proposals.
-    2.  Tracks the opponent's revealed price/quantity preference ratio via EMA.
-    3.  Emits ``learn:`` trace lines after each session so the accumulated
-        knowledge is visible in the trace.
+    Uses one of three built-in strategies to generate counter-proposals.
+    All state is local to a single session; no information persists across
+    sessions.
 
     Example::
 
@@ -390,43 +373,6 @@ class DealmakerAgent(StateMachineAgent):
         self._opp_prev_p = open_p
         self._opp_prev_q = open_q
 
-        # Cross-session learning: estimated opponent weight on price vs quantity
-        # Initialised to equal weights; updated via EMA after each session.
-        self._est_opp_w_p: dict[str, float] = {}
-        self._est_opp_w_q: dict[str, float] = {}
-
-    def opp_weights(self, partner: str) -> tuple[float, float]:
-        """Return current cross-session weight estimate for partner.
-
-        Example::
-
-            wp, wq = agent.opp_weights("seller-0")
-        """
-        return (
-            self._est_opp_w_p.get(partner, 0.5),
-            self._est_opp_w_q.get(partner, 0.5),
-        )
-
-    def update_opp_weights(
-        self, partner: str, opp_p_moves: list[int], opp_q_moves: list[int]
-    ) -> None:
-        """Update cross-session EMA weight estimate from the opponent's move history.
-
-        Example::
-
-            agent.update_opp_weights("seller-0", [5, 3, 2], [1, 0, 1])
-        """
-        if not opp_p_moves or not opp_q_moves:
-            return
-        total_p = sum(abs(d) for d in opp_p_moves) + 1e-9
-        total_q = sum(abs(d) for d in opp_q_moves) + 1e-9
-        raw_w_p = total_p / (total_p + total_q)
-        raw_w_q = total_q / (total_p + total_q)
-        prev_wp = self._est_opp_w_p.get(partner, 0.5)
-        prev_wq = self._est_opp_w_q.get(partner, 0.5)
-        self._est_opp_w_p[partner] = (1 - _EMA_ALPHA) * prev_wp + _EMA_ALPHA * raw_w_p
-        self._est_opp_w_q[partner] = (1 - _EMA_ALPHA) * prev_wq + _EMA_ALPHA * raw_w_q
-
     def _counter(self, opp_p: int, opp_q: int) -> tuple[int, int]:
         """Compute a counter-proposal using the agent's configured strategy.
 
@@ -435,7 +381,7 @@ class DealmakerAgent(StateMachineAgent):
             cp, cq = agent._counter(40, 20)
         """
         p = self._params
-        est_wp, est_wq = self.opp_weights(str(self._partner_id))
+        est_wp, est_wq = 0.5, 0.5
         if p.strategy_id == "logrolling":
             return logrolling_counter(
                 p,
@@ -564,19 +510,6 @@ class DealmakerAgent(StateMachineAgent):
         else:
             await ctx.send(partner, f"close:breakdown:{sid}".encode())
 
-        # Cross-session learning: record how much the opponent moved on each axis
-        # over this session and update the EMA weight estimate.
-        p_moves = [abs(self._own_last_p - self._open_p)]
-        q_moves = [abs(self._own_last_q - self._open_q)]
-        self.update_opp_weights(str(partner), p_moves, q_moves)
-        est_wp, est_wq = self.opp_weights(str(partner))
-        await ctx.send(
-            partner,
-            (
-                f"learn:{self._id}:partner={partner}:est_w_p={est_wp:.4f}:est_w_q={est_wq:.4f}"
-            ).encode(),
-        )
-
     async def _plugin_open(self, partner: AgentId, terms: Terms) -> Any:
         """Open a lightweight in-agent session (no external plugin required).
 
@@ -650,7 +583,6 @@ def dealmakers_factory(
     1.  Derives per-agent DealParams deterministically from (agent_id, seed).
     2.  Computes the joint feasible zone on price and quantity.
     3.  Opens at the midpoint of the joint feasible ranges.
-    4.  Initialises cross-session weight estimates to equal weights (0.5/0.5).
 
     Example::
 

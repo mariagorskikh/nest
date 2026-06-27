@@ -15,13 +15,6 @@
 # is strictly better for BOTH parties than either side's opening position, but
 # only strategies that move both axes simultaneously find it.
 #
-# Cross-session learning
-# ----------------------
-# Each agent maintains a cross-session EMA weight estimate for each partner.
-# After every closed session the agent emits a ``learn:`` trace line recording
-# the updated estimate.  In subsequent sessions the estimate biases
-# counter-proposals toward the opponent's revealed preferences.
-#
 # Strategies
 # ----------
 # logrolling   — stay on iso-utility contour, maximise estimated opponent utility
@@ -30,7 +23,6 @@
 name: dealmakers
 description: >
   8 buyer-seller pairs negotiate price and quantity simultaneously.
-  Agents learn opponent preferences across sessions via EMA weight tracking.
   Three built-in strategies (logrolling, TTT-mirror, Nash-split) explore the
   Pareto frontier — agreements that price-only bargaining cannot reach.
 

@@ -57,6 +57,10 @@ def _message_body(ev: dict[str, Any]) -> str:
 def _delivery_rate(events: list[dict[str, Any]]) -> float:
     """Fraction of sent messages that were received (message delivery rate).
 
+    Self-scheduled messages (``from == agent``) are internal timer events and
+    are excluded from both numerator and denominator so the rate stays in
+    [0, 1] even when timeouts are in use.
+
     NOTE: This was previously named ``_success_rate``.  The old name was
     misleading -- a 100 % delivery rate does NOT mean the protocol succeeded;
     it only means every message was delivered, even if every request was
@@ -67,9 +71,9 @@ def _delivery_rate(events: list[dict[str, Any]]) -> float:
     receives = 0
     for ev in events:
         kind = ev.get("kind", "")
-        if kind == "send":
+        if kind == "send" and ev.get("to", "") != ev.get("agent", "__none__"):
             sends += 1
-        elif kind == "receive":
+        elif kind == "receive" and ev.get("from", "") != ev.get("agent", "__none__"):
             receives += 1
     if sends == 0:
         return 0.0
@@ -83,16 +87,32 @@ _success_rate = _delivery_rate
 # ---------------------------------------------------------------------------
 # Marketplace-specific metrics
 # ---------------------------------------------------------------------------
+# Legacy single-message protocol
 _BUY_RE = re.compile(r"^buy:")
 _SOLD_RE = re.compile(r"^sold:")
 _REJECT_RE = re.compile(r"^reject:")
 
+# Bilateral negotiation protocol (marketplace: neg_open/neg_accept/neg_reject)
+_NEG_OPEN_RE = re.compile(r"^neg_open:")
+_NEG_ACCEPT_RE = re.compile(r"^neg_accept:")
+_NEG_REJECT_RE = re.compile(r"^neg_reject:")
+_NEG_COUNTER_RE = re.compile(r"^neg_counter:")
+
+# Multi-attribute market protocol (offer:/close:agreed:/close:breakdown:)
+_MA_OFFER_RE = re.compile(r"^offer:")
+_MA_AGREED_RE = re.compile(r"^close:agreed:")
+_MA_BREAKDOWN_RE = re.compile(r"^close:breakdown:")
+
 
 def _deal_rate(events: list[dict[str, Any]]) -> float:
-    """Percentage of buy requests that resulted in a successful trade (``sold:``).
+    """Percentage of negotiation requests that resulted in a deal.
 
-    Only meaningful for marketplace scenarios.  Returns 0.0 when there are no
-    buy requests.
+    Handles three wire formats:
+    - Legacy: ``buy:`` (request) / ``sold:`` (deal)
+    - Bilateral negotiation: ``neg_open:`` (request) / ``neg_accept:`` (deal)
+    - Multi-attribute market: ``offer:`` round-0 (request) / ``close:agreed:`` (deal)
+
+    Returns 0.0 when there are no requests.
     """
     buy_count = 0
     sold_count = 0
@@ -100,20 +120,28 @@ def _deal_rate(events: list[dict[str, Any]]) -> float:
         if ev.get("kind") != "send":
             continue
         content = _message_body(ev)
-        if _BUY_RE.match(content):
+        if _BUY_RE.match(content) or _NEG_OPEN_RE.match(content):
             buy_count += 1
-        elif _SOLD_RE.match(content):
+        elif (
+            _SOLD_RE.match(content) or _NEG_ACCEPT_RE.match(content) or _MA_AGREED_RE.match(content)
+        ):
             sold_count += 1
+        elif _MA_OFFER_RE.match(content) and ":r0:" in content:
+            buy_count += 1
     if buy_count == 0:
         return 0.0
     return sold_count / buy_count
 
 
 def _rejection_rate(events: list[dict[str, Any]]) -> float:
-    """Percentage of buy requests that received a ``reject:`` response.
+    """Percentage of negotiation requests that ended in rejection/breakdown.
 
-    Only meaningful for marketplace scenarios.  Returns 0.0 when there are no
-    buy requests.
+    Handles three wire formats:
+    - Legacy: ``buy:`` / ``reject:``
+    - Bilateral negotiation: ``neg_open:`` / ``neg_reject:``
+    - Multi-attribute market: ``offer:r0:`` / ``close:breakdown:``
+
+    Returns 0.0 when there are no requests.
     """
     buy_count = 0
     reject_count = 0
@@ -121,24 +149,35 @@ def _rejection_rate(events: list[dict[str, Any]]) -> float:
         if ev.get("kind") != "send":
             continue
         content = _message_body(ev)
-        if _BUY_RE.match(content):
+        if _BUY_RE.match(content) or _NEG_OPEN_RE.match(content):
             buy_count += 1
-        elif _REJECT_RE.match(content):
+        elif (
+            _REJECT_RE.match(content)
+            or _NEG_REJECT_RE.match(content)
+            or _MA_BREAKDOWN_RE.match(content)
+        ):
             reject_count += 1
+        elif _MA_OFFER_RE.match(content) and ":r0:" in content:
+            buy_count += 1
     if buy_count == 0:
         return 0.0
     return reject_count / buy_count
 
 
 def _mean_rounds_to_deal(events: list[dict[str, Any]]) -> float:
-    """Average number of message rounds before a successful ``sold:`` trade.
+    """Average negotiation rounds before a successful deal.
 
-    A "round" is counted as each buy/reject exchange between a unique
-    buyer-seller pair before the pair reaches a ``sold:`` message.  Returns
-    0.0 when there are no successful deals.
+    Tracks both the legacy single-message protocol (buy/sold) and the
+    multi-round negotiation protocol (neg_open/neg_counter/neg_accept).
+    Each counter message in a session counts as one round.  Returns 0.0
+    when there are no successful deals.
     """
-    # Track ongoing negotiations per (buyer, seller) pair
+    # session_id -> round count (bilateral negotiation protocol)
+    session_rounds: dict[str, int] = defaultdict(int)
+    # (buyer, seller) -> round count (legacy protocol)
     pair_rounds: dict[tuple[str, str], int] = defaultdict(int)
+    # canonical pair key -> round count (multi-attribute protocol)
+    ma_pair_rounds: dict[str, int] = defaultdict(int)
     deal_rounds: list[int] = []
 
     for ev in events:
@@ -149,17 +188,45 @@ def _mean_rounds_to_deal(events: list[dict[str, Any]]) -> float:
         to = ev.get("to", "")
         frm = ev.get("from", agent)
 
-        if _BUY_RE.match(content):
+        # Multi-attribute market: offer: lines carry an explicit round number.
+        if _MA_OFFER_RE.match(content):
+            # offer:<from>:<to>:r<N>:… — extract round number and pair key.
+            clean = content.split(" # ")[0]
+            parts = clean.split(":")
+            if len(parts) >= 4:
+                from_ag, to_ag = parts[1], parts[2]
+                pk = "__".join(sorted([from_ag, to_ag]))
+                try:
+                    rnd = int(parts[3][1:])  # strip leading 'r'
+                    ma_pair_rounds[pk] = max(ma_pair_rounds[pk], rnd + 1)
+                except ValueError:
+                    pass
+        elif _MA_AGREED_RE.match(content):
+            pk = "__".join(sorted([agent, to]))
+            rounds = ma_pair_rounds.pop(pk, 1)
+            deal_rounds.append(max(rounds, 1))
+        elif _NEG_OPEN_RE.match(content):
+            parts = content.split(":", 2)
+            if len(parts) >= 2:
+                session_rounds[parts[1]] = 1
+        elif _NEG_COUNTER_RE.match(content):
+            parts = content.split(":", 2)
+            if len(parts) >= 2:
+                session_rounds[parts[1]] += 1
+        elif _NEG_ACCEPT_RE.match(content):
+            parts = content.split(":", 2)
+            if len(parts) >= 2:
+                sid = parts[1]
+                rounds = session_rounds.pop(sid, 1)
+                deal_rounds.append(max(rounds, 1))
+        elif _BUY_RE.match(content):
             pair_rounds[(frm, to)] += 1
         elif _REJECT_RE.match(content):
-            # Rejection is seller -> buyer, count it as a round for (buyer, seller)
             pair_rounds[(to, frm)] += 1
         elif _SOLD_RE.match(content):
-            # sold is seller -> buyer
             pair = (to, frm)
             rounds = pair_rounds.get(pair, 0)
             deal_rounds.append(max(rounds, 1))
-            # Reset for this pair in case they trade again
             pair_rounds[pair] = 0
 
     if not deal_rounds:
@@ -168,7 +235,11 @@ def _mean_rounds_to_deal(events: list[dict[str, Any]]) -> float:
 
 
 def _unique_pairs(events: list[dict[str, Any]]) -> float:
-    """Number of unique agent pairs that exchanged at least one message."""
+    """Number of unique agent pairs that exchanged at least one message.
+
+    Self-messages (scheduled timeouts delivered to the sender) are excluded
+    so the count reflects actual inter-agent communication only.
+    """
     pairs: set[tuple[str, str]] = set()
     for ev in events:
         kind = ev.get("kind", "")
@@ -177,10 +248,10 @@ def _unique_pairs(events: list[dict[str, Any]]) -> float:
         agent = ev.get("agent", "")
         to = ev.get("to", "")
         frm = ev.get("from", "")
-        if kind == "send" and agent and to:
+        if kind == "send" and agent and to and to != agent:
             pair = tuple(sorted((agent, to)))
             pairs.add(pair)  # type: ignore[arg-type]
-        elif kind == "receive" and agent and frm:
+        elif kind == "receive" and agent and frm and frm != agent:
             pair = tuple(sorted((agent, frm)))
             pairs.add(pair)  # type: ignore[arg-type]
     return float(len(pairs))
@@ -216,6 +287,21 @@ def _message_count(events: list[dict[str, Any]]) -> float:
 
 def _dropped_count(events: list[dict[str, Any]]) -> float:
     return float(sum(1 for ev in events if ev.get("kind") == "dropped"))
+
+
+def _drop_rate(events: list[dict[str, Any]]) -> float:
+    """Fraction of sent messages that were dropped (dropped / sent).
+
+    Proportional to ``message_drop_rate`` in the scenario config.  More
+    meaningful than ``dropped_count`` when comparing runs with different
+    traffic volumes: e.g. 140 drops across 1449 sends = 9.7 %, matching
+    a 10 % drop setting.  Returns 0.0 when no messages were sent.
+    """
+    sends = sum(1 for ev in events if ev.get("kind") == "send")
+    drops = sum(1 for ev in events if ev.get("kind") == "dropped")
+    if sends == 0:
+        return 0.0
+    return drops / sends
 
 
 def _agent_count(events: list[dict[str, Any]]) -> float:
@@ -272,6 +358,7 @@ _METRIC_FUNCS: dict[str, Any] = {
     "mean_latency": _mean_latency,
     "message_count": _message_count,
     "dropped_count": _dropped_count,
+    "drop_rate": _drop_rate,
     "agent_count": _agent_count,
     "duration": _duration,
     "throughput": _throughput,
