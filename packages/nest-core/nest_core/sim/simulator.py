@@ -117,6 +117,7 @@ class _SimAgentContext:
         await self._transport.broadcast(payload, correlation_id=cid)
 
     async def schedule(self, delay: float, payload: bytes) -> None:
+        cid = self._corr.next()
         self._queue.push(
             Event(
                 time=self._clock.now + delay,
@@ -124,6 +125,7 @@ class _SimAgentContext:
                 agent_id=self._agent_id,
                 target_id=self._agent_id,
                 payload=payload,
+                correlation_id=cid,
             )
         )
 
@@ -314,7 +316,8 @@ class Simulator:
                 if target_slot is None:
                     continue
 
-                if self._should_drop(event.target_id, event.agent_id):
+                is_self = event.target_id == event.agent_id
+                if not is_self and self._should_drop(event.target_id, event.agent_id):
                     self._dropped_count += 1
                     if self._trace:
                         drop_rec: dict[str, Any] = {
@@ -331,7 +334,7 @@ class Simulator:
                     continue
 
                 delivered_payload = event.payload
-                if event.target_id in self._byzantine_agents:
+                if not is_self and event.target_id in self._byzantine_agents:
                     delivered_payload = bytes(
                         (b ^ self._failure_rng.randint(0, 255)) for b in event.payload
                     )

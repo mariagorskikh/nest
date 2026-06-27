@@ -61,7 +61,7 @@ class InMemoryTransport:
 
         self._queue.push(
             Event(
-                time=self._clock.now,
+                time=self._clock.now + 1,
                 kind="deliver",
                 agent_id=to,
                 target_id=self._agent_id,

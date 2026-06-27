@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# Marketplace with failure injection: 10% message drop + 10% byzantine agents
+name: marketplace_failures
+description: "50 buyers and 50 sellers trading with failure injection."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 100
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 50
+    - name: seller
+      count: 50
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: marketplace
+  config:
+    catalog_size: 200
+    rounds: 10
+
+failures:
+  message_drop: 0.1
+  byzantine_agents: 0.1
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - mean_latency
+  - message_count
+
+output:
+  trace: ./traces/marketplace_failures.jsonl

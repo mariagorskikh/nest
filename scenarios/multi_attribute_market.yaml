@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# Consulting marketplace: 10 client-consultant pairs negotiate
+# price-per-token, token budget, and service quality tier.
+#
+# Attribute semantics
+# -------------------
+# p — price premium (credits per token, int 0–100)
+#     Clients prefer low; consultants prefer high.
+# n — token budget (expected tokens to complete the task, int)
+#     A static agreed estimate, not recalculated per task.
+#     Clients prefer smaller budgets; consultants prefer larger volumes.
+# q — quality tier (float 0–1, static per pair)
+#     0.65 = standard, 0.80 = premium, 0.90 = enterprise.
+#     Set at session open; never changed during bargaining.
+#
+# Breakdown scenarios
+# -------------------
+# Pair 7: price-gap breakdown — client budget ceiling (30 cr/token) is far
+#   below the consultant's target rate (44 cr/token).  Joint zone is tight;
+#   after several rounds of negotiation neither side bridges the gap.
+# Pair 8: quality-tier breakdown — client requires >= 0.75 tier but the pair
+#   offers standard tier (0.55).  Quality gate fires immediately.
+name: multi_attribute_market
+description: >
+  10 client-consultant pairs negotiate price/token-budget/quality tier for
+  AI consulting engagements.  Uses the pareto plugin (6 spec-equation
+  strategies).  Pairs 7 and 8 demonstrate breakdown paths.
+
+tier: 1
+seed: 7
+
+agents:
+  count: 20
+  brain: state-machine
+  roles:
+    - name: client
+      count: 10
+    - name: consultant
+      count: 10
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: pareto
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: multi_attribute_market
+  config:
+    rounds: 10
+    pairs: 10
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 5000"
+
+output:
+  trace: ./traces/multi_attribute_market.jsonl
