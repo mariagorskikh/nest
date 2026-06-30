@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# PBFT under network partition: 7 replicas (f=2, quorum=5) split into a
+# 4-node majority side and a 3-node minority side, then healed.
+#
+# Safety claim under test: the minority side (3 < quorum of 5) can NEVER form a
+# commit certificate, so no conflicting commit can appear across the partition.
+# When the partition heals, the majority side's committed value is the only one
+# that ever reached quorum. The coordination validators (conflicting-commits,
+# forged-quorum) must pass; a stuck minority must not be mistaken for a safety
+# violation.
+#
+# Deterministic under seeds 42, 7, 1337.
+name: bft_partition
+description: |
+  Seven PBFT replicas (f=2, quorum=5) under a 4/3 network partition. The
+  3-node minority cannot reach the 5-vote quorum, so it commits nothing; the
+  4-node side also cannot reach 5 alone, so no side commits conflicting values
+  during the split. After heal, the cluster converges on a single value.
+  Runs the conflicting-commits and forged-quorum validators.
+
+tier: 2
+seed: 42
+
+agents:
+  count: 7
+  brain: state-machine
+  roles:
+    - name: replica
+      count: 7
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: pbft
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: consensus
+  config:
+    rounds: 5
+    n: 7
+    quorum: 5
+
+failures:
+  message_drop: 0.0
+  network_partition:
+    groups:
+      - [replica-0, replica-1, replica-2, replica-3]
+      - [replica-4, replica-5, replica-6]
+    heal_after_ticks: 5000
+  byzantine_agents: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/bft_partition.jsonl
