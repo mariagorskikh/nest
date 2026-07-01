@@ -2312,6 +2312,219 @@ def validate_provenance_chain_unforgeable(
 
 
 # ---------------------------------------------------------------------------
+# BFT HotStuff validators
+# ---------------------------------------------------------------------------
+
+_STUCK_VIEW_K_TICKS = 300
+
+
+def validate_bft_no_conflicting_commits(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No two honest replicas commit conflicting values for the same view.
+
+    Reads ``result:<view>:committed:<accepts>/<total>:<block_hash>:<value>``
+    lines, each announced independently by the replica that observed the
+    commit QC (not just the leader's say-so). Conflicts are keyed on
+    ``block_hash`` -- the field that comes straight from the commit QC and
+    is therefore identical across every honest replica for a given view --
+    rather than ``value``, since a replica that only saw the commit QC (not
+    the original PREPARE, e.g. after being partitioned away) may not know
+    the plaintext value but still agrees on the hash. A trace with zero
+    commits is itself a failure -- it means no quorum-backed progress was
+    ever observed, which is also why this validator FAILS against a
+    ``contract_net``-coordinated trace (no ``result:...committed`` lines
+    exist at all).
+
+    Example::
+
+        results = validate_bft_no_conflicting_commits(events)
+    """
+    commits_by_view: dict[str, dict[str, str]] = defaultdict(dict)
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("result:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 6 or parts[2] != "committed":
+            continue
+        view, block_hash_hex = parts[1], parts[4]
+        commits_by_view[view][str(ev.get("agent", ""))] = block_hash_hex
+
+    if not commits_by_view:
+        return [
+            ValidationResult("bft_no_conflicting_commits", False, "no commits observed in trace")
+        ]
+
+    violations: list[str] = []
+    for view, by_agent in commits_by_view.items():
+        distinct = set(by_agent.values())
+        if len(distinct) > 1:
+            violations.append(f"view {view}: conflicting commits {by_agent}")
+
+    if violations:
+        return [ValidationResult("bft_no_conflicting_commits", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "bft_no_conflicting_commits",
+            True,
+            f"checked {len(commits_by_view)} committed view(s), no conflicts",
+        )
+    ]
+
+
+def validate_bft_no_equivocation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No leader sends two different PREPARE proposals in the same view.
+
+    Reads ``prepare:<view>:<block_hash>:<value>:<justify_qc>`` lines, grouped
+    by ``(sender, view)``. More than one distinct ``block_hash`` from the
+    same sender in the same view means that leader equivocated.
+
+    Example::
+
+        results = validate_bft_no_equivocation(events)
+    """
+    hashes_by_leader_view: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("prepare:"):
+            continue
+        parts = msg.split(":", 4)
+        if len(parts) < 3:
+            continue
+        view, block_hash_hex = parts[1], parts[2]
+        key = (str(ev.get("agent", "")), view)
+        hashes_by_leader_view[key].add(block_hash_hex)
+
+    violations = [
+        f"leader {leader} view {view}: sent conflicting proposals {hashes}"
+        for (leader, view), hashes in hashes_by_leader_view.items()
+        if len(hashes) > 1
+    ]
+
+    if violations:
+        return [ValidationResult("bft_no_equivocation", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "bft_no_equivocation",
+            True,
+            f"checked {len(hashes_by_leader_view)} (leader, view) proposal(s), no equivocation",
+        )
+    ]
+
+
+def validate_bft_forged_quorum(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every broadcast commit QC is backed by >= 2f+1 distinct signers.
+
+    Reads ``qc:<phase>:<view>:<block_hash>:<f>:<voter1>=<sig1>,...`` lines.
+    Distinct voter tokens are counted after deduplication, so padding the
+    same signer twice to inflate the count is itself caught as a forgery.
+
+    Example::
+
+        results = validate_bft_forged_quorum(events)
+    """
+    violations: list[str] = []
+    checked = 0
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("qc:"):
+            continue
+        parts = msg.split(":", 5)
+        if len(parts) != 6:
+            continue
+        phase, view, block_hash_hex, f_str, votes_str = (
+            parts[1],
+            parts[2],
+            parts[3],
+            parts[4],
+            parts[5],
+        )
+        try:
+            f_value = int(f_str)
+        except ValueError:
+            continue
+        required = 2 * f_value + 1
+        voters = {entry.partition("=")[0] for entry in votes_str.split(",") if entry}
+        checked += 1
+        if len(voters) < required:
+            violations.append(
+                f"{phase} qc view {view} block {block_hash_hex}: "
+                f"{len(voters)} distinct signers, needed {required}"
+            )
+
+    if violations:
+        return [ValidationResult("bft_forged_quorum", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "bft_forged_quorum",
+            True,
+            f"checked {checked} broadcast QC(s), all backed by a real quorum",
+        )
+    ]
+
+
+def validate_bft_no_stuck_view(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Commit progress resumes within K ticks of the network healing.
+
+    Baseline is the simulator's ``partition_healed`` marker if present,
+    else ``ts=0`` (so the same validator also covers the byzantine scenario,
+    which has no partition). Fails if no ``result:...committed`` line
+    appears within ``_STUCK_VIEW_K_TICKS`` ticks after the baseline.
+
+    Example::
+
+        results = validate_bft_no_stuck_view(events)
+    """
+    baseline = 0.0
+    for ev in events:
+        if ev.get("kind") == "partition_healed":
+            baseline = float(ev.get("ts", 0.0))
+            break
+
+    commit_ticks: list[float] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("result:") and ":committed:" in msg:
+            commit_ticks.append(float(ev.get("ts", 0.0)))
+
+    if not commit_ticks:
+        return [ValidationResult("bft_no_stuck_view", False, "no commits observed in trace")]
+
+    window_end = baseline + _STUCK_VIEW_K_TICKS
+    in_window = [t for t in commit_ticks if baseline <= t <= window_end]
+    if not in_window:
+        return [
+            ValidationResult(
+                "bft_no_stuck_view",
+                False,
+                f"no commit within {_STUCK_VIEW_K_TICKS} ticks of baseline ts={baseline}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "bft_no_stuck_view",
+            True,
+            f"commit progress resumed at ts={min(in_window)} (baseline ts={baseline})",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -2375,5 +2588,11 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_provenance_substitution_resistant,
         validate_provenance_freshness_unforgeable,
         validate_provenance_chain_unforgeable,
+    ],
+    "bft_hotstuff": [
+        validate_bft_no_conflicting_commits,
+        validate_bft_no_equivocation,
+        validate_bft_forged_quorum,
+        validate_bft_no_stuck_view,
     ],
 }

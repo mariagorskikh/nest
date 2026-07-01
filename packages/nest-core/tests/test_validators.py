@@ -756,6 +756,7 @@ class TestValidatorRegistry:
             "receipt_reputation",
             "multi_attribute_market",
             "provenance_supply_chain",
+            "bft_hotstuff",
         }
         assert set(VALIDATORS.keys()) == expected
 

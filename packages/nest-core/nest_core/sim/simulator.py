@@ -149,6 +149,7 @@ class Simulator:
         message_drop_rate: float = 0.0,
         byzantine_fraction: float = 0.0,
         partition_groups: list[list[str]] | None = None,
+        partition_heal_at: int | None = None,
         plugins: dict[str, Any] | None = None,
     ) -> None:
         if not 0.0 <= message_drop_rate <= 1.0:
@@ -172,6 +173,8 @@ class Simulator:
         self._message_drop_rate = message_drop_rate
         self._byzantine_fraction = byzantine_fraction
         self._partition_groups = partition_groups
+        self._partition_heal_at = partition_heal_at
+        self._partition_healed = False
         self._byzantine_agents: set[AgentId] = set()
         self._partition_map: dict[AgentId, int] = {}
         self._failure_rng = random.Random(self._master_rng.randint(0, 2**63))
@@ -305,6 +308,22 @@ class Simulator:
 
             self._clock.advance_to(event.time)
             self._tick_count += 1
+
+            if (
+                self._partition_heal_at is not None
+                and not self._partition_healed
+                and self._tick_count >= self._partition_heal_at
+            ):
+                self._partition_map = {}
+                self._partition_healed = True
+                if self._trace:
+                    self._trace.record(
+                        {
+                            "ts": self._clock.now,
+                            "agent": "_simulator",
+                            "kind": "partition_healed",
+                        }
+                    )
 
             if event.kind == "start":
                 continue
