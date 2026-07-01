@@ -547,6 +547,31 @@ class AccessGrant(BaseModel):
     expires_at: float | None = None
 
 
+class FreshnessProof(BaseModel):
+    """Signed proof that a content-addressed dataset was (re)published at a given logical tick.
+
+    The ``signature`` covers a canonical serialization of the dataset URL and
+    logical tick, and must have been produced by the agent identified by
+    ``publisher``.
+    Proofs signed by anyone other than the dataset's declared owner are rejected
+    by ``CidFacts.verify_freshness``.
+
+    Example::
+
+        proof = FreshnessProof(
+            url=DataFactsUrl("df://sha256-abc123"),
+            publisher=AgentId("supplier-0"),
+            tick=3.0,
+            signature=Signature(signer=AgentId("supplier-0"), value=b"sig"),
+        )
+    """
+
+    url: DataFactsUrl
+    publisher: AgentId
+    tick: float
+    signature: Signature
+
+
 # ---------------------------------------------------------------------------
 # Transport capabilities
 # ---------------------------------------------------------------------------

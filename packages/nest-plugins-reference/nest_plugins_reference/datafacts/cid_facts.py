@@ -42,8 +42,13 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Any, cast
 
-from nest_core.types import AccessGrant, AgentId, DataFactsUrl, DatasetMetadata, Signature
-from pydantic import BaseModel
+from nest_core.types import (
+    AccessGrant,
+    AgentId,
+    DataFactsUrl,
+    DatasetMetadata,
+    FreshnessProof,
+)
 
 if TYPE_CHECKING:
     from nest_core.layers.identity import Identity
@@ -88,23 +93,6 @@ class SharedClock:
         """
         self.tick += 1.0
         return self.tick
-
-
-class FreshnessProof(BaseModel):
-    """A publisher-signed attestation that ``url`` was (re)published at ``tick``.
-
-    The signed payload is ``canonical_json({"url": url, "tick": tick})`` --
-    binding the proof to the content hash itself (not just to a name), per the
-    anti-pattern warning that a freshness proof must bind to *content*.
-
-    Example::
-
-        proof = FreshnessProof(url=url, tick=3.0, signature=sig)
-    """
-
-    url: DataFactsUrl
-    tick: float
-    signature: Signature
 
 
 def _freshness_payload(url: DataFactsUrl, tick: float) -> bytes:
@@ -218,7 +206,9 @@ class CidFacts:
 
         tick = self._clock.advance()
         signature = self._identity.sign(_freshness_payload(url, tick))
-        self._proofs[url] = FreshnessProof(url=url, tick=tick, signature=signature)
+        self._proofs[url] = FreshnessProof(
+            url=url, publisher=dataset.owner, tick=tick, signature=signature
+        )
         return url
 
     async def fetch(self, url: DataFactsUrl) -> DatasetMetadata:

@@ -14,10 +14,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from nest_core.layers.datafacts import DataFacts
 from nest_core.plugins import PluginRegistry
-from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
+from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata, FreshnessProof
 from nest_plugins_reference.datafacts.cid_facts import (
     CidFacts,
-    FreshnessProof,
     ProvenanceError,
     SharedClock,
     content_hash,
@@ -450,3 +449,111 @@ class TestRegistry:
 
     def test_listed_for_datafacts_layer(self) -> None:
         assert ("datafacts", "cid_facts") in PluginRegistry().list_plugins("datafacts")
+
+
+# ---------------------------------------------------------------------------
+# Focused FreshnessProof typed-model tests
+# (imported from nest_core.types — the canonical shared location)
+# ---------------------------------------------------------------------------
+
+
+class TestFreshnessProofModel:
+    """Verify the typed FreshnessProof fields and fail-closed behaviour.
+
+    All imports come from ``nest_core.types`` to confirm the model is a
+    first-class shared type, not a plugin-internal detail.
+    """
+
+    @pytest.mark.asyncio
+    async def test_proof_is_typed_model_not_dict(self) -> None:
+        """freshness_proof() must return a FreshnessProof instance, never a raw dict."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        facts = CidFacts(ident)
+        url = await facts.publish(DatasetMetadata(name="ds", owner=AgentId("a1")))
+        proof = facts.freshness_proof(url)
+        assert isinstance(proof, FreshnessProof)
+
+    @pytest.mark.asyncio
+    async def test_proof_url_matches_published_url(self) -> None:
+        """Proof url field must equal the content-addressed URL returned by publish()."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        facts = CidFacts(ident)
+        url = await facts.publish(DatasetMetadata(name="ds", owner=AgentId("a1")))
+        proof = facts.freshness_proof(url)
+        assert proof is not None
+        assert proof.url == url
+
+    @pytest.mark.asyncio
+    async def test_proof_publisher_matches_dataset_owner(self) -> None:
+        """Proof publisher field must equal the dataset's declared owner."""
+        owner = AgentId("supplier-0")
+        ident = DidKeyIdentity(owner, seed=b"seed")
+        facts = CidFacts(ident)
+        url = await facts.publish(DatasetMetadata(name="ds", owner=owner))
+        proof = facts.freshness_proof(url)
+        assert proof is not None
+        assert proof.publisher == owner
+
+    @pytest.mark.asyncio
+    async def test_proof_tick_is_deterministic_logical_clock(self) -> None:
+        """Tick must be a logical counter value, not a wall-clock timestamp.
+
+        SharedClock starts at 0.0 and advances by exactly 1.0 per publish call,
+        so after the first publish the tick must be exactly 1.0.
+        """
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        facts = CidFacts(ident)
+        url = await facts.publish(DatasetMetadata(name="ds", owner=AgentId("a1")))
+        proof = facts.freshness_proof(url)
+        assert proof is not None
+        assert proof.tick == 1.0  # first advance on a fresh SharedClock
+
+    @pytest.mark.asyncio
+    async def test_proof_ticks_are_monotonically_increasing(self) -> None:
+        """Each successive publish gets a strictly larger logical tick."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        facts = CidFacts(ident)
+        ticks: list[float] = []
+        for i in range(4):
+            url = await facts.publish(
+                DatasetMetadata(name=f"ds-{i}", owner=AgentId("a1"), description=str(i))
+            )
+            proof = facts.freshness_proof(url)
+            assert proof is not None
+            ticks.append(proof.tick)
+        assert ticks == sorted(ticks)
+        assert ticks == [1.0, 2.0, 3.0, 4.0]
+
+    @pytest.mark.asyncio
+    async def test_forged_signature_bytes_fail_verification(self) -> None:
+        """Corrupted signature bytes must make verify_freshness return False."""
+        from nest_core.types import Signature
+
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        facts = CidFacts(ident)
+        url = await facts.publish(DatasetMetadata(name="ds", owner=AgentId("a1")))
+        proof = facts.freshness_proof(url)
+        assert proof is not None
+
+        bad_sig = Signature(
+            signer=proof.signature.signer,
+            value=bytes(b ^ 0xFF for b in proof.signature.value),
+            algorithm=proof.signature.algorithm,
+        )
+        bad_proof = FreshnessProof(
+            url=proof.url,
+            publisher=proof.publisher,
+            tick=proof.tick,
+            signature=bad_sig,
+        )
+        facts._proofs[url] = bad_proof  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        assert await facts.verify_freshness(url) is False
+
+    @pytest.mark.asyncio
+    async def test_missing_proof_fails_verification(self) -> None:
+        """Absence of a stored proof must make verify_freshness return False."""
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        facts = CidFacts(ident)
+        url = await facts.publish(DatasetMetadata(name="ds", owner=AgentId("a1")))
+        del facts._proofs[url]  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        assert await facts.verify_freshness(url) is False
