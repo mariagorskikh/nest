@@ -754,6 +754,7 @@ class TestValidatorRegistry:
             "streaming_payments",
             "comms_versioning",
             "receipt_reputation",
+            "delegated_auth",
         }
         assert set(VALIDATORS.keys()) == expected
 

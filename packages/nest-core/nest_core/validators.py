@@ -1835,6 +1835,110 @@ def validate_receipt_reputation_honest_confidence(
 
 
 # ---------------------------------------------------------------------------
+# Delegatable auth validators
+# ---------------------------------------------------------------------------
+
+
+def _delegated_auth_lines(events: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith(("honest_leaf:", "attack:")):
+            lines.append(msg)
+    return lines
+
+
+def _delegated_auth_attack_outcomes(lines: list[str], attack: str) -> list[str]:
+    prefix = f"attack:{attack}:"
+    return [line.removeprefix(prefix) for line in lines if line.startswith(prefix)]
+
+
+def _validate_delegated_auth_attack(
+    events: list[dict[str, Any]],
+    *,
+    attack: str,
+    name: str,
+) -> list[ValidationResult]:
+    lines = _delegated_auth_lines(events)
+    honest_count = sum(
+        1 for line in lines if line.startswith("honest_leaf:") and line.endswith(":ok")
+    )
+    if honest_count < 12:
+        return [
+            ValidationResult(
+                name,
+                False,
+                f"expected 12 honest leaf verifies, saw {honest_count}",
+            )
+        ]
+
+    outcomes = _delegated_auth_attack_outcomes(lines, attack)
+    if not outcomes:
+        return [ValidationResult(name, False, f"missing {attack} attack line")]
+    if "accepted" in outcomes:
+        return [ValidationResult(name, False, f"{attack} attack accepted")]
+    if "blocked" not in outcomes:
+        return [ValidationResult(name, False, f"{attack} attack had outcomes {outcomes}")]
+    return [
+        ValidationResult(
+            name,
+            True,
+            f"{honest_count} honest leaves verified; {attack} attack blocked",
+        )
+    ]
+
+
+def validate_delegation_scope_containment(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Delegation must not broaden scopes beyond the parent token.
+
+    Example::
+
+        results = validate_delegation_scope_containment(events)
+    """
+    return _validate_delegated_auth_attack(
+        events,
+        attack="scope_escalation",
+        name="delegated_auth_scope_containment",
+    )
+
+
+def validate_no_stale_parent_verify(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A descendant must fail verification after any ancestor is revoked.
+
+    Example::
+
+        results = validate_no_stale_parent_verify(events)
+    """
+    return _validate_delegated_auth_attack(
+        events,
+        attack="stale_parent",
+        name="delegated_auth_no_stale_parent",
+    )
+
+
+def validate_audience_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A token minted for one audience must not verify for another presenter.
+
+    Example::
+
+        results = validate_audience_binding(events)
+    """
+    return _validate_delegated_auth_attack(
+        events,
+        attack="audience_confusion",
+        name="delegated_auth_audience_binding",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -1888,5 +1992,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "receipt_reputation": [
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
+    ],
+    "delegated_auth": [
+        validate_delegation_scope_containment,
+        validate_no_stale_parent_verify,
+        validate_audience_binding,
     ],
 }
