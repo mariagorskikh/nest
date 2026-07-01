@@ -189,7 +189,7 @@ class DelegatableAuth:
         }
         return Token(json.dumps(child_token))
 
-    async def verify(self, token: Token, presenter: AgentId) -> AuthContext:
+    async def verify(self, token: Token, presenter: AgentId | None = None) -> AuthContext:
         """Verify a token and return its verified context.
 
         Example::
@@ -286,7 +286,7 @@ class DelegatableAuth:
             last_scopes = cast("list[str]", data["scopes"])
             last_exp = cast("float", data["expires_at"])
 
-        if last_aud != str(presenter):
+        if presenter is not None and last_aud != str(presenter):
             msg = f"Audience confusion: token intended for {last_aud} but presented by {presenter}"
             raise ValueError(msg)
 

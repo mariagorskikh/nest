@@ -39,3 +39,4 @@ ci-local: ## Run the exact CI command sequence; hard-fail on the first red comma
 hooks: ## Install pre-commit hooks defined in .pre-commit-config.yaml.
 	uv run --with pre-commit pre-commit install
 	@echo "pre-commit hooks installed. Hooks will run automatically on 'git commit'."
+

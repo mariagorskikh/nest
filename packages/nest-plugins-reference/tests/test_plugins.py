@@ -205,7 +205,7 @@ class TestJwtAuth:
 
         auth = JwtAuth(secret=b"test-secret")
         token = await auth.issue(AgentId("a1"), ["read", "write"])
-        ctx = await auth.verify(token, AgentId("a1"))
+        ctx = await auth.verify(token)
         assert ctx.subject == AgentId("a1")
         assert ctx.scopes == ["read", "write"]
 
@@ -217,7 +217,7 @@ class TestJwtAuth:
         token = await auth.issue(AgentId("a1"), ["read"])
         await auth.revoke(token)
         with pytest.raises(ValueError, match="revoked"):
-            await auth.verify(token, AgentId("a1"))
+            await auth.verify(token)
 
     @pytest.mark.asyncio
     async def test_invalid_signature(self) -> None:
@@ -228,7 +228,7 @@ class TestJwtAuth:
 
         auth2 = JwtAuth(secret=b"secret2")
         with pytest.raises(ValueError, match="signature"):
-            await auth2.verify(token, AgentId("a1"))
+            await auth2.verify(token)
 
 
 # ---------------------------------------------------------------------------

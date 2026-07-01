@@ -60,7 +60,7 @@ class JwtAuth:
         sig = self._sign(payload)
         return Token(f"{payload}|{sig}")
 
-    async def verify(self, token: Token, presenter: AgentId) -> AuthContext:
+    async def verify(self, token: Token, presenter: AgentId | None = None) -> AuthContext:
         """Verify a token and return its context.
 
         Example::
@@ -90,7 +90,7 @@ class JwtAuth:
             raise ValueError(msg)
 
         subject = AgentId(data["sub"])
-        if subject != presenter:
+        if presenter is not None and subject != presenter:
             msg = f"Presenter {presenter} does not match token subject {subject}"
             raise ValueError(msg)
 

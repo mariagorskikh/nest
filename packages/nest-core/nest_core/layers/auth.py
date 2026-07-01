@@ -34,7 +34,7 @@ class Auth(Protocol):
         """
         ...
 
-    async def verify(self, token: Token, presenter: AgentId) -> AuthContext:
+    async def verify(self, token: Token, presenter: AgentId | None = None) -> AuthContext:
         """Verify a token and return its auth context.
 
         Example::

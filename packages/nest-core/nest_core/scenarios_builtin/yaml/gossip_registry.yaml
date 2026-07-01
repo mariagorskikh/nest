@@ -1,18 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Gossip registry scenario.
-#
-# 21 agents in two partition groups + one bridge:
-#   * peer_a-0..9 — partition group 0
-#   * peer_b-0..9 — partition group 1
-#   * bridge-0    — no group, can talk to both
-#
-# Without the bridge, no cross-group gossip can converge (simulator drops
-# all cross-partition transport).  With the bridge, anti-entropy
-# converges within K ≈ 10 rounds (theoretical log_F(N) ≈ 3, doubled for
-# 5% message drop, plus safety margin).
-#
-# Deterministic under seeds 42, 7, 1337 — the gossip plugin uses each
-# agent's seeded RNG for peer selection and never reads wall-clock time.
+# Gossip registry scenario (bundled copy for `nest run gossip_registry`).
 name: gossip_registry
 description: "21 agents, 2 partition groups + bridge, gossip-based registry."
 
