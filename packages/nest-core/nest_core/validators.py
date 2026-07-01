@@ -2835,6 +2835,16 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_provenance_freshness_unforgeable,
         validate_provenance_chain_unforgeable,
     ],
+    # The linear supply-chain scenario emits the same ``|``-delimited provenance
+    # wire protocol as the diamond, so it reuses the exact same validator set --
+    # the guarantees under test (substitution resistance, unforgeable freshness,
+    # unforgeable lineage) are plugin properties, independent of graph shape.
+    "provenance_supply_chain_linear": [
+        validate_provenance_chain_integrity,
+        validate_provenance_substitution_resistant,
+        validate_provenance_freshness_unforgeable,
+        validate_provenance_chain_unforgeable,
+    ],
     "bft_hotstuff": [
         validate_bft_no_conflicting_commits,
         validate_bft_no_equivocation,

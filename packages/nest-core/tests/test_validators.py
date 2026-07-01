@@ -926,6 +926,7 @@ class TestValidatorRegistry:
             "receipt_reputation",
             "multi_attribute_market",
             "provenance_supply_chain",
+            "provenance_supply_chain_linear",
             "bft_hotstuff",
             "escrow_marketplace",
         }
