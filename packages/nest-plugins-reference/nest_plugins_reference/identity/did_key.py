@@ -55,6 +55,25 @@ class DidKeyIdentity:
         self._known_keys[agent_id] = _decode_public_key(public_key)
 
     @property
+    def agent_id(self) -> AgentId:
+        """This agent's identifier.
+
+        Example::
+
+            aid = ident.agent_id
+        """
+        return self._agent_id
+
+    def has_peer_key(self, agent: AgentId) -> bool:
+        """Return ``True`` if the given agent's public key is registered.
+
+        Example::
+
+            ident.has_peer_key(AgentId("a2"))
+        """
+        return agent in self._known_keys
+
+    @property
     def public_key(self) -> bytes:
         """This agent's public key.
 

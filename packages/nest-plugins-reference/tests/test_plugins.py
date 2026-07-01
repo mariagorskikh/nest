@@ -140,6 +140,25 @@ class TestDidKeyIdentity:
         with pytest.raises(ValueError, match="public keys only"):
             ident.register_peer(AgentId("a2"), ident.public_key, private_key=b"secret")
 
+    def test_agent_id(self) -> None:
+        from nest_plugins_reference.identity.did_key import DidKeyIdentity
+
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        assert ident.agent_id == AgentId("a1")
+
+    def test_has_peer_key_self_and_unknown(self) -> None:
+        from nest_plugins_reference.identity.did_key import DidKeyIdentity
+
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed")
+        # Own key is registered at construction time.
+        assert ident.has_peer_key(AgentId("a1")) is True
+        # Peer key not yet registered → False.
+        assert ident.has_peer_key(AgentId("a2")) is False
+        # Register a peer, then True.
+        peer = DidKeyIdentity(AgentId("a2"), seed=b"seed2")
+        ident.register_peer(AgentId("a2"), peer.public_key)
+        assert ident.has_peer_key(AgentId("a2")) is True
+
     @pytest.mark.asyncio
     async def test_resolve(self) -> None:
         from nest_plugins_reference.identity.did_key import DidKeyIdentity
