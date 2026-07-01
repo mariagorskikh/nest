@@ -96,6 +96,42 @@ async def test_root_issue_clamps_to_manifest() -> None:
 
 
 @pytest.mark.asyncio
+async def test_root_issue_clamps_tool_spend_and_expose_scopes() -> None:
+    """Root issuance clamps all supported scope dimensions to the signed manifest."""
+    ident = _ident("a1")
+    signed = sign_manifest(
+        ident,
+        PolicyManifest(
+            agent_id=AgentId("a1"),
+            tools=["buy"],
+            data={"pii": ["seller-1"]},
+            budget=Budget(cap=500),
+        ),
+    )
+    auth = DelegatableAuth(
+        manifests={AgentId("a1"): signed},
+        identities={AgentId("a1"): ident},
+        clock=0.0,
+    )
+    token = await auth.issue(
+        AgentId("a1"),
+        [
+            "tool:buy",
+            "tool:admin",
+            "spend:250",
+            "spend:501",
+            "expose:pii:seller-1",
+            "expose:pii:seller-2",
+            "expose:secret:seller-1",
+            "expose:pii:",
+        ],
+    )
+
+    ctx = await auth.verify(token, presenter=AgentId("a1"))
+    assert ctx.scopes == ["tool:buy", "spend:250", "expose:pii:seller-1"]
+
+
+@pytest.mark.asyncio
 async def test_root_issue_no_manifest_gives_empty_scopes() -> None:
     """Subject with no manifest receives empty scopes (deny-all root)."""
     auth = DelegatableAuth(clock=0.0)
@@ -126,6 +162,25 @@ async def test_root_issue_tampered_manifest_gives_empty_scopes_when_identity_sup
     auth = DelegatableAuth(
         manifests={AgentId("a1"): tampered},
         identities={AgentId("a1"): ident},
+        clock=0.0,
+    )
+    token = await auth.issue(AgentId("a1"), ["tool:admin"])
+    ctx = await auth.verify(token)
+    assert ctx.scopes == []
+
+
+@pytest.mark.asyncio
+async def test_root_issue_forged_manifest_gives_empty_scopes_when_identity_supplied() -> None:
+    """A manifest signed by a different key for the same agent fails closed."""
+    attacker = _ident("a1", seed=b"attacker-key")
+    honest = _ident("a1")
+    forged = sign_manifest(
+        attacker,
+        PolicyManifest(agent_id=AgentId("a1"), tools=["admin"], budget=Budget(cap=1000)),
+    )
+    auth = DelegatableAuth(
+        manifests={AgentId("a1"): forged},
+        identities={AgentId("a1"): honest},
         clock=0.0,
     )
     token = await auth.issue(AgentId("a1"), ["tool:admin"])
@@ -377,6 +432,42 @@ async def test_registered_forged_child_rechecked_by_verify(forged_scopes: list[s
         await auth.verify(forged, presenter=AgentId("a2"))
 
 
+@pytest.mark.asyncio
+async def test_invalid_token_format_rejected() -> None:
+    """A token without the payload/signature separator is malformed."""
+    auth = DelegatableAuth(clock=0.0)
+    with pytest.raises(ValueError, match="invalid token format"):
+        await auth.verify(Token("not-a-token"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_token",
+    [
+        "not-json|sig",
+        "{}|sig",
+        "[]|sig",
+        '{"aud":"a1","chain":[],"exp":1,"iat":0,"scopes":[],"sub":"a2"}|sig',
+        '{"aud":"a1","chain":"root","exp":1,"iat":0,"scopes":[],"sub":"a1"}|sig',
+        '{"aud":"a1","chain":[],"exp":"never","iat":0,"scopes":[],"sub":"a1"}|sig',
+        '{"aud":"a1","chain":[],"exp":NaN,"iat":0,"scopes":[],"sub":"a1"}|sig',
+        '{"aud":"a1","chain":[],"exp":0,"iat":1,"scopes":[],"sub":"a1"}|sig',
+        '{"aud":"a1","chain":[],"exp":1,"iat":0,"scopes":"tool:buy","sub":"a1"}|sig',
+    ],
+)
+async def test_malformed_token_payload_rejected_fail_closed(raw_token: str) -> None:
+    """Malformed payloads raise ValueError before any authority is accepted."""
+    auth = DelegatableAuth(clock=0.0)
+    with pytest.raises(ValueError, match="invalid token payload"):
+        await auth.verify(Token(raw_token))
+
+
+def test_non_finite_injected_clock_rejected() -> None:
+    """Injected clocks must be finite so issued expiries stay meaningful."""
+    with pytest.raises(ValueError, match="clock must be finite"):
+        DelegatableAuth(clock=float("nan"))
+
+
 # ---------------------------------------------------------------------------
 # TTL enforcement
 # ---------------------------------------------------------------------------
@@ -394,6 +485,18 @@ async def test_ttl_exceeds_parent_raises() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ttl", [0.0, -1.0, float("nan"), float("inf")])
+async def test_invalid_ttl_rejected(ttl: float) -> None:
+    """TTL must be finite and positive; NaN must not become a never-expiring token."""
+    m = _manifest("a1", tools=["buy", "sell"])
+    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
+
+    with pytest.raises(ValueError, match="ttl must be a finite positive number"):
+        await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=ttl)
+
+
+@pytest.mark.asyncio
 async def test_ttl_at_parent_boundary_allowed() -> None:
     """TTL exactly equal to parent remaining lifetime is allowed (check is strict >).
 
@@ -407,6 +510,18 @@ async def test_ttl_at_parent_boundary_allowed() -> None:
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=3600)
     ctx = await auth.verify(child, presenter=AgentId("a2"))
     assert ctx.expires_at == pytest.approx(3600.0)
+
+
+@pytest.mark.asyncio
+async def test_expired_token_rejected_on_verify() -> None:
+    """A token cannot be verified after its exp timestamp."""
+    m = _manifest("a1")
+    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    root = await auth.issue(AgentId("a1"), ["tool:buy"])
+    auth.set_clock(3600.001)
+
+    with pytest.raises(ValueError, match="expired"):
+        await auth.verify(root, presenter=AgentId("a1"))
 
 
 # ---------------------------------------------------------------------------

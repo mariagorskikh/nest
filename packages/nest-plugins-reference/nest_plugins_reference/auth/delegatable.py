@@ -49,8 +49,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import time
 from collections.abc import Mapping
+from typing import cast
 
 from nest_core.types import AgentId, AuthContext, Token
 
@@ -142,6 +144,97 @@ def _hmac(key: bytes, msg: str) -> str:
     return hmac.new(key, msg.encode(), hashlib.sha256).hexdigest()
 
 
+def _finite_number(value: object, name: str) -> float:
+    """Return *value* as ``float`` if it is a finite number, else raise.
+
+    ``bool`` is rejected even though it is an ``int`` subclass, because reading
+    ``True`` as one second would make time validation surprising.
+
+    Example::
+
+        ttl = _finite_number(60, "ttl")
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f"{name} must be finite"
+        raise ValueError(msg)
+    result = float(value)
+    if not math.isfinite(result):
+        msg = f"{name} must be finite"
+        raise ValueError(msg)
+    return result
+
+
+def _payload_data(payload_json: str) -> dict[str, object]:
+    """Decode and shape-check a token payload, raising ``ValueError`` on failure.
+
+    This keeps verification fail-closed for malformed JSON, missing fields, or
+    wrong field types instead of leaking incidental ``KeyError``/``TypeError``
+    exceptions from deeper checks.
+
+    Example::
+
+        data = _payload_data('{"aud":"a1","chain":[],"exp":1,"iat":0,"scopes":[],"sub":"a1"}')
+    """
+    try:
+        raw_data: object = json.loads(payload_json)
+    except json.JSONDecodeError as exc:
+        msg = "invalid token payload"
+        raise ValueError(msg) from exc
+    if not isinstance(raw_data, dict):
+        msg = "invalid token payload"
+        raise ValueError(msg)
+    data = cast("dict[str, object]", raw_data)
+
+    missing = {"aud", "chain", "exp", "iat", "scopes", "sub"} - set(data)
+    if missing:
+        msg = f"invalid token payload: missing {sorted(missing)}"
+        raise ValueError(msg)
+
+    aud = data["aud"]
+    sub = data["sub"]
+    chain = data["chain"]
+    scopes = data["scopes"]
+    exp = data["exp"]
+    iat = data["iat"]
+    if not isinstance(aud, str) or not isinstance(sub, str):
+        msg = "invalid token payload: aud/sub must be strings"
+        raise ValueError(msg)
+    if aud != sub:
+        msg = "invalid token payload: aud/sub mismatch"
+        raise ValueError(msg)
+    if not isinstance(chain, list):
+        msg = "invalid token payload: chain must be a list of token ids"
+        raise ValueError(msg)
+    chain_items = cast("list[object]", chain)
+    if not all(isinstance(item, str) for item in chain_items):
+        msg = "invalid token payload: chain must be a list of token ids"
+        raise ValueError(msg)
+    if not isinstance(scopes, list):
+        msg = "invalid token payload: scopes must be a list of strings"
+        raise ValueError(msg)
+    scope_items = cast("list[object]", scopes)
+    if not all(isinstance(item, str) for item in scope_items):
+        msg = "invalid token payload: scopes must be a list of strings"
+        raise ValueError(msg)
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        msg = "invalid token payload: exp must be numeric"
+        raise ValueError(msg)
+    if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+        msg = "invalid token payload: iat must be numeric"
+        raise ValueError(msg)
+    try:
+        exp_value = _finite_number(exp, "exp")
+        iat_value = _finite_number(iat, "iat")
+    except ValueError as exc:
+        msg = "invalid token payload: exp/iat must be finite"
+        raise ValueError(msg) from exc
+    if exp_value < iat_value:
+        msg = "invalid token payload: exp before iat"
+        raise ValueError(msg)
+
+    return data
+
+
 # ---------------------------------------------------------------------------
 # DelegatableAuth
 # ---------------------------------------------------------------------------
@@ -179,7 +272,9 @@ class DelegatableAuth:
         self._manifests: dict[AgentId, PolicyManifest] = dict(manifests or {})
         self._identities: dict[AgentId, ManifestSigner] = dict(identities or {})
         self._secret = secret
-        self._clock = clock
+        self._clock: float | None = None
+        if clock is not None:
+            self.set_clock(clock)
         # token-id -> hex HMAC sig (needed for chain recomputation on verify)
         self._sigs: dict[str, str] = {}
         self._payloads: dict[str, str] = {}
@@ -192,7 +287,7 @@ class DelegatableAuth:
 
             auth.set_clock(4000.0)
         """
-        self._clock = t
+        self._clock = _finite_number(t, "clock")
 
     def _now(self) -> float:
         """Return the current time (injected clock or wall clock).
@@ -259,8 +354,12 @@ class DelegatableAuth:
             raise ValueError(msg)
         payload_json, sig = parts
 
-        data = json.loads(payload_json)
-        chain: list[str] = data["chain"]
+        data = _payload_data(payload_json)
+        chain = cast("list[str]", data["chain"])
+        scopes = cast("list[str]", data["scopes"])
+        exp = cast("float", data["exp"])
+        iat = cast("float", data["iat"])
+        aud = cast("str", data["aud"])
         tid = _tid(payload_json)
         stored_sig = self._sigs.get(tid)
         if stored_sig is None:
@@ -285,20 +384,23 @@ class DelegatableAuth:
             if parent_payload_json is None:
                 msg = f"unknown parent payload {parent_tid!r}"
                 raise ValueError(msg)
-            parent_data = json.loads(parent_payload_json)
-            expected_chain = parent_data["chain"] + [parent_tid]
+            parent_data = _payload_data(parent_payload_json)
+            parent_chain = cast("list[str]", parent_data["chain"])
+            parent_scopes = cast("list[str]", parent_data["scopes"])
+            parent_exp = cast("float", parent_data["exp"])
+            expected_chain = parent_chain + [parent_tid]
             if chain != expected_chain:
                 msg = "invalid delegation chain"
                 raise ValueError(msg)
-            child_scope_set = set(data["scopes"])
-            parent_scope_set = set(parent_data["scopes"])
-            offending = [s for s in data["scopes"] if s not in parent_scope_set]
+            child_scope_set = set(scopes)
+            parent_scope_set = set(parent_scopes)
+            offending = [s for s in scopes if s not in parent_scope_set]
             if offending:
                 raise ScopeEscalationError(offending)
             if not child_scope_set < parent_scope_set:
-                raise ScopeEscalationError(list(data["scopes"]))
-            if data["exp"] > parent_data["exp"]:
-                raise TtlExceededError(child_exp=data["exp"], parent_exp=parent_data["exp"])
+                raise ScopeEscalationError(list(scopes))
+            if exp > parent_exp:
+                raise TtlExceededError(child_exp=exp, parent_exp=parent_exp)
             expected_sig = _hmac(parent_sig.encode(), payload_json)
 
         if not hmac.compare_digest(sig, expected_sig):
@@ -306,7 +408,7 @@ class DelegatableAuth:
             raise ValueError(msg)
 
         # Expiry check
-        if data["exp"] < self._now():
+        if exp < self._now():
             msg = "token expired"
             raise ValueError(msg)
 
@@ -318,14 +420,14 @@ class DelegatableAuth:
                 raise RevokedAncestorError(ancestor_tid)
 
         # Audience check
-        if presenter is not None and str(presenter) != data["aud"]:
-            raise AudienceMismatchError(expected=data["aud"], got=str(presenter))
+        if presenter is not None and str(presenter) != aud:
+            raise AudienceMismatchError(expected=aud, got=str(presenter))
 
         return AuthContext(
-            subject=AgentId(data["aud"]),
-            scopes=data["scopes"],
-            issued_at=data["iat"],
-            expires_at=data["exp"],
+            subject=AgentId(aud),
+            scopes=scopes,
+            issued_at=iat,
+            expires_at=exp,
         )
 
     async def revoke(self, token: Token) -> None:
@@ -375,16 +477,25 @@ class DelegatableAuth:
 
             child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=60)
         """
+        try:
+            ttl_value = _finite_number(ttl, "ttl")
+        except ValueError as exc:
+            msg = "ttl must be a finite positive number"
+            raise ValueError(msg) from exc
+        if ttl_value <= 0:
+            msg = "ttl must be a finite positive number"
+            raise ValueError(msg)
+
         # Verify the parent (propagates revocation/expiry errors)
         await self.verify(parent_token)
 
         # Parse parent
         raw = str(parent_token)
         parent_payload_json = raw.rsplit("|", 1)[0]
-        parent_data = json.loads(parent_payload_json)
-        parent_scopes: list[str] = parent_data["scopes"]
-        parent_exp: float = parent_data["exp"]
-        parent_chain: list[str] = parent_data["chain"]
+        parent_data = _payload_data(parent_payload_json)
+        parent_scopes = cast("list[str]", parent_data["scopes"])
+        parent_exp = cast("float", parent_data["exp"])
+        parent_chain = cast("list[str]", parent_data["chain"])
         parent_tid = _tid(parent_payload_json)
 
         # Scope escalation check
@@ -398,7 +509,7 @@ class DelegatableAuth:
 
         # TTL check
         now = self._now()
-        child_exp = now + ttl
+        child_exp = now + ttl_value
         if child_exp > parent_exp:
             raise TtlExceededError(child_exp=child_exp, parent_exp=parent_exp)
 
