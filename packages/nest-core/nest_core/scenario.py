@@ -107,6 +107,7 @@ class FailureConfig(BaseModel):
     message_drop: float = 0.0
     byzantine_agents: float = 0.0
     network_partition: dict[str, Any] | None = None
+    partition_heal_at_tick: int | None = None
 
     @field_validator("message_drop", "byzantine_agents")
     @classmethod

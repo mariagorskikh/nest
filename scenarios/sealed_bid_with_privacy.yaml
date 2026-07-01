@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# Sealed-bid auction with a REAL privacy layer.
+#
+# Identical to the `auction` scenario except the privacy layer is the
+# `hybrid_x25519` plugin instead of `noop`. Where `noop` leaves every bid
+# readable on the wire, `hybrid_x25519` gives agents real hybrid encryption
+# (X25519 + ChaCha20-Poly1305) so a bid encrypted to the auctioneer is
+# unreadable to eavesdroppers and other bidders.
+#
+# This file wires the capability into a full simulator run (see
+# `tests/test_hybrid_x25519_scenario.py`, which boots it and asserts the layer
+# resolves to `HybridX25519Privacy` and the run is deterministic). The
+# sealed-bid *mechanics* — bidders sealing bids the auctioneer alone opens to
+# resolve a second-price winner — are demonstrated end-to-end in
+# `tests/test_hybrid_x25519.py::TestSealedBidWithPrivacy`.
+name: sealed_bid_with_privacy
+description: "1 auctioneer and 7 bidders; bids sealed via the hybrid_x25519 privacy layer."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 8
+  brain: state-machine
+  roles:
+    - name: auctioneer
+      count: 1
+    - name: bidder
+      count: 7
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: hybrid_x25519
+  datafacts: datafacts_v1
+
+task:
+  type: auction
+  config:
+    rounds: 3
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/sealed_bid_with_privacy.jsonl

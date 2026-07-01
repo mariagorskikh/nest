@@ -36,6 +36,12 @@ Repository = "https://github.com/projnanda/nandatown"
 [project.entry-points."nest.plugins.memory"]
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"
 
+[project.entry-points."nest.plugins.privacy"]
+hybrid_x25519 = "nest_plugins_reference.privacy.hybrid_x25519:HybridX25519Privacy"
+
+[project.entry-points."nest.plugins.datafacts"]
+cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
