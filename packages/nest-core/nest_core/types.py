@@ -531,6 +531,11 @@ class DatasetMetadata(BaseModel):
     checksum: str | None = None
     access_tier: str = "public"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # First-class provenance lineage: the dataset URL(s) this one was derived
+    # from. A typed, discoverable alternative to burying parents in the free-form
+    # ``metadata`` dict. Content-addressed DataFacts plugins fold these into the
+    # child's content hash, so the lineage DAG is tamper-evident. Empty = root.
+    parents: list[DataFactsUrl] = Field(default_factory=lambda: list[DataFactsUrl]())
 
 
 class AccessGrant(BaseModel):

@@ -142,12 +142,18 @@ def content_hash(dataset: DatasetMetadata) -> str:
 
 
 def parents_of(dataset: DatasetMetadata) -> list[DataFactsUrl]:
-    """Read the declared provenance parents out of ``dataset.metadata``.
+    """Read the declared provenance parents off a dataset.
+
+    Prefers the first-class, typed ``DatasetMetadata.parents`` field. Falls back
+    to the legacy ``metadata["parents"]`` dict entry for backward compatibility,
+    so datasets published either way resolve their lineage identically.
 
     Example::
 
         parents = parents_of(derived_dataset)
     """
+    if dataset.parents:
+        return list(dataset.parents)
     raw: object = dataset.metadata.get("parents", [])
     if not isinstance(raw, list):
         return []
