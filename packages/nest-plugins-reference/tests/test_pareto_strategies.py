@@ -438,7 +438,7 @@ class TestStrategyBehavior:
         d_i = bp.disagreement_utility
         beta = bp.beta
 
-        from nest_plugins_reference.negotiation.pareto import _opp_utility_hat
+        from nest_plugins_reference.negotiation.pareto import _opp_utility_hat  # pyright: ignore[reportPrivateUsage]
 
         opp_role = meta.get("opp_role", "")
         opp_n_count = meta.get("opp_n_count", 0)
@@ -484,8 +484,7 @@ class TestStrategyBehavior:
             p += 5
         if checks > 0:
             assert beaten == checks, (
-                f"Nash counter (p={cp},n={cn}) lost to {checks - beaten}/{checks} "
-                f"grid points"
+                f"Nash counter (p={cp},n={cn}) lost to {checks - beaten}/{checks} grid points"
             )
 
     @pytest.mark.asyncio

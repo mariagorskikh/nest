@@ -51,22 +51,6 @@ def _terms(p: int, n: int, q: float) -> Terms:
     return Terms(price=Money(amount=p), conditions={"quantity": n, "quality": q})
 
 
-def _terms2(price: int, deadline: int) -> Terms:
-    """Two-attribute terms helper for legacy property tests."""
-    return Terms(price=Money(amount=price), conditions={"deadline_days": deadline})
-
-
-def _pd(terms: Terms) -> tuple[int, int]:
-    price = terms.price.amount if terms.price is not None else 0
-    return price, int(terms.conditions.get("deadline_days", 0))
-
-
-def _dominates(ub_x: float, us_x: float, ub_y: float, us_y: float) -> bool:
-    """X dominates Y: no worse for either party, strictly better for one (eps-guarded)."""
-    no_worse = ub_x >= ub_y - _EPS and us_x >= us_y - _EPS
-    strictly_better = ub_x > ub_y + _EPS or us_x > us_y + _EPS
-    return no_worse and strictly_better
-
 
 # ---------------------------------------------------------------------------
 # 1. Determinism / replay
@@ -427,16 +411,6 @@ def _make_seller_legacy(cfg: _Cfg, max_rounds: int = 12) -> ParetoNegotiator:
     params.kappa = 1.0 - cfg.patience
     return ParetoNegotiator(AgentId("s"), params)
 
-
-def _make_buyer_legacy(cfg: _Cfg, max_rounds: int = 12) -> ParetoNegotiator:
-    params = ParetoParams.for_buyer(AgentId("b"), 7)
-    params.min_p = cfg.plo
-    params.max_p = cfg.phi
-    params.min_n = cfg.dlo
-    params.max_n = cfg.dhi
-    params.target_n = (cfg.dlo + cfg.dhi) // 2
-    params.kappa = 1.0 - cfg.patience
-    return ParetoNegotiator(AgentId("b"), params)
 
 
 @given(payload=_cfg_and_offers())
