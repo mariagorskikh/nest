@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# End-to-end ResonanceBFT consensus with SILENT (crashed/partitioned) agents, driven through
+# the town transport. n=7, f=2, quorum_needed = n-f = 5. Two followers never respond, so only
+# 5 of 7 sealed evaluations arrive — the round must still COMMIT at the n-f quorum, proving
+# fault tolerance through the real runner (not just the unit suite).
+name: resonance_bft_consensus_faulty
+description: |
+  ResonanceBFT commits at the n-f quorum despite 2 unresponsive agents (5 of 7 participate),
+  driven end-to-end over the in-memory transport.
+tier: 1
+seed: 42
+agents:
+  count: 7
+  brain: state-machine
+  roles:
+    - name: leader
+      count: 1
+    - name: follower
+      count: 6
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: resonance_bft
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+task:
+  type: resonance_bft_consensus
+  config:
+    expected_participants: 7
+    rounds: 1
+    embed: demo
+    silent: 2
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+duration: "ticks: 100000"
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+output:
+  trace: ./traces/resonance_bft_consensus_faulty.jsonl

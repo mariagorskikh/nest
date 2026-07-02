@@ -1,0 +1,19 @@
+# OPTIONAL dependencies for the semantic-axis embedding + stance benchmarks / demos.
+# These are NOT core dependencies of the resonance_bft plugin. The plugin's default
+# semantic axis is a zero-dependency bag-of-words vectoriser; dense embeddings are
+# injected at runtime via the `embed_fn` hook. None of these pull in PyTorch.
+
+# RECOMMENDED real encoder: contextual (attention) sentence embeddings via ONNX
+# Runtime. This is the encoder that makes the semantic axis paraphrase-robust AND
+# the antonym-anchored stance audit fire end-to-end (see BENCHMARKS.md).
+fastembed>=0.3
+
+# Ultra-light alternative: static embeddings, numpy only (~8 MB). No attention at
+# inference (averaged distilled token vectors), so it is weak at stance — documented.
+model2vec>=0.3
+
+# HIGH-ACCURACY stance tier: a no-torch ONNX NLI cross-encoder
+# (Xenova/nli-deberta-v3-small). Reads two utterances jointly with cross-attention;
+# decisively beats the single-vector probe on hard stance (negation / implicit /
+# off-axis). Used by nli_vs_probe.py. fastembed already brings onnxruntime+tokenizers.
+huggingface_hub>=0.20

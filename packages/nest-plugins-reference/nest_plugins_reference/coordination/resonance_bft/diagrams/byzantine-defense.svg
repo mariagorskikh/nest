@@ -1,0 +1,35 @@
+<svg width="680" viewBox="0 0 680 306" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Byzantine defense-in-depth: five attack modes each met by a specific defense and guarantee — sealed commitments, trimmed mean, reputation dampening, equivocation certificate, and the n minus f floor</title>
+<desc>A matrix of five Byzantine attacks, each with its defense and guarantee. Tamper a sealed value is caught by SHA-256 seal and signature (excluded). Colluding biased vectors are handled by the trimmed mean (box validity). A newcomer grabbing the centroid is stopped by reputation dampening. Equivocation yields a transferable conflict certificate. Overwhelming with more than f faults causes a safe abort.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.hd{font-size:12px;font-weight:500}.att{fill:#faeeda;stroke:#ba7517}.def{fill:#e6f1fb;stroke:#378add}.gua{fill:#eaf3de;stroke:#639922}
+.att-t{fill:#854f0b}.def-t{fill:#185fa5}.gua-t{fill:#3b6d11}.ln{stroke:#8b949e;stroke-width:1.4;fill:none}
+@media (prefers-color-scheme:dark){.th{fill:#e6edf3}.ts{fill:#9aa5b1}.att{fill:#3a2a0a;stroke:#ba7517}.def{fill:#0d2237;stroke:#378add}.gua{fill:#1f2e10;stroke:#639922}.att-t{fill:#ef9f27}.def-t{fill:#85b7eb}.gua-t{fill:#97c459}}
+</style>
+<text class="th" x="40" y="24">Byzantine defense-in-depth — each attack meets a specific guarantee</text>
+<text class="att-t hd" x="142" y="48" text-anchor="middle">attack</text><text class="def-t hd" x="340" y="48" text-anchor="middle">defense</text><text class="gua-t hd" x="538" y="48" text-anchor="middle">guarantee</text>
+<rect class="att" x="44" y="58" width="196" height="34" rx="8"/><text class="ts" x="142" y="79" text-anchor="middle">tamper a sealed value</text>
+<rect class="def" x="252" y="58" width="176" height="34" rx="8"/><text class="ts" x="340" y="79" text-anchor="middle">SHA-256 seal + signature</text>
+<rect class="gua" x="440" y="58" width="196" height="34" rx="8"/><text class="ts" x="538" y="79" text-anchor="middle">detected → excluded</text>
+<path class="ln" d="M240 75 h12" marker-end="url(#a)"/><path class="ln" d="M428 75 h12" marker-end="url(#a)"/>
+<rect class="att" x="44" y="100" width="196" height="34" rx="8"/><text class="ts" x="142" y="121" text-anchor="middle">collude: biased vectors</text>
+<rect class="def" x="252" y="100" width="176" height="34" rx="8"/><text class="ts" x="340" y="121" text-anchor="middle">trimmed-mean centroid</text>
+<rect class="gua" x="440" y="100" width="196" height="34" rx="8"/><text class="ts" x="538" y="121" text-anchor="middle">box validity — centroid unmoved</text>
+<path class="ln" d="M240 117 h12" marker-end="url(#a)"/><path class="ln" d="M428 117 h12" marker-end="url(#a)"/>
+<rect class="att" x="44" y="142" width="196" height="34" rx="8"/><text class="ts" x="142" y="163" text-anchor="middle">newcomer grabs the centroid</text>
+<rect class="def" x="252" y="142" width="176" height="34" rx="8"/><text class="ts" x="340" y="163" text-anchor="middle">reputation dampening</text>
+<rect class="gua" x="440" y="142" width="196" height="34" rx="8"/><text class="ts" x="538" y="163" text-anchor="middle">newcomer weight ≪ veteran</text>
+<path class="ln" d="M240 159 h12" marker-end="url(#a)"/><path class="ln" d="M428 159 h12" marker-end="url(#a)"/>
+<rect class="att" x="44" y="184" width="196" height="34" rx="8"/><text class="ts" x="142" y="205" text-anchor="middle">equivocate: 2 conflicting</text>
+<rect class="def" x="252" y="184" width="176" height="34" rx="8"/><text class="ts" x="340" y="205" text-anchor="middle">conflict certificate</text>
+<rect class="gua" x="440" y="184" width="196" height="34" rx="8"/><text class="ts" x="538" y="205" text-anchor="middle">transferable third-party proof</text>
+<path class="ln" d="M240 201 h12" marker-end="url(#a)"/><path class="ln" d="M428 201 h12" marker-end="url(#a)"/>
+<rect class="att" x="44" y="226" width="196" height="34" rx="8"/><text class="ts" x="142" y="247" text-anchor="middle">overwhelm: &gt; f faults</text>
+<rect class="def" x="252" y="226" width="176" height="34" rx="8"/><text class="ts" x="340" y="247" text-anchor="middle">n − f quorum can't form</text>
+<rect class="gua" x="440" y="226" width="196" height="34" rx="8"/><text class="ts" x="538" y="247" text-anchor="middle">safe abort (no bad commit)</text>
+<path class="ln" d="M240 243 h12" marker-end="url(#a)"/><path class="ln" d="M428 243 h12" marker-end="url(#a)"/>
+<text class="ts" x="40" y="284">Safety never rests on one mechanism — a Byzantine minority is stopped at whichever layer it attacks.</text>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#8b949e" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+</svg>

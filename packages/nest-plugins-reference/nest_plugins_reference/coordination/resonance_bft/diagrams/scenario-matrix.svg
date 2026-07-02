@@ -1,0 +1,24 @@
+<svg width="680" viewBox="0 0 680 340" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Scenario outcome matrix: five town scenarios across four models all reach their designed outcome — commits where expected, byzantine tampered equals 2, partition never commits</title>
+<desc>A grid of five scenarios by four models. Genuine, silent-crash, byzantine and bag-of-words all commit on every model; byzantine shows tampered=2; partition never commits. The outcome is the same across models — model-agnostic.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}.t{font-size:14px;fill:#1f2328}
+.ok{fill:#eaf3de;stroke:#639922}.no{fill:#f6f8fa;stroke:#d0d7de}.gt{fill:#3b6d11}
+@media (prefers-color-scheme:dark){.th,.t{fill:#e6edf3}.ts{fill:#9aa5b1}.ok{fill:#1f2e10;stroke:#639922}.no{fill:#161b22;stroke:#30363d}.gt{fill:#97c459}}
+</style>
+<text class="th" x="40" y="26">Scenario × model — same outcome on every model (model-agnostic)</text>
+<text class="ts" x="256" y="64" text-anchor="middle">mock</text><text class="ts" x="350" y="64" text-anchor="middle">claude</text><text class="ts" x="444" y="64" text-anchor="middle">codex</text><text class="ts" x="538" y="64" text-anchor="middle">agy</text>
+<text class="ts" x="196" y="93" text-anchor="end">genuine (12)</text>
+<rect class="ok" x="212" y="74" width="88" height="32" rx="6"/><text class="gt" x="256" y="94" text-anchor="middle">✓</text><rect class="ok" x="306" y="74" width="88" height="32" rx="6"/><text class="gt" x="350" y="94" text-anchor="middle">✓</text><rect class="ok" x="400" y="74" width="88" height="32" rx="6"/><text class="gt" x="444" y="94" text-anchor="middle">✓</text><rect class="ok" x="494" y="74" width="88" height="32" rx="6"/><text class="gt" x="538" y="94" text-anchor="middle">✓</text>
+<text class="ts" x="196" y="131" text-anchor="end">silent-crash</text>
+<rect class="ok" x="212" y="112" width="88" height="32" rx="6"/><text class="gt" x="256" y="132" text-anchor="middle">✓</text><rect class="ok" x="306" y="112" width="88" height="32" rx="6"/><text class="gt" x="350" y="132" text-anchor="middle">✓</text><rect class="ok" x="400" y="112" width="88" height="32" rx="6"/><text class="gt" x="444" y="132" text-anchor="middle">✓</text><rect class="ok" x="494" y="112" width="88" height="32" rx="6"/><text class="gt" x="538" y="132" text-anchor="middle">✓</text>
+<text class="ts" x="196" y="169" text-anchor="end">byzantine (2/10)</text>
+<rect class="ok" x="212" y="150" width="88" height="32" rx="6"/><text class="gt" x="256" y="170" text-anchor="middle">✓ t=2</text><rect class="ok" x="306" y="150" width="88" height="32" rx="6"/><text class="gt" x="350" y="170" text-anchor="middle">✓ t=2</text><rect class="ok" x="400" y="150" width="88" height="32" rx="6"/><text class="gt" x="444" y="170" text-anchor="middle">✓ t=2</text><rect class="ok" x="494" y="150" width="88" height="32" rx="6"/><text class="gt" x="538" y="170" text-anchor="middle">✓ t=2</text>
+<text class="ts" x="196" y="207" text-anchor="end">partition (4/3)</text>
+<rect class="no" x="212" y="188" width="88" height="32" rx="6"/><text class="ts" x="256" y="208" text-anchor="middle">no commit</text><rect class="no" x="306" y="188" width="88" height="32" rx="6"/><text class="ts" x="350" y="208" text-anchor="middle">no commit</text><rect class="no" x="400" y="188" width="88" height="32" rx="6"/><text class="ts" x="444" y="208" text-anchor="middle">no commit</text><rect class="no" x="494" y="188" width="88" height="32" rx="6"/><text class="ts" x="538" y="208" text-anchor="middle">no commit</text>
+<text class="ts" x="196" y="245" text-anchor="end">bag-of-words</text>
+<rect class="ok" x="212" y="226" width="88" height="32" rx="6"/><text class="gt" x="256" y="246" text-anchor="middle">✓</text><rect class="ok" x="306" y="226" width="88" height="32" rx="6"/><text class="gt" x="350" y="246" text-anchor="middle">✓</text><rect class="ok" x="400" y="226" width="88" height="32" rx="6"/><text class="gt" x="444" y="246" text-anchor="middle">✓</text><rect class="ok" x="494" y="226" width="88" height="32" rx="6"/><text class="gt" x="538" y="246" text-anchor="middle">✓</text>
+<text class="ts" x="40" y="288">Every quorum-slack case commits identically across models; byzantine detects+excludes (tampered=2); partition safely never commits.</text>
+<text class="ts" x="40" y="306">At the zero-slack quorum floor (silent-crash), commit rate is agy 10/10 · claude 9/10 · codex 9/10 — the ~1-in-10 no-commit is safe.</text>
+</svg>

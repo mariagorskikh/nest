@@ -1,0 +1,34 @@
+<svg width="680" viewBox="0 0 680 386" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>One agent across the rounds, split into cold-start, converging and consensus phases: opinion and trust in the top panel, a slow learned weight in its own strip, and evidence-delta signed per round</title>
+<desc>Time-series for one agent over twelve rounds with three coloured phase bands (cold-start, converging, consensus). Top panel: opinion converges and trust rises after a shielded grace start with a view-change dip. Middle strip: a slow learned weight hesitates then warms up. Bottom strip: evidence-delta signed per round.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.tsm{font-size:11px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.ph1{fill:#f5efe2}.ph2{fill:#eeecfa}.ph3{fill:#ecf4e3}
+.axis{stroke:#8b949e;stroke-width:1.2}.op{fill:none;stroke:#2f6feb;stroke-width:2.5}.tr{fill:none;stroke:#1d9e75;stroke-width:2.5}.wt{fill:none;stroke:#b8730f;stroke-width:2.5;stroke-dasharray:6 3}
+.vc{stroke:#8250df;stroke-width:1.4;stroke-dasharray:5 3}.pt{fill:#2f6feb}.trp{fill:#1d9e75}.wtp{fill:#b8730f}.up{fill:#2f6feb}.dn{fill:#b8730f}.zero{stroke:#b8c1cc;stroke-width:1}.vt{fill:#6639ba;font-size:11px}
+.p1t{fill:#7a5a12}.p2t{fill:#5a3aa8}.p3t{fill:#3b6d11}
+@media (prefers-color-scheme:dark){.th{fill:#e6edf3}.ts,.tsm{fill:#9aa5b1}.axis{stroke:#6e7681}.zero{stroke:#3a434d}.vt{fill:#b899f0}
+.ph1{fill:#2a2620}.ph2{fill:#1e1b2e}.ph3{fill:#1c2a15}.p1t{fill:#e0b866}.p2t{fill:#b899f0}.p3t{fill:#97c459}}
+</style>
+<text class="th" x="40" y="20">One agent across the rounds — phases of its consensus lifecycle</text>
+<rect class="ph1" x="80" y="42" width="122" height="272"/><rect class="ph2" x="202" y="42" width="180" height="272"/><rect class="ph3" x="382" y="42" width="220" height="272"/>
+<text class="p1t" x="141" y="36" text-anchor="middle" font-size="12">cold-start</text><text class="p2t" x="292" y="36" text-anchor="middle" font-size="12">converging</text><text class="p3t" x="492" y="36" text-anchor="middle" font-size="12">consensus</text>
+<line class="vc" x1="270" y1="42" x2="270" y2="314"/>
+<line class="axis" x1="80" y1="196" x2="602" y2="196"/>
+<polyline class="tr" points="90,117 135,117 180,117 225,113 270,124 315,110 360,101 405,95 450,91 495,89 540,88 585,87"/>
+<circle class="trp" cx="270" cy="124" r="4"/>
+<polyline class="op" points="90,64 135,75 180,91 225,113 270,104 315,133 360,153 405,167 450,177 495,182 540,183 585,185"/>
+<circle class="pt" cx="90" cy="64" r="4"/><circle class="pt" cx="585" cy="185" r="4"/>
+<text class="tsm" x="86" y="58" text-anchor="start">opinion ↓ · trust ↑</text>
+<line class="axis" x1="80" y1="262" x2="602" y2="262"/>
+<polyline class="wt" points="90,255 135,256 180,258 225,255 270,248 315,239 360,230 405,225 450,222 495,225 540,222 585,220"/>
+<circle class="wtp" cx="180" cy="258" r="4"/><circle class="wtp" cx="585" cy="220" r="4"/>
+<text class="tsm" x="86" y="216" text-anchor="start">learned weight (slow)</text>
+<line class="zero" x1="80" y1="300" x2="602" y2="300"/><text class="tsm" x="86" y="278" text-anchor="start">evidence-δ · + persuade / − pressure</text>
+<rect class="up" x="85" y="288" width="10" height="12"/><rect class="up" x="130" y="290" width="10" height="10"/><rect class="dn" x="175" y="300" width="10" height="8"/><rect class="up" x="220" y="292" width="10" height="8"/><rect class="dn" x="265" y="300" width="10" height="10"/><rect class="up" x="310" y="288" width="10" height="12"/><rect class="up" x="355" y="286" width="10" height="14"/><rect class="up" x="400" y="288" width="10" height="12"/><rect class="up" x="445" y="290" width="10" height="10"/><rect class="up" x="490" y="292" width="10" height="8"/><rect class="up" x="535" y="292" width="10" height="8"/><rect class="up" x="580" y="294" width="10" height="6"/>
+<text class="ts" x="90" y="330" text-anchor="middle">1</text><text class="ts" x="225" y="330" text-anchor="middle">4</text><text class="ts" x="405" y="330" text-anchor="middle">8</text><text class="ts" x="585" y="330" text-anchor="middle">12</text><text class="tsm" x="610" y="326" text-anchor="start">round</text>
+<text class="vt" x="270" y="348" text-anchor="middle">view-change → new leader</text>
+<circle class="pt" cx="150" cy="372" r="5"/><text class="ts" x="160" y="376">opinion → consensus</text>
+<circle class="trp" cx="360" cy="372" r="5"/><text class="ts" x="370" y="376">trust: grace → earned</text>
+</svg>

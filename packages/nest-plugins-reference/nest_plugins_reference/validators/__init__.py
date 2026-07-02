@@ -16,6 +16,18 @@ Example::
 
 from __future__ import annotations
 
+from nest_plugins_reference.validators.bft_validators import (
+    BftValidationResult,
+    build_equivocation_certificate,
+    collect_equivocation_certificates,
+    validate_bft_liveness_view_progress,
+    validate_bft_no_conflicting_commits,
+    validate_bft_no_equivocation,
+    validate_bft_no_forged_quorum,
+    validate_genuine_consensus,
+    validate_no_axis_deadlock,
+    verify_equivocation_certificate,
+)
 from nest_plugins_reference.validators.gossip_validators import (
     ConvergenceFailureError,
     PartitionLeakError,
@@ -32,14 +44,24 @@ from nest_plugins_reference.validators.privacy_validators import (
 )
 
 __all__ = [
+    "BftValidationResult",
     "ConvergenceFailureError",
     "PartitionLeakError",
     "ValidatorReport",
+    "build_equivocation_certificate",
     "check_converged",
     "check_eavesdropper_blocked",
     "check_field_injection_rejected",
     "check_no_partition_view_leak",
     "check_replay_rejected",
     "check_stale_revocation_blocked",
+    "collect_equivocation_certificates",
     "corrupt_proof",
+    "validate_bft_liveness_view_progress",
+    "validate_bft_no_conflicting_commits",
+    "validate_bft_no_equivocation",
+    "validate_bft_no_forged_quorum",
+    "validate_genuine_consensus",
+    "validate_no_axis_deadlock",
+    "verify_equivocation_certificate",
 ]

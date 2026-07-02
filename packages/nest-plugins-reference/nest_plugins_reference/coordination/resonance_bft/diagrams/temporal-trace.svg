@@ -1,0 +1,31 @@
+<svg width="680" viewBox="0 0 680 322" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Temporal trace tracking: an LSTM-like classifier reads the sequence of five-dimensional belief states over rounds to name the trajectory type</title>
+<desc>At each round an agent's five-axis belief state is captured; the states form a trajectory that converges over rounds; a classifier reads the whole sequence and outputs a trajectory type such as genuine.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.t{font-size:14px;fill:#1f2328}.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.card{fill:#f6f8fa;stroke:#d0d7de}.bar{fill:#2f6feb}.ln{stroke:#8b949e;stroke-width:1.5;fill:none}
+.cls{fill:#e6f1fb;stroke:#378add}.badge{fill:#eaf3de;stroke:#639922}.bt{fill:#3b6d11}.ab{fill:#185fa5}
+@media (prefers-color-scheme:dark){.t,.th{fill:#e6edf3}.ts{fill:#9aa5b1}.ab{fill:#85b7eb}.card{fill:#161b22;stroke:#30363d}.cls{fill:#0d2237;stroke:#378add}.badge{fill:#1f2e10;stroke:#639922}.bt{fill:#97c459}}
+</style>
+<text class="th" x="40" y="28">Temporal trace tracking — reading a belief trajectory over rounds</text>
+<text class="ts" x="40" y="48">each round captures the 5-axis state; the sequence (not just the last) names the trajectory</text>
+<rect class="card" x="44" y="70" width="108" height="98" rx="10"/><text class="ts" x="54" y="90">round 1</text>
+<rect class="bar" x="58" y="148" width="8" height="8" rx="2"/><rect class="bar" x="73" y="126" width="8" height="30" rx="2"/><rect class="bar" x="88" y="142" width="8" height="14" rx="2"/><rect class="bar" x="103" y="130" width="8" height="26" rx="2"/><rect class="bar" x="118" y="144" width="8" height="12" rx="2"/>
+<rect class="card" x="168" y="70" width="108" height="98" rx="10"/><text class="ts" x="178" y="90">round 2</text>
+<rect class="bar" x="182" y="142" width="8" height="14" rx="2"/><rect class="bar" x="197" y="130" width="8" height="26" rx="2"/><rect class="bar" x="212" y="138" width="8" height="18" rx="2"/><rect class="bar" x="227" y="132" width="8" height="24" rx="2"/><rect class="bar" x="242" y="140" width="8" height="16" rx="2"/>
+<rect class="card" x="292" y="70" width="108" height="98" rx="10"/><text class="ts" x="302" y="90">round 3</text>
+<rect class="bar" x="306" y="138" width="8" height="18" rx="2"/><rect class="bar" x="321" y="132" width="8" height="24" rx="2"/><rect class="bar" x="336" y="136" width="8" height="20" rx="2"/><rect class="bar" x="351" y="133" width="8" height="23" rx="2"/><rect class="bar" x="366" y="137" width="8" height="19" rx="2"/>
+<rect class="card" x="416" y="70" width="108" height="98" rx="10"/><text class="ts" x="426" y="90">round 4</text>
+<rect class="bar" x="430" y="135" width="8" height="21" rx="2"/><rect class="bar" x="445" y="133" width="8" height="23" rx="2"/><rect class="bar" x="460" y="134" width="8" height="22" rx="2"/><rect class="bar" x="475" y="133" width="8" height="23" rx="2"/><rect class="bar" x="490" y="134" width="8" height="22" rx="2"/>
+<path class="ln" d="M152 100 h16" marker-end="url(#a)"/><path class="ln" d="M276 100 h16" marker-end="url(#a)"/><path class="ln" d="M400 100 h16" marker-end="url(#a)"/>
+<text class="ab" x="338" y="62" text-anchor="middle">opinion diameter contracts → converging</text>
+<path class="ln" d="M98 168 v26" marker-end="url(#a)"/><path class="ln" d="M222 168 v26" marker-end="url(#a)"/><path class="ln" d="M346 168 v26" marker-end="url(#a)"/><path class="ln" d="M470 168 v26" marker-end="url(#a)"/>
+<rect class="cls" x="44" y="196" width="480" height="44" rx="10"/>
+<text class="t" x="284" y="222" text-anchor="middle">trajectory classifier · velocity · concession · evidence-δ</text>
+<path class="ln" d="M524 218 h20" marker-end="url(#a)"/>
+<rect class="badge" x="548" y="196" width="92" height="44" rx="10"/><text class="bt" x="594" y="222" text-anchor="middle" font-size="14">genuine</text>
+<text class="ts" x="40" y="278">Reads the SEQUENCE of 5-D states over rounds — not just the last — to tell real agreement from</text>
+<text class="ts" x="40" y="296">social pressure: one of 9 types (genuine · capitulated · coerced · coalitional · …).</text>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+</svg>

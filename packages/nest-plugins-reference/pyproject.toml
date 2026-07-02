@@ -33,6 +33,9 @@ Repository = "https://github.com/projnanda/nandatown"
 # package. The PluginRegistry also keeps built-in defaults keyed by
 # (layer, name), but declaring the entry point here is the documented,
 # install-time discovery path described in CONTRIBUTING.md.
+[project.entry-points."nest.plugins.coordination"]
+resonance_bft = "nest_plugins_reference.coordination.resonance_bft:ResonanceBFT"
+
 [project.entry-points."nest.plugins.memory"]
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"
 

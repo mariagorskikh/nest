@@ -1,0 +1,22 @@
+<svg width="680" viewBox="0 0 680 321" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Test pyramid: 321 plugin tests across unit and property, Byzantine validators, end-to-end town runs, and one live real-LLM test</title>
+<desc>A test pyramid. Base: 262 unit and Hypothesis property tests. Then 51 Byzantine-validator tests. Then 8 end-to-end town runs. Apex: 1 live real-LLM test excluded from CI. Total 321 plugin tests, 1057 whole-repo.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}.t{font-size:14px;fill:#1f2328}
+.b1{fill:#2f6feb;fill-opacity:0.12;stroke:#378add}.b2{fill:#2f6feb;fill-opacity:0.2;stroke:#378add}.b3{fill:#2f6feb;fill-opacity:0.3;stroke:#378add}.b4{fill:#2f6feb;fill-opacity:0.42;stroke:#378add}
+.lead{stroke:#8b949e;stroke-width:1;fill:none}
+@media (prefers-color-scheme:dark){.th,.t{fill:#e6edf3}.ts{fill:#9aa5b1}}
+</style>
+<text class="th" x="40" y="28">Test pyramid — 321 plugin tests (1057 whole-repo · pyright 0 · ruff clean)</text>
+<polygon class="b1" points="340,60 385,108 295,108"/>
+<polygon class="b2" points="295,108 385,108 431,156 249,156"/>
+<polygon class="b3" points="249,156 431,156 476,204 204,204"/>
+<polygon class="b4" points="204,204 476,204 520,252 160,252"/>
+<line class="lead" x1="360" y1="84" x2="470" y2="84"/><text class="t" x="476" y="80" text-anchor="start">live real-LLM · 1</text><text class="ts" x="476" y="96" text-anchor="start">(excluded from CI)</text>
+<text class="t" x="340" y="138" text-anchor="middle">e2e town runs · 8</text>
+<text class="t" x="340" y="186" text-anchor="middle">Byzantine validators · 51</text>
+<text class="t" x="340" y="228" text-anchor="middle">unit + property · 262</text>
+<text class="ts" x="40" y="288">Base = deterministic unit + Hypothesis property tests (quorum intersection, weight simplex, ε-bounds, partition safety);</text>
+<text class="ts" x="40" y="306">apex = a real-LLM town run, live-marked so it never gates CI. Every layer runs the same ResonanceBFT protocol.</text>
+</svg>

@@ -1,0 +1,5 @@
+# Per-run timestamped evidence reports (kept locally, not committed)
+EVIDENCE_LARGE_*.md
+EVIDENCE_LARGE_*.json
+EVIDENCE_2*.md
+EVIDENCE_2*.json

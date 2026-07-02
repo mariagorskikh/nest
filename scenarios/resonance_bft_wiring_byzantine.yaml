@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# SCOPE (honest): task.type is `consensus`, the framework's BUILT-IN leader/follower vote —
+# this exercises LAYER WIRING / lifecycle with ResonanceBFT resolved as the coordination
+# plugin; it does NOT drive the ResonanceBFT protocol. The Byzantine-tolerance PROPERTY is
+# verified by the unit suite (TestByzantine / TestTamperedExceedsF / TestTrimmedCentroid). For
+# a run that actually drives the protocol, use `resonance_bft_consensus.yaml`.
+#
+# ResonanceBFT under Byzantine fault injection.
+# 7 agents (f=2, quorum_needed=5).  2 Byzantine agents (~28 %) submit
+# adversarial evaluations; protocol must still commit via the honest majority.
+# The sealed-commitment mechanism prevents Byzantine agents from pivoting
+# after seeing honest evaluations; time-decayed trust degrades their weight
+# across successive rounds.
+
+name: resonance_bft_wiring_byzantine
+description: |
+  ResonanceBFT consensus with 2 Byzantine agents out of 7 (f=2).  Honest
+  majority (5 agents) must reach quorum_needed=5 and commit; Byzantine
+  agents are classified as outliers and their reputation decays across rounds.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 7
+  brain: state-machine
+  roles:
+    - name: leader
+      count: 1
+    - name: follower
+      count: 6
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: resonance_bft
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: consensus
+  config:
+    rounds: 5
+    quorum: 0.667
+    # Fixed cluster membership (n=7) for quorum_needed = n-f, independent of how
+    # many evaluations arrive — see ResonanceBFT.resolve()/expected_participants.
+    expected_participants: 7
+
+failures:
+  message_drop: 0.0
+  network_partition: null
+  byzantine_agents: 0.28
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/bft_consensus_byzantine.jsonl

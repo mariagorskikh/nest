@@ -1,0 +1,36 @@
+<svg width="680" viewBox="0 0 680 330" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Contrast: classic BFT agrees on one value, ResonanceBFT agrees on a five-axis belief point plus audit and adapt layers</title>
+<desc>Left: classic BFT, several agents converge on one scalar value. Right: ResonanceBFT, agents agree on a point in a five-axis pentadic belief space, with L2 audit and L3 adapt layers, keeping the same n-f safety.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.t{font-size:14px;fill:#1f2328}.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.panel{fill:#f6f8fa;stroke:#d0d7de}.val{fill:#2f6feb}.dot{fill:#8b949e}.ln{stroke:#8b949e;stroke-width:1.4;fill:none}
+.penta{fill:#e6f1fb;stroke:#378add}.spoke{stroke:#85b7eb;stroke-width:1.2}.badge{fill:#faeeda;stroke:#ba7517}.bar{fill:#eef2f6;stroke:#d0d7de}
+@media (prefers-color-scheme:dark){.t,.th{fill:#e6edf3}.ts{fill:#9aa5b1}
+.panel{fill:#161b22;stroke:#30363d}.penta{fill:#0d2237;stroke:#378add}.badge{fill:#3a2a0a;stroke:#ba7517}.bar{fill:#161b22;stroke:#30363d}}
+</style>
+<text class="th" x="40" y="28">From one value to a belief space</text>
+<rect class="panel" x="40" y="46" width="252" height="212" rx="12"/>
+<text class="th" x="166" y="72" text-anchor="middle">classic BFT</text>
+<circle class="val" cx="166" cy="150" r="12"/>
+<circle class="dot" cx="166" cy="100" r="6"/><line class="ln" x1="166" y1="108" x2="166" y2="136" marker-end="url(#a)"/>
+<circle class="dot" cx="220" cy="135" r="6"/><line class="ln" x1="213" y1="139" x2="180" y2="147" marker-end="url(#a)"/>
+<circle class="dot" cx="200" cy="200" r="6"/><line class="ln" x1="194" y1="194" x2="174" y2="162" marker-end="url(#a)"/>
+<circle class="dot" cx="132" cy="200" r="6"/><line class="ln" x1="138" y1="194" x2="158" y2="162" marker-end="url(#a)"/>
+<circle class="dot" cx="112" cy="135" r="6"/><line class="ln" x1="119" y1="139" x2="152" y2="147" marker-end="url(#a)"/>
+<text class="ts" x="166" y="240" text-anchor="middle">agree on ONE scalar value</text>
+<path class="ln" d="M300 150 h60" marker-end="url(#a)" stroke-width="2"/>
+<rect class="panel" x="388" y="46" width="252" height="212" rx="12"/>
+<text class="th" x="514" y="72" text-anchor="middle">ResonanceBFT</text>
+<polygon class="penta" points="514,96 559,129 542,181 486,181 469,129"/>
+<line class="spoke" x1="514" y1="139" x2="514" y2="96"/><line class="spoke" x1="514" y1="139" x2="559" y2="129"/>
+<line class="spoke" x1="514" y1="139" x2="542" y2="181"/><line class="spoke" x1="514" y1="139" x2="486" y2="181"/><line class="spoke" x1="514" y1="139" x2="469" y2="129"/>
+<polygon points="514,102 539,134 536,173 500,160 483,132" fill="#2f6feb" fill-opacity="0.45" stroke="#2f6feb" stroke-width="1.5"/>
+<rect class="badge" x="462" y="196" width="104" height="22" rx="6"/><text class="ts" x="514" y="211" text-anchor="middle">L2 · audit</text>
+<rect class="bar" x="462" y="222" width="104" height="22" rx="6"/><text class="ts" x="514" y="237" text-anchor="middle">L3 · adapt</text>
+<text class="ts" x="514" y="256" text-anchor="middle">a point in 5-D belief space</text>
+<rect class="bar" x="40" y="272" width="600" height="44" rx="10"/>
+<text class="t" x="340" y="292" text-anchor="middle">same n − f BFT safety — plus 4 more belief axes, a cryptographic seal,</text>
+<text class="t" x="340" y="310" text-anchor="middle">and a social audit that never weakens the commit</text>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#8b949e" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+</svg>

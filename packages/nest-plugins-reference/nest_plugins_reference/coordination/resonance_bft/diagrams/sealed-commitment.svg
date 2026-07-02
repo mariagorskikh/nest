@@ -1,0 +1,31 @@
+<svg width="680" viewBox="0 0 680 300" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Sealed commitments: the five belief axes plus a nonce are hashed with SHA-256 and signed; mutating a sealed value makes the digest mismatch so the record is excluded</title>
+<desc>Top row: five belief axes plus a nonce are hashed with SHA-256 and ed25519-signed into a sealed committed record. Bottom row: mutating a sealed axis and re-hashing yields a digest that no longer matches the seal, so resolve() flags the record tampered and excludes it.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}.t{font-size:14px;fill:#1f2328}
+.box{fill:#f6f8fa;stroke:#d0d7de}.hash{fill:#e6f1fb;stroke:#378add}.ok{fill:#eaf3de;stroke:#639922}.amber{fill:#faeeda;stroke:#ba7517}.bad{fill:#ffebe9;stroke:#d1242f}
+.ax{fill:#8ab4d8}.ln{stroke:#8b949e;stroke-width:1.6;fill:none}.ot{fill:#3b6d11}.rt{fill:#a40e26}
+@media (prefers-color-scheme:dark){.th,.t{fill:#e6edf3}.ts{fill:#9aa5b1}.box{fill:#161b22;stroke:#30363d}.hash{fill:#0d2237;stroke:#378add}.ok{fill:#1f2e10;stroke:#639922}.amber{fill:#3a2a0a;stroke:#ba7517}.bad{fill:#3a0d10;stroke:#d1242f}.ot{fill:#97c459}.rt{fill:#ffb3ba}}
+</style>
+<text class="th" x="40" y="26">Sealed commitments — tamper-evidence on the belief axes</text>
+<rect class="box" x="40" y="52" width="150" height="58" rx="10"/>
+<rect class="ax" x="52" y="88" width="6" height="14" rx="1"/><rect class="ax" x="61" y="80" width="6" height="22" rx="1"/><rect class="ax" x="70" y="84" width="6" height="18" rx="1"/><rect class="ax" x="79" y="76" width="6" height="26" rx="1"/><rect class="ax" x="88" y="86" width="6" height="16" rx="1"/>
+<text class="ts" x="150" y="76" text-anchor="middle">5 axes</text><text class="ts" x="150" y="94" text-anchor="middle">+ nonce</text>
+<path class="ln" d="M190 81 h24" marker-end="url(#a)"/>
+<rect class="hash" x="216" y="52" width="84" height="58" rx="10"/><text class="t" x="258" y="86" text-anchor="middle">SHA-256</text>
+<path class="ln" d="M300 81 h24" marker-end="url(#a)"/>
+<rect class="box" x="326" y="52" width="126" height="58" rx="10"/><text class="ts" x="389" y="78" text-anchor="middle">seal digest</text><text class="ts" x="389" y="96" text-anchor="middle">+ ed25519 sig</text>
+<path class="ln" d="M452 81 h22" marker-end="url(#a)"/>
+<rect class="ok" x="476" y="52" width="160" height="58" rx="10"/><text class="ot" x="556" y="86" text-anchor="middle" font-size="14">sealed ✓ committed</text>
+<rect class="amber" x="40" y="164" width="150" height="58" rx="10"/><text class="ts" x="115" y="190" text-anchor="middle">mutate a sealed axis</text><text class="ts" x="115" y="208" text-anchor="middle">(semantic + 999)</text>
+<path class="ln" d="M190 193 h24" marker-end="url(#a)"/>
+<rect class="hash" x="216" y="164" width="84" height="58" rx="10"/><text class="t" x="258" y="190" text-anchor="middle">re-hash</text><text class="ts" x="258" y="208" text-anchor="middle">SHA-256</text>
+<path class="ln" d="M300 193 h24" marker-end="url(#a)"/>
+<rect class="bad" x="326" y="164" width="126" height="58" rx="10"/><text class="rt" x="389" y="197" text-anchor="middle">digest ≠ seal</text>
+<path class="ln" d="M452 193 h22" marker-end="url(#a)"/>
+<rect class="bad" x="476" y="164" width="160" height="58" rx="10"/><text class="rt" x="556" y="191" text-anchor="middle" font-size="12">✗ tampered</text><text class="rt" x="556" y="207" text-anchor="middle" font-size="12">→ excluded</text>
+<text class="ts" x="40" y="256">resolve() recomputes the seal over the five sealed belief axes; any change to a sealed value — or a</text>
+<text class="ts" x="40" y="274">signature under the wrong key — makes the digest mismatch, so the record is flagged and dropped from the centroid.</text>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#8b949e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+</svg>

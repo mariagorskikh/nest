@@ -1,0 +1,19 @@
+<svg width="680" viewBox="0 0 680 300" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Trimmed-mean robustness: two colluding vectors drag the plain mean below the 0.60 commit threshold to cosine 0.55, while the trimmed mean stays aligned at 0.99</title>
+<desc>Bar chart of cosine alignment to the honest direction. The plain mean falls to 0.55, below the 0.60 commit threshold, when two colluders bias it; the coordinate-wise trimmed mean stays at 0.99.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}.t{font-size:14px;fill:#1f2328}
+.axis{stroke:#8b949e;stroke-width:1.5}.thr{stroke:#d1242f;stroke-width:1.4;stroke-dasharray:5 3}
+.bad{fill:#d1242f;fill-opacity:0.85}.good{fill:#639922}.rt{fill:#a40e26}.gt{fill:#3b6d11}
+@media (prefers-color-scheme:dark){.th,.t{fill:#e6edf3}.ts{fill:#9aa5b1}.axis{stroke:#6e7681}.rt{fill:#ffb3ba}.gt{fill:#97c459}}
+</style>
+<text class="th" x="40" y="26">Trimmed-mean robustness — 2 colluders can't drag the commit</text>
+<line class="axis" x1="150" y1="70" x2="150" y2="250"/><line class="axis" x1="150" y1="250" x2="540" y2="250"/>
+<text class="ts" x="142" y="74" text-anchor="end">1.0</text><text class="ts" x="142" y="146" text-anchor="end">0.6</text><text class="ts" x="142" y="254" text-anchor="end">0</text>
+<line class="thr" x1="150" y1="142" x2="540" y2="142"/><text class="rt" x="546" y="146" text-anchor="start" font-size="12">0.60 commit threshold</text>
+<rect class="bad" x="200" y="151" width="96" height="99" rx="4"/><text class="rt" x="248" y="145" text-anchor="middle" font-size="14">0.55</text><text class="t" x="248" y="270" text-anchor="middle">plain mean</text>
+<rect class="good" x="384" y="72" width="96" height="178" rx="4"/><text class="gt" x="432" y="66" text-anchor="middle" font-size="14">0.99</text><text class="t" x="432" y="270" text-anchor="middle">trimmed mean</text>
+<text class="ts" x="546" y="180" text-anchor="start">cosine to the</text><text class="ts" x="546" y="196" text-anchor="start">honest direction</text>
+<text class="ts" x="40" y="292">Two colluding vectors pull the plain mean below 0.60 (0.55); the trimmed mean stays at 0.99 — test_resists_biased_minority.</text>
+</svg>

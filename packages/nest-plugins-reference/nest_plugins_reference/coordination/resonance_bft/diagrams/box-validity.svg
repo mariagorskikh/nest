@@ -1,0 +1,22 @@
+<svg width="680" viewBox="0 0 680 330" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Box validity: the coordinate-wise trimmed mean stays inside the honest per-coordinate box despite a Byzantine extreme, while the plain mean is dragged out</title>
+<desc>A 2-D projection of the belief space. Honest vectors form a dashed per-coordinate box; a Byzantine extreme sits far outside. The plain mean is pulled out of the box, but the coordinate-wise trimmed mean stays inside — box validity at n greater or equal 3f+1.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.axis{stroke:#8b949e;stroke-width:1.5}.box{fill:#639922;fill-opacity:0.08;stroke:#639922;stroke-dasharray:5 3}
+.hon{fill:#639922}.byz{fill:#b8730f}.trim{fill:#2f6feb}.plain{fill:#8b949e}.lead{stroke:#8b949e;stroke-width:1;fill:none}
+.og{fill:#3b6d11}.bt{fill:#2f6feb}
+@media (prefers-color-scheme:dark){.th{fill:#e6edf3}.ts{fill:#9aa5b1}.axis{stroke:#6e7681}.og{fill:#97c459}.bt{fill:#85b7eb}}
+</style>
+<text class="th" x="40" y="26">Box validity — a Byzantine extreme cannot pull the commit out</text>
+<line class="axis" x1="90" y1="262" x2="450" y2="262"/><line class="axis" x1="90" y1="262" x2="90" y2="72"/>
+<text class="ts" x="270" y="284" text-anchor="middle">coordinate i</text><text class="ts" x="86" y="68" text-anchor="end">coordinate j</text>
+<rect class="box" x="206" y="150" width="70" height="60" rx="4"/><text class="og" x="241" y="144" text-anchor="middle">honest box</text>
+<circle class="hon" cx="216" cy="172" r="5"/><circle class="hon" cx="238" cy="160" r="5"/><circle class="hon" cx="228" cy="198" r="5"/><circle class="hon" cx="258" cy="180" r="5"/><circle class="hon" cx="248" cy="202" r="5"/><circle class="hon" cx="266" cy="164" r="5"/>
+<circle class="byz" cx="404" cy="108" r="7"/><text class="ts" x="404" y="96" text-anchor="middle">Byzantine extreme</text>
+<circle class="plain" cx="300" cy="168" r="6"/><line class="lead" x1="306" y1="170" x2="342" y2="196"/><text class="ts" x="346" y="200" text-anchor="start">plain mean → dragged out</text>
+<circle class="trim" cx="240" cy="182" r="7" stroke="#fff" stroke-width="1.5"/><line class="lead" x1="234" y1="188" x2="214" y2="224"/><text class="bt" x="210" y="228" text-anchor="end">trimmed mean = commit</text>
+<text class="ts" x="40" y="300">The coordinate-wise trimmed mean stays inside the honest per-coordinate box even with a Byzantine extreme —</text>
+<text class="ts" x="40" y="318">box validity, guaranteed at n ≥ 3f+1 (convex validity would need 7f+1 and give a worse worst-case error).</text>
+</svg>

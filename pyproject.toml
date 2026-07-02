@@ -114,6 +114,14 @@ extraPaths = [
     "packages/nest-marketplace",
     ".",
 ]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    # Optional-ML-dep example scripts (fastembed / model2vec / numpy via
+    # requirements-embeddings.txt) — demos, not core code, so not type-gated in CI.
+    "packages/nest-plugins-reference/examples/resonance_bft_embeddings",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

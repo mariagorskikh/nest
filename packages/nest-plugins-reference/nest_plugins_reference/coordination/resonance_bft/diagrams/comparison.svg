@@ -1,0 +1,32 @@
+<svg width="680" viewBox="0 0 680 322" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Vector comparison: two agents' five-axis beliefs overlaid, per-axis cosine similarity, weighted into an alignment score versus the 0.60 commit threshold</title>
+<desc>Two agents' pentadic vectors are overlaid on a radar; each axis yields a cosine similarity; the weighted sum is an alignment score compared to the 0.60 commit threshold.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.t{font-size:14px;fill:#1f2328}.ts{font-size:12px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.ring{fill:none;stroke:#d0d7de}.spoke{stroke:#c9d1d9;stroke-width:1}
+.pa{fill:#2f6feb;fill-opacity:0.14;stroke:#2f6feb;stroke-width:2}.pb{fill:none;stroke:#1d9e75;stroke-width:2;stroke-dasharray:5 3}
+.track{fill:#eef2f6;stroke:none}.fill{fill:#1d9e75}.ok{fill:#eaf3de;stroke:#639922}.okt{fill:#3b6d11}
+@media (prefers-color-scheme:dark){.t,.th{fill:#e6edf3}.ts{fill:#9aa5b1}.ring{stroke:#30363d}.spoke{stroke:#30363d}.track{fill:#161b22}.ok{fill:#1f2e10;stroke:#639922}.okt{fill:#97c459}}
+</style>
+<text class="th" x="40" y="28">Vector comparison — five axes in, one alignment out</text>
+<polygon class="ring" points="220,102 294,156 266,243 174,243 146,156"/>
+<polygon class="ring" points="220,141 257,168 243,212 197,212 183,168"/>
+<line class="spoke" x1="220" y1="180" x2="220" y2="102"/><line class="spoke" x1="220" y1="180" x2="294" y2="156"/>
+<line class="spoke" x1="220" y1="180" x2="266" y2="243"/><line class="spoke" x1="220" y1="180" x2="174" y2="243"/><line class="spoke" x1="220" y1="180" x2="146" y2="156"/>
+<polygon class="pa" points="220,114 264,166 254,227 195,215 168,163"/>
+<polygon class="pb" points="220,125 257,168 258,232 192,219 177,166"/>
+<text class="ts" x="220" y="94" text-anchor="middle">semantic</text><text class="ts" x="302" y="154" text-anchor="start">affective</text>
+<text class="ts" x="272" y="258" text-anchor="middle">relational</text><text class="ts" x="168" y="258" text-anchor="middle">epistemic</text><text class="ts" x="138" y="154" text-anchor="end">behavioral</text>
+<circle cx="150" cy="286" r="5" fill="#2f6feb"/><text class="ts" x="160" y="290" text-anchor="start">agent A</text>
+<circle cx="228" cy="286" r="5" fill="#1d9e75"/><text class="ts" x="238" y="290" text-anchor="start">agent B</text>
+<text class="ts" x="372" y="70">per-axis cosine similarity</text>
+<text class="ts" x="372" y="92" text-anchor="start">semantic</text><rect class="track" x="452" y="82" width="150" height="12" rx="6"/><rect class="fill" x="452" y="82" width="140" height="12" rx="6"/><text class="ts" x="610" y="92">0.93</text>
+<text class="ts" x="372" y="116" text-anchor="start">affective</text><rect class="track" x="452" y="106" width="150" height="12" rx="6"/><rect class="fill" x="452" y="106" width="132" height="12" rx="6"/><text class="ts" x="610" y="116">0.88</text>
+<text class="ts" x="372" y="140" text-anchor="start">relational</text><rect class="track" x="452" y="130" width="150" height="12" rx="6"/><rect class="fill" x="452" y="130" width="143" height="12" rx="6"/><text class="ts" x="610" y="140">0.95</text>
+<text class="ts" x="372" y="164" text-anchor="start">epistemic</text><rect class="track" x="452" y="154" width="150" height="12" rx="6"/><rect class="fill" x="452" y="154" width="135" height="12" rx="6"/><text class="ts" x="610" y="164">0.90</text>
+<text class="ts" x="372" y="188" text-anchor="start">behavioral</text><rect class="track" x="452" y="178" width="150" height="12" rx="6"/><rect class="fill" x="452" y="178" width="138" height="12" rx="6"/><text class="ts" x="610" y="188">0.92</text>
+<text class="ts" x="372" y="212">weights: sem .25 · aff .20 · rel .25 · epi .15 · beh .15</text>
+<rect class="ok" x="372" y="226" width="256" height="40" rx="10"/>
+<text class="okt" x="500" y="251" text-anchor="middle" font-size="14">weighted alignment 0.92 ≥ 0.60 → commit</text>
+</svg>

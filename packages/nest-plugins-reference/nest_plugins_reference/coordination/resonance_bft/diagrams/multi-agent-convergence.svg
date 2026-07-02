@@ -1,0 +1,34 @@
+<svg width="680" viewBox="0 0 680 330" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Multiple agents converging over rounds: five honest agents' opinions spread wide then contract into a consensus band and commit, while a Byzantine agent stays out and is excluded</title>
+<desc>Time-series of many agents over twelve rounds through spread, converging and agreed phases. Five coloured honest opinion lines start spread apart and contract into a shaded consensus funnel, reaching the consensus bullseye; a dashed Byzantine line stays outside and is excluded.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.tsm{font-size:11px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.ph1{fill:#f5efe2}.ph2{fill:#eeecfa}.ph3{fill:#ecf4e3}
+.axis{stroke:#8b949e;stroke-width:1.2}.funnel{fill:#8b949e;fill-opacity:0.12}
+.a1{fill:none;stroke:#2f6feb;stroke-width:2}.a2{fill:none;stroke:#1d9e75;stroke-width:2}.a3{fill:none;stroke:#639922;stroke-width:2}.a4{fill:none;stroke:#8250df;stroke-width:2}.a5{fill:none;stroke:#d1552b;stroke-width:2}
+.byz{fill:none;stroke:#b8730f;stroke-width:2;stroke-dasharray:6 4}.cx{stroke:#d1242f;stroke-width:2.5}.tgt{fill:none;stroke:#57606a;stroke-width:1.5}.lead{stroke:#8b949e;stroke-width:1;fill:none}
+.p1t{fill:#7a5a12}.p2t{fill:#5a3aa8}.p3t{fill:#3b6d11}
+@media (prefers-color-scheme:dark){.th{fill:#e6edf3}.ts,.tsm{fill:#9aa5b1}.axis{stroke:#6e7681}.tgt{stroke:#9aa5b1}
+.ph1{fill:#2a2620}.ph2{fill:#1e1b2e}.ph3{fill:#1c2a15}.p1t{fill:#e0b866}.p2t{fill:#b899f0}.p3t{fill:#97c459}}
+</style>
+<text class="th" x="40" y="22">Many agents converging — opinions contract into consensus over rounds</text>
+<rect class="ph1" x="80" y="40" width="122" height="230"/><rect class="ph2" x="202" y="40" width="180" height="230"/><rect class="ph3" x="382" y="40" width="220" height="230"/>
+<text class="p1t" x="141" y="52" text-anchor="middle" font-size="12">spread</text><text class="p2t" x="292" y="52" text-anchor="middle" font-size="12">converging</text><text class="p3t" x="492" y="52" text-anchor="middle" font-size="12">agreed</text>
+<line class="axis" x1="80" y1="70" x2="80" y2="270"/><line class="axis" x1="80" y1="270" x2="602" y2="270"/><text class="tsm" x="74" y="74" text-anchor="end">opinion</text>
+<polygon class="funnel" points="90,90 135,98 180,110 225,122 270,130 315,136 360,142 405,146 450,147 495,148 540,148 585,148 585,150 540,150 495,150 450,150 405,152 360,154 315,160 270,170 225,186 180,206 135,226 90,240"/>
+<polyline class="a1" points="90,90 135,98 180,110 225,122 270,130 315,136 360,142 405,146 450,147 495,148 540,148 585,148"/>
+<polyline class="a2" points="90,240 135,226 180,206 225,186 270,170 315,160 360,154 405,152 450,150 495,150 540,150 585,150"/>
+<polyline class="a3" points="90,120 135,124 180,130 225,134 270,138 315,142 360,144 405,146 450,148 495,148 540,148 585,148"/>
+<polyline class="a4" points="90,200 135,190 180,178 225,166 270,160 315,156 360,153 405,152 450,151 495,150 540,150 585,150"/>
+<polyline class="a5" points="90,154 135,153 180,152 225,151 270,150 315,150 360,149 405,149 450,150 495,150 540,150 585,150"/>
+<polyline class="byz" points="90,256 135,260 180,254 225,258 270,255 315,260 360,254 405,258 450,256 495,259 540,260 585,257"/>
+<line class="cx" x1="579" y1="251" x2="591" y2="263"/><line class="cx" x1="591" y1="251" x2="579" y2="263"/>
+<text class="tsm" x="560" y="242" text-anchor="end">tampered → excluded</text>
+<circle class="tgt" cx="585" cy="149" r="9"/><circle cx="585" cy="149" r="2.4" fill="#57606a"/>
+<line class="lead" x1="576" y1="145" x2="520" y2="112"/><text class="ts" x="516" y="108" text-anchor="end">consensus (commit)</text>
+<text class="ts" x="90" y="286" text-anchor="middle">1</text><text class="ts" x="225" y="286" text-anchor="middle">4</text><text class="ts" x="405" y="286" text-anchor="middle">8</text><text class="ts" x="585" y="286" text-anchor="middle">12</text><text class="tsm" x="610" y="274" text-anchor="start">round</text>
+<circle cx="46" cy="310" r="5" fill="#2f6feb"/><circle cx="60" cy="310" r="5" fill="#1d9e75"/><circle cx="74" cy="310" r="5" fill="#639922"/><circle cx="88" cy="310" r="5" fill="#8250df"/><circle cx="102" cy="310" r="5" fill="#d1552b"/><text class="ts" x="114" y="314">five honest agents converge</text>
+<circle cx="330" cy="310" r="5" fill="#b8730f"/><line class="cx" x1="338" y1="305" x2="348" y2="315"/><line class="cx" x1="348" y1="305" x2="338" y2="315"/><text class="ts" x="356" y="314">tampered — excluded</text>
+<circle class="tgt" cx="520" cy="310" r="7"/><circle cx="520" cy="310" r="2" fill="#57606a"/><text class="ts" x="532" y="314">consensus</text>
+</svg>

@@ -1,0 +1,32 @@
+<svg width="680" viewBox="0 0 680 312" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>From words to a trustworthy signal: a contextual encoder separates stance, fixed weights balance the five axes, and the audit flags same-topic opposite-stance false consensus</title>
+<desc>A three-stage pipeline. Encode: stance separation is 0.67 for bag-of-words and model2vec but 1.00 for fastembed. Weight: fixed axis weights semantic 0.25, affective 0.20, relational 0.25, epistemic 0.15, behavioral 0.15. Audit: false-agreement is 0.0 for genuine rounds and 0.55 for same-topic opposite-stance rounds.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.ts{font-size:12px;fill:#57606a}.tsm{font-size:11px;fill:#57606a}.th{font-size:14px;font-weight:500;fill:#1f2328}
+.card{fill:#ffffff;stroke:#d0d7de}.cardt{fill:#1f2328;font-size:12px;font-weight:500}
+.track{fill:#eef2f6}.amber{fill:#ba7517}.green{fill:#639922}.blue{fill:#2f6feb}.ln{stroke:#8b949e;stroke-width:1.5;fill:none}
+@media (prefers-color-scheme:dark){.th,.cardt{fill:#e6edf3}.ts,.tsm{fill:#9aa5b1}.card{fill:#0d1117;stroke:#30363d}.track{fill:#161b22}}
+</style>
+<text class="th" x="40" y="22">From words to a trustworthy commit signal</text>
+<text class="ts" x="40" y="42">opinion → encode → weight the 5 axes → false-consensus audit → consensus_type</text>
+<rect class="card" x="40" y="54" width="192" height="204" rx="10"/><text class="cardt" x="52" y="76">① encode: stance separation</text>
+<text class="tsm" x="108" y="106" text-anchor="end">BoW</text><rect class="track" x="114" y="98" width="80" height="12" rx="6"/><rect class="amber" x="114" y="98" width="54" height="12" rx="6"/><text class="tsm" x="200" y="108">0.67</text>
+<text class="tsm" x="108" y="138" text-anchor="end">model2vec</text><rect class="track" x="114" y="130" width="80" height="12" rx="6"/><rect class="amber" x="114" y="130" width="54" height="12" rx="6"/><text class="tsm" x="200" y="140">0.67</text>
+<text class="tsm" x="108" y="170" text-anchor="end">fastembed</text><rect class="track" x="114" y="162" width="80" height="12" rx="6"/><rect class="green" x="114" y="162" width="80" height="12" rx="6"/><text class="tsm" x="200" y="172">1.00</text>
+<text class="tsm" x="136" y="204" text-anchor="middle">contextual fastembed ✓ separates</text><text class="tsm" x="136" y="220" text-anchor="middle">stance where static fails</text>
+<path class="ln" d="M232 156 h12" marker-end="url(#a)"/>
+<rect class="card" x="244" y="54" width="192" height="204" rx="10"/><text class="cardt" x="256" y="76">② weighted 5 axes</text>
+<rect class="blue" x="262" y="150" width="20" height="60" rx="2"/><rect class="blue" x="292" y="162" width="20" height="48" rx="2"/><rect class="blue" x="322" y="150" width="20" height="60" rx="2"/><rect class="blue" x="352" y="174" width="20" height="36" rx="2"/><rect class="blue" x="382" y="174" width="20" height="36" rx="2"/>
+<text class="tsm" x="272" y="144" text-anchor="middle">.25</text><text class="tsm" x="302" y="156" text-anchor="middle">.20</text><text class="tsm" x="332" y="144" text-anchor="middle">.25</text><text class="tsm" x="362" y="168" text-anchor="middle">.15</text><text class="tsm" x="392" y="168" text-anchor="middle">.15</text>
+<text class="tsm" x="272" y="224" text-anchor="middle">sem</text><text class="tsm" x="302" y="224" text-anchor="middle">aff</text><text class="tsm" x="332" y="224" text-anchor="middle">rel</text><text class="tsm" x="362" y="224" text-anchor="middle">epi</text><text class="tsm" x="392" y="224" text-anchor="middle">beh</text>
+<text class="tsm" x="340" y="246" text-anchor="middle">fixed — no axis dominates</text>
+<path class="ln" d="M436 156 h12" marker-end="url(#a)"/>
+<rect class="card" x="448" y="54" width="192" height="204" rx="10"/><text class="cardt" x="460" y="76">③ false-consensus audit</text>
+<rect class="green" x="498" y="206" width="34" height="4" rx="2"/><text class="tsm" x="515" y="224" text-anchor="middle">genuine</text><text class="tsm" x="515" y="200" text-anchor="middle">0.00</text>
+<rect class="amber" x="560" y="118" width="34" height="92" rx="2"/><text class="tsm" x="577" y="224" text-anchor="middle">false</text><text class="tsm" x="577" y="112" text-anchor="middle">0.55</text>
+<text class="tsm" x="544" y="246" text-anchor="middle">same topic, opposite stance</text>
+<text class="ts" x="40" y="286">A contextual encoder separates stance, fixed weights stop dimensionality domination, and the audit flags topic-aligned</text>
+<text class="ts" x="40" y="304">but stance-opposed rounds (false_agreement 0.55) that a commit alone would miss — turning perception into a signal.</text>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+</svg>

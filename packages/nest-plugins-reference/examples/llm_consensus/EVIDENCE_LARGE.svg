@@ -1,0 +1,91 @@
+<svg width="680" viewBox="0 0 680 668" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>ResonanceBFT 80 real-town runs across four sweeps</title>
+<desc>Scale: commits at n=4 to 49 with quorum equal to n minus f. Topics: 8 of 8 subjects commit. Floor: agy 10 of 10, claude 9 of 10, codex 9 of 10. Multi-round: all 8 rounds commit, type warms from fragile to genuine.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.th{font-size:14px;font-weight:500;fill:#1f2328}
+.t{font-size:14px;fill:#1f2328}
+.ts{font-size:12px;fill:#57606a}
+.commit{fill:#4a8a1f}
+.fragile{fill:#b8730f}
+.div{stroke:#d0d7de;stroke-width:1}
+@media (prefers-color-scheme:dark){
+.th,.t{fill:#e6edf3}
+.ts{fill:#9aa5b1}
+.div{stroke:#30363d}
+}
+</style>
+
+<text class="th" x="40" y="30">ResonanceBFT — 80 real-town runs, real LLMs, lowest tiers</text>
+<circle class="commit" cx="46" cy="48" r="6"/>
+<text class="ts" x="58" y="52">committed / genuine</text>
+<circle class="fragile" cx="250" cy="48" r="6"/>
+<text class="ts" x="262" y="52">fragile / safe no-commit</text>
+<line x1="40" y1="66" x2="640" y2="66" class="div"/>
+
+<text class="th" x="40" y="92">A · scale — the town commits BFT as it grows</text>
+<text class="ts" x="40" y="110">n = 4 → 49, 3 real models · commit quorum = n − f exactly</text>
+<line x1="60" y1="234" x2="600" y2="234" class="div"/>
+<rect class="commit" x="83" y="222" width="64" height="12" rx="3"/>
+<text class="ts" x="115" y="216" text-anchor="middle">3/3</text>
+<text class="ts" x="115" y="252" text-anchor="middle">n=4</text>
+<rect class="commit" x="193" y="216" width="64" height="18" rx="3"/>
+<text class="ts" x="225" y="210" text-anchor="middle">5/5</text>
+<text class="ts" x="225" y="252" text-anchor="middle">n=7</text>
+<rect class="commit" x="303" y="203" width="64" height="31" rx="3"/>
+<text class="ts" x="335" y="197" text-anchor="middle">9/9</text>
+<text class="ts" x="335" y="252" text-anchor="middle">n=13</text>
+<rect class="commit" x="413" y="176" width="64" height="58" rx="3"/>
+<text class="ts" x="445" y="170" text-anchor="middle">17/17</text>
+<text class="ts" x="445" y="252" text-anchor="middle">n=25</text>
+<rect class="commit" x="523" y="122" width="64" height="112" rx="3"/>
+<text class="ts" x="555" y="116" text-anchor="middle">33/33</text>
+<text class="ts" x="555" y="252" text-anchor="middle">n=49</text>
+<line x1="40" y1="270" x2="640" y2="270" class="div"/>
+
+<text class="th" x="40" y="296">B · topics — commit is subject-independent</text>
+<text class="ts" x="40" y="314">8 / 8 questions commit (policy · tech · ethics …)</text>
+<g><circle class="commit" cx="110" cy="346" r="13"/><path d="M105 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g><circle class="commit" cx="176" cy="346" r="13"/><path d="M171 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g><circle class="commit" cx="242" cy="346" r="13"/><path d="M237 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g><circle class="commit" cx="308" cy="346" r="13"/><path d="M303 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g><circle class="commit" cx="374" cy="346" r="13"/><path d="M369 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g><circle class="commit" cx="440" cy="346" r="13"/><path d="M435 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g><circle class="commit" cx="506" cy="346" r="13"/><path d="M501 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g><circle class="commit" cx="572" cy="346" r="13"/><path d="M567 346 l3 4 l6 -8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+<line x1="40" y1="378" x2="640" y2="378" class="div"/>
+
+<text class="th" x="40" y="404">C · quorum-floor liveness — 10 reps, zero slack</text>
+<text class="ts" x="40" y="422">at present = n − f, a coherent quorum needs every responder</text>
+<text class="ts" x="150" y="450" text-anchor="end">agy</text>
+<rect class="commit" x="160" y="440" width="380" height="16" rx="3"/>
+<text class="ts" x="548" y="452">10/10</text>
+<text class="ts" x="150" y="480" text-anchor="end">claude</text>
+<rect class="commit" x="160" y="470" width="342" height="16" rx="3"/>
+<rect class="fragile" x="502" y="470" width="38" height="16" rx="3"/>
+<text class="ts" x="548" y="482">9/10</text>
+<text class="ts" x="150" y="510" text-anchor="end">codex</text>
+<rect class="commit" x="160" y="500" width="342" height="16" rx="3"/>
+<rect class="fragile" x="502" y="500" width="38" height="16" rx="3"/>
+<text class="ts" x="548" y="512">9/10</text>
+<line x1="40" y1="536" x2="640" y2="536" class="div"/>
+
+<text class="th" x="40" y="562">D · multi-round — L3 warms up over the run</text>
+<text class="ts" x="40" y="580">agy · rep 1 · all 8 rounds commit; type fragile → genuine</text>
+<circle class="fragile" cx="120" cy="616" r="13"/>
+<circle class="commit" cx="180" cy="616" r="13"/>
+<circle class="commit" cx="240" cy="616" r="13"/>
+<circle class="commit" cx="300" cy="616" r="13"/>
+<circle class="commit" cx="360" cy="616" r="13"/>
+<circle class="commit" cx="420" cy="616" r="13"/>
+<circle class="commit" cx="480" cy="616" r="13"/>
+<circle class="commit" cx="540" cy="616" r="13"/>
+<text class="ts" x="120" y="648" text-anchor="middle">1</text>
+<text class="ts" x="180" y="648" text-anchor="middle">2</text>
+<text class="ts" x="240" y="648" text-anchor="middle">3</text>
+<text class="ts" x="300" y="648" text-anchor="middle">4</text>
+<text class="ts" x="360" y="648" text-anchor="middle">5</text>
+<text class="ts" x="420" y="648" text-anchor="middle">6</text>
+<text class="ts" x="480" y="648" text-anchor="middle">7</text>
+<text class="ts" x="540" y="648" text-anchor="middle">8</text>
+</svg>

@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# End-to-end ResonanceBFT with the DEFAULT zero-dependency bag-of-words semantic axis
+# (embed: none) driven over the town transport. Each follower participate()s on its own
+# deserialized round copy and extends the vocab with its own private words, so records arrive
+# in divergent coordinate systems; resolve() reconciles them onto the canonical union vocab so
+# the commit compares aligned coordinates. Proves the DEFAULT encoder is transport-correct.
+name: resonance_bft_consensus_bow
+description: |
+  ResonanceBFT drives consensus over the transport with the default bag-of-words semantic
+  axis; per-record vocabularies are reconciled so divergent transport vocabs still align.
+tier: 1
+seed: 7
+agents:
+  count: 7
+  brain: state-machine
+  roles:
+    - name: leader
+      count: 1
+    - name: follower
+      count: 6
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: resonance_bft
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+task:
+  type: resonance_bft_consensus
+  config:
+    expected_participants: 7
+    rounds: 1
+    embed: none
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+duration: "ticks: 100000"
+metrics: [success_rate, message_count, agent_count]
+output:
+  trace: ./traces/resonance_bft_consensus_bow.jsonl
