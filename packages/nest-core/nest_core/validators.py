@@ -4923,6 +4923,239 @@ def validate_sybil_bond_attempts_rejected(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Private-commerce joint validators (cross-layer composition)
+# ---------------------------------------------------------------------------
+
+
+def _pc_marker_events(events: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    """Broadcast marker bodies in trace order, deduplicated at first occurrence.
+
+    Marker broadcasts appear once as a ``broadcast`` record plus once per
+    recipient as ``receive``/``dropped`` records, and senders re-broadcast
+    functional markers for drop-redundancy. All duplicates collapse to the
+    first sighting so ordering logic sees each marker exactly once.
+    """
+    seen: set[str] = set()
+    out: list[tuple[int, str]] = []
+    for i, ev in enumerate(events):
+        if ev.get("kind") not in ("broadcast", "send"):
+            continue
+        msg = _message_body(ev)
+        if msg in seen:
+            continue
+        seen.add(msg)
+        out.append((i, msg))
+    return out
+
+
+def validate_commerce_discovery_precedes_bid(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every bid must target a seller the buyer *first* discovered via the registry.
+
+    Joint invariant over the registry and privacy layers: a ``bidmeta:`` marker
+    for pair ``(buyer, seller)`` is only legitimate after a ``discovered:``
+    marker for the same pair. A shared-dict registry that leaks cards across a
+    partition would let bids fire without honest discovery ordering.
+    """
+    discovered: set[tuple[str, str]] = set()
+    violations: list[str] = []
+    bids = 0
+
+    for _, msg in _pc_marker_events(events):
+        parts = msg.split(":")
+        if len(parts) >= 3 and parts[0] == "discovered":
+            discovered.add((parts[1], parts[2]))
+        elif len(parts) >= 5 and parts[0] == "bidmeta":
+            bids += 1
+            buyer, seller = parts[1], parts[2]
+            if (buyer, seller) not in discovered:
+                violations.append(f"{buyer} bid on {seller} without prior gossip discovery")
+
+    if bids == 0:
+        return [
+            ValidationResult(
+                "commerce_discovery_precedes_bid", False, "no bidmeta markers found in trace"
+            )
+        ]
+    if violations:
+        return [ValidationResult("commerce_discovery_precedes_bid", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "commerce_discovery_precedes_bid",
+            True,
+            f"all {bids} bids preceded by gossip discovery",
+        )
+    ]
+
+
+def validate_commerce_bid_opacity(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Bid plaintext must never ride the wire outside the privacy envelope.
+
+    Joint invariant over the privacy and transport layers. Each buyer's
+    plaintext contains the marker ``bidamount:<amount>:from:<buyer>`` before
+    encryption; the ``bidmeta:`` sidecar declares the ground truth. The
+    validator scans every ``bid:``-wire message (send/receive/dropped) and
+    fails if the plaintext marker is visible. With ``privacy: noop`` the
+    envelope IS the plaintext, so this fails — the adversarial bar.
+    """
+    expected: set[tuple[str, str]] = set()  # (buyer, amount)
+    leaks: list[str] = []
+    wire_bids = 0
+
+    for ev in events:
+        msg = _message_body(ev)
+        parts = msg.split(":")
+        if ev.get("kind") in ("broadcast", "receive") and len(parts) >= 5 and parts[0] == "bidmeta":
+            expected.add((parts[1], parts[4]))
+    for ev in events:
+        if ev.get("kind") not in ("send", "receive", "dropped"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("bid:"):
+            continue
+        wire_bids += 1
+        for buyer, amount in expected:
+            marker = f"bidamount:{amount}:from:{buyer}"
+            if marker in msg:
+                leaks.append(f"plaintext bid of {buyer} (amount={amount}) visible on the wire")
+                break
+
+    if wire_bids == 0:
+        return [ValidationResult("commerce_bid_opacity", False, "no bid wire messages in trace")]
+    if leaks:
+        return [ValidationResult("commerce_bid_opacity", False, "; ".join(sorted(set(leaks))))]
+    return [
+        ValidationResult(
+            "commerce_bid_opacity", True, f"all {wire_bids} wire bids opaque to observers"
+        )
+    ]
+
+
+def validate_commerce_undelivered_penalized(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A seller that drained a stream without delivering must end with low trust.
+
+    Joint invariant over the payments and trust layers. For every stream that
+    closed with ``total > 0`` toward a seller with no ``fulfilled:`` marker for
+    that ref, the seller's final ``score:`` must be strictly below the honest
+    threshold — even when the seller wash-traded fake receipts. The
+    ``score_average`` reference plugin rewards the fake receipts and fails
+    here; ``agent_receipts`` severs the shill ring and passes.
+    """
+    threshold = 0.3
+    fulfilled_refs: set[str] = set()
+    drained: dict[str, str] = {}  # ref -> seller (streams that moved money)
+    scores: dict[str, float] = {}
+
+    for _, msg in _pc_marker_events(events):
+        parts = msg.split(":")
+        if len(parts) >= 4 and parts[0] == "fulfilled":
+            fulfilled_refs.add(parts[3])
+        elif len(parts) >= 6 and parts[0] == "stream" and parts[1] == "close":
+            _, _, _buyer, seller, ref, total = parts[:6]
+            try:
+                if int(total) > 0:
+                    drained[ref] = seller
+            except ValueError:
+                continue
+        elif len(parts) >= 3 and parts[0] == "score":
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+
+    offenders = {seller for ref, seller in drained.items() if ref not in fulfilled_refs}
+    if not offenders:
+        return [
+            ValidationResult(
+                "commerce_undelivered_penalized",
+                False,
+                "no undelivered drained stream found — the adversary never fired",
+            )
+        ]
+
+    violations: list[str] = []
+    for seller in sorted(offenders):
+        score = scores.get(seller)
+        if score is None:
+            violations.append(f"{seller} drained without delivering but was never scored")
+        elif score >= threshold:
+            violations.append(
+                f"{seller} drained without delivering yet scored {score:.3f} >= {threshold}"
+            )
+    if violations:
+        return [ValidationResult("commerce_undelivered_penalized", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "commerce_undelivered_penalized",
+            True,
+            f"all non-delivering sellers scored below {threshold}: {sorted(offenders)}",
+        )
+    ]
+
+
+def validate_commerce_delivery_rewarded(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Fulfilling sellers must score above threshold, and every fulfilment must be paid.
+
+    Joint invariant over the payments and trust layers, dual of the penalty
+    check: (a) each ``fulfilled:`` ref has a matching ``stream:open`` toward
+    that seller, and (b) every seller with at least one fulfilment ends with a
+    final trust score at or above the honest threshold.
+    """
+    threshold = 0.3
+    opened_refs: dict[str, str] = {}  # ref -> seller
+    fulfilled_by: dict[str, list[str]] = {}  # seller -> refs
+    scores: dict[str, float] = {}
+    violations: list[str] = []
+
+    for _, msg in _pc_marker_events(events):
+        parts = msg.split(":")
+        if len(parts) >= 6 and parts[0] == "stream" and parts[1] == "open":
+            opened_refs[parts[4]] = parts[3]
+        elif len(parts) >= 4 and parts[0] == "fulfilled":
+            fulfilled_by.setdefault(parts[1], []).append(parts[3])
+        elif len(parts) >= 3 and parts[0] == "score":
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+
+    if not fulfilled_by:
+        return [
+            ValidationResult(
+                "commerce_delivery_rewarded", False, "no fulfilment markers found in trace"
+            )
+        ]
+
+    for seller, refs in sorted(fulfilled_by.items()):
+        for ref in refs:
+            if opened_refs.get(ref) != seller:
+                violations.append(f"{seller} fulfilled {ref} without a matching payment stream")
+        score = scores.get(seller)
+        if score is None:
+            violations.append(f"{seller} fulfilled bids but was never scored")
+        elif score < threshold:
+            violations.append(f"{seller} fulfilled bids yet scored {score:.3f} < {threshold}")
+
+    if violations:
+        return [ValidationResult("commerce_delivery_rewarded", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "commerce_delivery_rewarded",
+            True,
+            f"all {len(fulfilled_by)} fulfilling sellers paid and scored >= {threshold}",
+        )
+    ]
+
+
+
 VALIDATORS: dict[str, list[Any]] = {
     "sybil_bond": [
         validate_sybil_bond_no_free_trust,
@@ -5022,6 +5255,12 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_escrow_role_binding,
         validate_escrow_bps_in_range,
         validate_escrow_no_payout_without_delivery,
+    ],
+    "private_commerce": [
+        validate_commerce_discovery_precedes_bid,
+        validate_commerce_bid_opacity,
+        validate_commerce_undelivered_penalized,
+        validate_commerce_delivery_rewarded,
     ],
     "failure_detection": [
         validate_failure_detection_completeness,

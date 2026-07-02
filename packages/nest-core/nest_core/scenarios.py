@@ -175,3 +175,9 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.sybil_bond import sybil_bond_factory
 
         register_scenario("sybil_bond", sybil_bond_factory)
+    elif name == "private_commerce":
+        from nest_core.scenarios_builtin.private_commerce import (
+            private_commerce_factory,
+        )
+
+        register_scenario("private_commerce", private_commerce_factory)
