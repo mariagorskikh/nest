@@ -438,7 +438,9 @@ class TestStrategyBehavior:
         d_i = bp.disagreement_utility
         beta = bp.beta
 
-        from nest_plugins_reference.negotiation.pareto import _opp_utility_hat  # pyright: ignore[reportPrivateUsage]
+        from nest_plugins_reference.negotiation.pareto import (
+            _opp_utility_hat,  # pyright: ignore[reportPrivateUsage]
+        )
 
         opp_role = meta.get("opp_role", "")
         opp_n_count = meta.get("opp_n_count", 0)

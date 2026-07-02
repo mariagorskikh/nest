@@ -51,7 +51,6 @@ def _terms(p: int, n: int, q: float) -> Terms:
     return Terms(price=Money(amount=p), conditions={"quantity": n, "quality": q})
 
 
-
 # ---------------------------------------------------------------------------
 # 1. Determinism / replay
 # ---------------------------------------------------------------------------
@@ -410,7 +409,6 @@ def _make_seller_legacy(cfg: _Cfg, max_rounds: int = 12) -> ParetoNegotiator:
     params.target_n = (cfg.dlo + cfg.dhi) // 2
     params.kappa = 1.0 - cfg.patience
     return ParetoNegotiator(AgentId("s"), params)
-
 
 
 @given(payload=_cfg_and_offers())
