@@ -23,6 +23,20 @@ and you don't want to pay any cost.
 
 Source: [`nest_plugins_reference/privacy/noop.py`](../../packages/nest-plugins-reference/nest_plugins_reference/privacy/noop.py).
 
+## Hardened plugin
+
+`hybrid_x25519` — **real confidentiality.** HPKE-shaped hybrid encryption
+(per-message X25519 + HKDF key-agreement wrapping a ChaCha20-Poly1305
+content key), salted-Merkle **selective disclosure** for `prove`/`verify_proof`,
+and **broadcast revocation** via epochs. Ships an adversarial validator
+([`validators/privacy_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/privacy_validators.py))
+that catches the eavesdropper, replay, field-injection, and stale-revocation
+attacks — failing against `noop` and passing against this plugin. Supports a
+`deterministic=True` mode for byte-reproducible Tier-1 traces.
+
+Source: [`nest_plugins_reference/privacy/hybrid_x25519.py`](../../packages/nest-plugins-reference/nest_plugins_reference/privacy/hybrid_x25519.py).
+See `scenarios/sealed_bid_with_privacy.yaml` for a wired example.
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under
