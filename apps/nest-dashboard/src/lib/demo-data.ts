@@ -67,6 +67,17 @@ export const leaderboardData: LeaderboardEntry[] = [
   },
   {
     rank: 2,
+    name: "Dealmakers: Pareto Multi-Attribute",
+    scenario: "multi_attribute_market",
+    agents: 100,
+    deliveryRate: 100,
+    dealRate: 80.0,
+    latency: 1.0,
+    throughput: 69.6,
+    date: "2026-07-01",
+  },
+  {
+    rank: 3,
     name: "Auction with dynamic pricing",
     scenario: "auction",
     agents: 50,
@@ -77,7 +88,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     date: "2026-05-13",
   },
   {
-    rank: 3,
+    rank: 4,
     name: "Quorum Consensus (7 nodes)",
     scenario: "consensus",
     agents: 7,
@@ -88,7 +99,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     date: "2026-05-12",
   },
   {
-    rank: 4,
+    rank: 5,
     name: "Supply chain (4-hop)",
     scenario: "supply_chain",
     agents: 4,
@@ -99,7 +110,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     date: "2026-05-11",
   },
   {
-    rank: 5,
+    rank: 6,
     name: "Voting with 20 voters",
     scenario: "voting",
     agents: 22,
@@ -110,7 +121,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     date: "2026-05-10",
   },
   {
-    rank: 6,
+    rank: 7,
     name: "Reputation (20% malicious)",
     scenario: "reputation",
     agents: 10,
@@ -121,7 +132,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     date: "2026-05-09",
   },
   {
-    rank: 7,
+    rank: 8,
     name: "Marketplace baseline",
     scenario: "marketplace",
     agents: 20,
@@ -132,7 +143,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     date: "2026-05-08",
   },
   {
-    rank: 8,
+    rank: 9,
     name: "Consensus under partition",
     scenario: "consensus",
     agents: 5,
@@ -291,4 +302,5 @@ export const scenarioColors: Record<string, string> = {
   consensus: "#7C3AED",
   supply_chain: "#B45309",
   reputation: "#BE185D",
+  multi_attribute_market: "#0F766E",
 };

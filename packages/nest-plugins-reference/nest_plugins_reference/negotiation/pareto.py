@@ -233,12 +233,12 @@ class ParetoParams:
         total = w_p + w_n + w_q
         w_p, w_n, w_q = w_p / total, w_n / total, w_q / total
 
-        max_p = rng.randint(55, 90)
-        target_p = rng.randint(15, max_p - 10)
+        max_p = rng.randint(35, 60)
+        target_p = rng.randint(10, max_p - 10)
         min_n = rng.randint(3, 8)
-        max_n = rng.randint(25, 50)
+        max_n = rng.randint(20, 45)
         target_n = rng.randint(min_n + 5, max(min_n + 6, max_n - 5))
-        min_quality = rng.uniform(0.40, 0.70)
+        min_quality = rng.uniform(0.45, 0.80)
         kappa = rng.uniform(0.008, 0.04)
 
         # Strategy-specific scalars
@@ -290,13 +290,13 @@ class ParetoParams:
         total = w_p + w_n + w_q
         w_p, w_n, w_q = w_p / total, w_n / total, w_q / total
 
-        min_p = rng.randint(10, 35)
-        target_p = rng.randint(min_p + 10, 85)
-        capacity = rng.randint(30, 60)
+        min_p = rng.randint(30, 65)
+        target_p = rng.randint(min_p + 10, 95)
+        capacity = rng.randint(25, 55)
         min_n = rng.randint(1, 5)
         max_n = capacity
         target_n = rng.randint(capacity // 2, capacity)
-        min_quality = rng.uniform(0.30, 0.60)
+        min_quality = rng.uniform(0.45, 0.75)
         kappa = rng.uniform(0.003, 0.015)
 
         rho_p = rng.uniform(0.3, 0.7)
