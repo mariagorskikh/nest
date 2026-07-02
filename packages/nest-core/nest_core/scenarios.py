@@ -145,3 +145,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("rogue_trusted_agent", rogue_trusted_agent_factory)
+    elif name == "outcome_verified_settlement":
+        from nest_core.scenarios_builtin.chainaim.outcome_verified_settlement import (
+            outcome_verified_settlement_factory,
+        )
+
+        register_scenario("outcome_verified_settlement", outcome_verified_settlement_factory)

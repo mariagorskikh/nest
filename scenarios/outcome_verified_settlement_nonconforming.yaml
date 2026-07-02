@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# Outcome-verified settlement L3 CONFORMANCE scenario (positive control) -- hackathon problem 03.
+# gate: evaluator composes ChecksumGate (L2) + the reference_match criterion (L3).
+# From nonconform_at_tick onward, the seller delivers a DIFFERENT real unit's
+# canonical bytes (per nonconform_mode: replay_previous), honestly checksummed
+# for what it actually sent. ChecksumGate (L2) PASSES -- the bytes match their
+# own declared checksum. reference_match (L3) FAILS -- the content is wrong for
+# THIS unit's slot. This is the case ChecksumGate alone cannot catch: honestly
+# committed content for the wrong unit. All 4 validators PASS here (correct
+# implementation). Same 5x5/5%-drop/partition-on-seller-4 shape as the existing
+# degrade scenarios, so it reuses the same reliability characteristics.
+name: outcome_verified_settlement_nonconforming
+description: "L3 conformance gate: seller delivers a different real unit's honestly-checksummed content; only reference_match catches it."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+    - name: seller
+      count: 5
+
+layers:
+  payments: outcome_verified_settlement
+
+task:
+  type: outcome_verified_settlement   # resolves the existing factory -- do NOT rename
+  config:
+    rate_per_tick: 1
+    max_total: 20
+    close_at_tick: 5
+    tick_interval: 1.0
+    ack_timeout: 2.0
+    bill_on_send: false
+    max_retries: 2
+    initial_balance: 1000
+    gate: evaluator          # L3 conformance gate (EvaluatorGate, composes ChecksumGate)
+    criterion: reference_match
+    nonconform_at_tick: 3    # k: seller substitutes a different unit's real content from seq >= k
+    nonconform_mode: replay_previous   # replay_previous | stale_first | empty
+    bill_regardless: false   # correct: never bill past the verified prefix
+
+failures:
+  message_drop: 0.05
+  network_partition:
+    groups:
+      - ["buyer-0", "buyer-1", "buyer-2", "buyer-3", "buyer-4", "seller-0", "seller-1", "seller-2", "seller-3"]
+      - ["seller-4"]
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - dropped_count
+
+output:
+  trace: ./traces/outcome_verified_settlement_nonconforming.jsonl

@@ -24,6 +24,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from nest_core.chainaim.outcome_verified_settlement_validator import (
+    validate_outcome_verified_settlement_no_drain_after_close,
+    validate_outcome_verified_settlement_no_overbill,
+    validate_outcome_verified_settlement_no_overbill_on_failed_verification,
+    validate_outcome_verified_settlement_verdicts_match_committed_criterion,
+)
+
 
 class ValidationResult:
     """Result of a protocol validation check."""
@@ -4705,5 +4712,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "outcome_verified_settlement": [
+        validate_outcome_verified_settlement_no_drain_after_close,
+        validate_outcome_verified_settlement_no_overbill,
+        validate_outcome_verified_settlement_no_overbill_on_failed_verification,
+        validate_outcome_verified_settlement_verdicts_match_committed_criterion,
     ],
 }

@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# ChainAIM outcome-verified settlement scenario — BUGGY variant for the adversarial demo.
+# Identical to outcome_verified_settlement.yaml except bill_on_send: true, which
+# makes the buyer bill a tick on send instead of on the seller's ack. Under the
+# seller-4 partition that stream bills for ticks that were never delivered, so the
+# outcome_verified_settlement_no_overbill validator FAILS this run (and PASSES the
+# correct bill_on_send: false scenario).
+name: outcome_verified_settlement_overbill
+description: "Buggy bill-on-send variant; the over-bill validator must FAIL this run."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+    - name: seller
+      count: 5
+
+layers:
+  payments: outcome_verified_settlement
+
+task:
+  type: outcome_verified_settlement
+  config:
+    rate_per_tick: 1
+    max_total: 20
+    close_at_tick: 5
+    tick_interval: 1.0
+    ack_timeout: 2.0
+    bill_on_send: true
+    max_retries: 2
+    initial_balance: 1000
+
+failures:
+  message_drop: 0.05
+  network_partition:
+    groups:
+      - ["buyer-0", "buyer-1", "buyer-2", "buyer-3", "buyer-4", "seller-0", "seller-1", "seller-2", "seller-3"]
+      - ["seller-4"]
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - dropped_count
+
+output:
+  trace: ./traces/outcome_verified_settlement_overbill.jsonl

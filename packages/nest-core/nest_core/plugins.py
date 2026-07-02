@@ -34,6 +34,11 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("payments", "streaming"): f"{_REF}.payments.streaming:StreamingPayments",
     ("payments", "empic_escrow"): f"{_REF}.payments.empic_escrow:EMPICEscrowPayments",
     ("payments", "escrow"): f"{_REF}.payments.escrow:EscrowPayments",
+    # Problem 03: spec-suggested key ("payments", "streaming") is held by merged PR #21;
+    # distinct key per the charter's anti-duplicate rule -- see the plugin README.
+    ("payments", "outcome_verified_settlement"): (
+        f"{_REF}.payments.chainaim.outcome_verified_settlement:OutcomeVerifiedSettlement"
+    ),
     ("coordination", "contract_net"): f"{_REF}.coordination.contract_net:ContractNet",
     ("coordination", "hotstuff"): f"{_REF}.coordination.hotstuff:HotStuff",
     ("negotiation", "alternating_offers"): (

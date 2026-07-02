@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# ChainAIM outcome-verified settlement scenario (hackathon problem 03).
+# 5 buyers each open one per-tick payment stream to a seller, drain a few ticks,
+# then close mid-stream (unused remainder unspent). 5% of messages drop, and
+# seller-4 is isolated in its own partition group so buyer-4's stream gets no
+# acks and bills nothing (a correct stream does not over-bill on partition).
+name: outcome_verified_settlement
+description: "5 buyers stream per-tick payments to 5 sellers; mid-stream close, 5% drop, one partition."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+    - name: seller
+      count: 5
+
+layers:
+  payments: outcome_verified_settlement
+
+task:
+  type: outcome_verified_settlement
+  config:
+    rate_per_tick: 1
+    max_total: 20
+    close_at_tick: 5
+    tick_interval: 1.0
+    ack_timeout: 2.0
+    bill_on_send: false   # set true to demonstrate the over-bill-on-partition bug the validator catches
+    max_retries: 2        # resend a dropped tick/ack up to N times before closing (delivery-gated, gap-proof)
+    initial_balance: 1000
+
+failures:
+  message_drop: 0.05
+  network_partition:
+    groups:
+      - ["buyer-0", "buyer-1", "buyer-2", "buyer-3", "buyer-4", "seller-0", "seller-1", "seller-2", "seller-3"]
+      - ["seller-4"]
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - dropped_count
+
+output:
+  trace: ./traces/outcome_verified_settlement.jsonl

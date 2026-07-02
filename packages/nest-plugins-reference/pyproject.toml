@@ -53,6 +53,9 @@ phi_accrual = "nest_plugins_reference.failure_detection.phi_accrual:PhiAccrualFa
 parc = "nest_plugins_reference.trust.parc:ParcTrust"
 aae_permit_gate = "nest_plugins_reference.trust.aae_permit_gate:AAEPermitGate"
 
+[project.entry-points."nest.plugins.payments"]
+outcome_verified_settlement = "nest_plugins_reference.payments.chainaim.outcome_verified_settlement:OutcomeVerifiedSettlement"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -1911,6 +1911,7 @@ class TestValidatorRegistry:
             "failure_detection",
             "parc_migration",
             "rogue_trusted_agent",
+            "outcome_verified_settlement",
         }
         assert set(VALIDATORS.keys()) == expected
 

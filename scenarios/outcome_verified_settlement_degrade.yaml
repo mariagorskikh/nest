@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Outcome-verified settlement gated-degrade scenario (positive control) -- hackathon problem 03.
+# Same 5x5 / 5%-drop / one-partition shape as outcome_verified_settlement, but
+# billing is CONTENT-gated (gate: checksum): from degrade_at_tick onward the
+# seller corrupts the delivered bytes, the buyer's checksum gate emits
+# gate:<ref>:<seq>:fail, bills nothing for the bad unit, and closes the stream
+# with reason "degrade". Correct behaviour: all three outcome_verified_settlement validators PASS, and a
+# cleanly-degrading stream drains degrade_at_tick * rate_per_tick (the verified
+# prefix). seller-4 stays partitioned, so buyer-4 gets no acks, emits no gate
+# verdicts, and is skipped by the content-gate validator (drained 0).
+name: outcome_verified_settlement_degrade
+description: "5x5 content-gated streams; seller corrupts bytes at degrade_at_tick; correct degrade bills only the verified prefix."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+    - name: seller
+      count: 5
+
+layers:
+  payments: outcome_verified_settlement
+
+task:
+  type: outcome_verified_settlement   # resolves the existing factory -- do NOT rename
+  config:
+    rate_per_tick: 1
+    max_total: 20
+    close_at_tick: 5
+    tick_interval: 1.0
+    ack_timeout: 2.0
+    bill_on_send: false
+    max_retries: 2
+    initial_balance: 1000
+    gate: checksum          # content gate (ChecksumGate); != ack_received turns content-gating on
+    degrade_at_tick: 3      # k: seller corrupts delivered bytes from seq >= k -> gate fail at seq k
+    bill_regardless: false  # correct: stop billing on the first failed verdict and close
+
+failures:
+  message_drop: 0.05
+  network_partition:
+    groups:
+      - ["buyer-0", "buyer-1", "buyer-2", "buyer-3", "buyer-4", "seller-0", "seller-1", "seller-2", "seller-3"]
+      - ["seller-4"]
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - dropped_count
+
+output:
+  trace: ./traces/outcome_verified_settlement_degrade.jsonl
