@@ -5031,6 +5031,12 @@ def validate_commerce_bid_opacity(
         parts = msg.split(":")
         if ev.get("kind") in ("broadcast", "receive") and len(parts) >= 5 and parts[0] == "bidmeta":
             expected.add((parts[1], parts[4]))
+
+    if not expected:
+        return [
+            ValidationResult("commerce_bid_opacity", False, "no bidmeta markers found in trace")
+        ]
+
     for ev in events:
         if ev.get("kind") not in ("send", "receive", "dropped"):
             continue
