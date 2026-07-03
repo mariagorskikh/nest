@@ -1,23 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
-# Interview-evaluation delivery: a screening service hands a company a signed,
-# provenance-chained, PII-redacted, access-controlled hiring verdict.
+# Screening-evaluation delivery: a screening service hands a company a signed,
+# provenance-chained, PII-redacted, access-controlled PASSED/FAILED verdict.
+# OGHA only screens; passed candidates go on to the client's own rounds.
 #
 #        company-acme  --posts job-->  ogha-orchestrator
-#                                          |  publishes interview_record (parent)
+#                                          |  publishes interview_recording (video)
 #                                          v
 #                                      interviewer-7
-#                                          |  publishes evaluation (HIRED/NOT_HIRED
-#                                          |  = PASS/FAIL + report), parents=[record]
+#                                          |  publishes evaluation (PASSED/FAILED
+#                                          |  verdict + report drawn from the video)
 #                                          v
 #        company-acme  <--delivers--  ogha-orchestrator
 #             |
 #             +-- verify chain -> scan PII -> check ACL -> run 4 attacks
 #
 # company-acme is verifier AND adversary. It walks provenance back to the
-# interview record, scans the delivered report for PII, confirms it (an
+# interview recording, scans the delivered report for PII, confirms it (an
 # authorized reader) gets `read`, then attempts: substitution (a tampered
-# verdict under the interviewer's name), forged freshness, broken provenance,
-# and an ACL bypass (a rival company reading a private verdict).
+# verdict under the interviewer's name), forged freshness, broken provenance
+# (a verdict with no interview behind it), and an ACL bypass (a rival company
+# reading a private verdict).
 #
 # Verify::
 #
@@ -32,7 +34,7 @@
 # overwrites the real one), trusts any recent writer for freshness, has no
 # provenance, keeps raw PII in the permanent record, and grants read to anyone.
 name: interview_evaluation_delivery
-description: "A verified-interview service delivers a signed hiring verdict; an adversary attempts substitution, forged freshness, broken provenance, and an ACL bypass on the candidate's private evaluation."
+description: "A screening service delivers a signed PASSED/FAILED verdict bound to the interview recording; an adversary attempts substitution, forged freshness, broken provenance (a verdict with no interview), and an ACL bypass on the candidate's private evaluation."
 
 tier: 1
 seed: 42
@@ -69,7 +71,7 @@ layers:
 task:
   type: interview_evaluation_delivery
   config:
-    verdict: NOT_HIRED
+    verdict: FAILED
 
 failures:
   message_drop: 0.0

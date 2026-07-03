@@ -101,12 +101,12 @@ class TestScenarioEndToEnd:
         assert results["evaluation_pii_redacted"] is False
         assert results["evaluation_acl_enforced"] is False
 
-    def test_hired_verdict_configurable(self, tmp_path: Path) -> None:
+    def test_passed_verdict_configurable(self, tmp_path: Path) -> None:
         # The scenario honours task.config.verdict; both directions stay valid.
-        out = tmp_path / "hired.jsonl"
+        out = tmp_path / "passed.jsonl"
         cfg = ScenarioConfig.from_yaml("scenarios/interview_evaluation_delivery.yaml")
         cfg.layers.datafacts = "ogha_facts"
-        cfg.task.config = {"verdict": "HIRED"}
+        cfg.task.config = {"verdict": "PASSED"}
         cfg.output.trace = str(out)
         asyncio.run(ScenarioRunner(cfg).run())
         assert all(r.passed for r in validate_trace(out, _SCENARIO))

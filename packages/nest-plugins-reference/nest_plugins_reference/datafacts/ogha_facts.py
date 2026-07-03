@@ -2,10 +2,13 @@
 """Interview-evaluation DataFacts: content addressing + audience ACLs + pre-hash PII redaction.
 
 This plugin is written by an **interview-integrity engineer**. It models the
-delivery pipeline of a technical-screening service (a human interviewer meets a
-candidate off-protocol, then publishes a signed *evaluation* — ``HIRED`` /
-``NOT_HIRED``, i.e. ``PASS`` / ``FAIL``, plus a detailed report — that the
-service hands to the company that posted the job).
+delivery pipeline of a technical-*screening* service that sits at the front of a
+client's hiring funnel: a human interviewer conducts a recorded screening
+interview off-protocol, then publishes a signed *evaluation* — a ``PASSED`` /
+``FAILED`` verdict plus a detailed report drawn from the interview recording —
+that the service delivers to the company that posted the job. The service only
+filters; candidates who pass go on to the client's own rounds. Every verdict is
+bound to the recording it came from, so nothing is fabricated.
 
 It builds *on top of* the already-merged content-addressed plugin
 (:class:`~nest_plugins_reference.datafacts.cid_facts.CidFacts`) rather than
@@ -56,12 +59,14 @@ Example::
 
     interviewer = DidKeyIdentity(AgentId("interviewer-7"), seed=b"sim-seed")
     facts = OghaFacts(interviewer)
+    recording = await facts.publish(DatasetMetadata(name="rec", owner=AgentId("interviewer-7")))
     ds = evaluation_dataset(
         interviewer=AgentId("interviewer-7"),
         candidate_id="cand_a", job_id="job_42",
         company_id="acme", ogha_id="ogha",
-        verdict=VERDICT_HIRED,
-        report="Strong. Reachable at cand@example.com, SSN 123-45-6789.",
+        verdict=VERDICT_PASSED,
+        report="Cleared system design. Reachable at cand@example.com, SSN 123-45-6789.",
+        interview_recording=recording,
     )
     url = await facts.publish(ds)                 # e-mail + SSN scrubbed pre-hash
     grant = await facts.request_access(url, AgentId("acme"))   # tier == "read"
@@ -106,37 +111,35 @@ def _freshness_payload(url: DataFactsUrl, tick: float) -> bytes:
 # Verdict vocabulary
 # ---------------------------------------------------------------------------
 
-VERDICT_HIRED = "HIRED"
-"""The interviewer recommends hiring — equivalently ``PASS``.
+VERDICT_PASSED = "PASSED"
+"""The candidate cleared the screening interview and advances to the client's rounds.
 
 Example::
 
-    assert outcome_for(VERDICT_HIRED) == "PASS"
+    assert VERDICT_PASSED in VERDICTS
 """
 
-VERDICT_NOT_HIRED = "NOT_HIRED"
-"""The interviewer recommends against hiring — equivalently ``FAIL``.
+VERDICT_FAILED = "FAILED"
+"""The candidate did not clear the screening interview.
 
 Example::
 
-    assert outcome_for(VERDICT_NOT_HIRED) == "FAIL"
+    assert VERDICT_FAILED in VERDICTS
 """
 
-_OUTCOME = {VERDICT_HIRED: "PASS", VERDICT_NOT_HIRED: "FAIL"}
+VERDICTS = frozenset({VERDICT_PASSED, VERDICT_FAILED})
+"""The only two verdicts a screening evaluation may carry.
 
+OGHA is the *screening* interface at the front of the funnel — it filters
+candidates, it does not make hiring decisions (that is the client's call in
+later rounds). So the verdict is strictly binary: ``PASSED`` or ``FAILED``.
+A verdict outside this set is not a valid screening result; see
+:func:`evaluation_dataset`, which refuses to build one.
 
-def outcome_for(verdict: str) -> str:
-    """Map a hiring ``verdict`` to its ``PASS``/``FAIL`` outcome label.
+Example::
 
-    Any unrecognised verdict maps to ``"FAIL"`` — a screening record that does
-    not clearly say "hire" is not a pass.
-
-    Example::
-
-        assert outcome_for(VERDICT_HIRED) == "PASS"
-        assert outcome_for("garbage") == "FAIL"
-    """
-    return _OUTCOME.get(verdict, "FAIL")
+    assert VERDICTS == {"PASSED", "FAILED"}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -259,44 +262,60 @@ def evaluation_dataset(
     ogha_id: str,
     verdict: str,
     report: str,
+    interview_recording: DataFactsUrl,
     scores: dict[str, int] | None = None,
-    parents: list[DataFactsUrl] | None = None,
 ) -> DatasetMetadata:
-    """Build the :class:`DatasetMetadata` for one interview evaluation.
+    """Build the :class:`DatasetMetadata` for one screening evaluation.
 
-    The verdict, outcome, competency scores, report, and the candidate/job/
-    company identifiers all live in ``metadata`` so they are covered by the
-    content hash — a single byte changing the verdict changes the URL. The
-    ``acl`` is the audience allowed to read the content: the interviewer
-    (owner), the service, the posting company, and the candidate. It is part of
-    the hashed content, so *who may read a verdict* cannot be altered without
-    minting a new URL. ``access_tier`` is ``"restricted"`` (not ``"public"``),
-    which is what makes :meth:`OghaFacts.request_access` enforce the ACL.
+    Every field a client relies on — the ``verdict`` (``PASSED``/``FAILED``),
+    the interviewer's ``report``, the competency ``scores``, and the reference
+    to the ``interview_recording`` the report is drawn from — is placed in
+    ``metadata`` so it is covered by the content hash; a single byte changing
+    the verdict changes the URL.
+
+    Two invariants enforce *"nothing is fabricated"*:
+
+    * The verdict must be a member of :data:`VERDICTS`; anything else raises
+      ``ValueError`` (a screening result is ``PASSED`` or ``FAILED``, never a
+      free-form claim).
+    * ``interview_recording`` is recorded **and** listed as the sole provenance
+      parent, so the evaluation is cryptographically bound to the recorded
+      interview it derives from. :meth:`OghaFacts.publish` refuses to publish an
+      evaluation whose recording was never itself published — there is no
+      verdict without a real interview behind it.
+
+    The ``acl`` (interviewer, service, posting company, candidate) is part of
+    the hashed content, so *who may read a verdict* cannot change without minting
+    a new URL. ``access_tier`` is ``"restricted"``, which makes
+    :meth:`OghaFacts.request_access` enforce that ACL.
 
     Example::
 
         ds = evaluation_dataset(
             interviewer=AgentId("iv-1"), candidate_id="cand_a", job_id="job_42",
-            company_id="acme", ogha_id="ogha", verdict=VERDICT_HIRED, report="Strong hire.")
-        assert ds.metadata["outcome"] == "PASS"
+            company_id="acme", ogha_id="ogha", verdict=VERDICT_PASSED,
+            report="Cleared system design.", interview_recording=recording_url)
+        assert ds.metadata["verdict"] == "PASSED"
     """
+    if verdict not in VERDICTS:
+        msg = f"verdict must be one of {sorted(VERDICTS)}, not {verdict!r}"
+        raise ValueError(msg)
     metadata: dict[str, Any] = {
-        "kind": "interview_evaluation",
+        "kind": "screening_evaluation",
         "candidate_id": candidate_id,
         "job_id": job_id,
         "company_id": company_id,
         "verdict": verdict,
-        "outcome": outcome_for(verdict),
         "report": report,
+        "interview_recording": str(interview_recording),
         "scores": dict(scores) if scores else {},
         "acl": sorted({str(interviewer), ogha_id, company_id, candidate_id}),
+        "parents": [str(interview_recording)],
     }
-    if parents:
-        metadata["parents"] = [str(p) for p in parents]
     return DatasetMetadata(
         name=f"eval-{candidate_id}-{job_id}",
         owner=interviewer,
-        description=f"Interview evaluation for {candidate_id} on {job_id}",
+        description=f"Screening evaluation for {candidate_id} on {job_id}",
         access_tier="restricted",
         metadata=metadata,
     )
@@ -319,9 +338,11 @@ class OghaFacts(CidFacts):
     Example::
 
         facts = OghaFacts(DidKeyIdentity(AgentId("iv-1"), seed=b"s"))
+        rec = await facts.publish(DatasetMetadata(name="rec", owner=AgentId("iv-1")))
         url = await facts.publish(evaluation_dataset(
             interviewer=AgentId("iv-1"), candidate_id="c", job_id="j",
-            company_id="acme", ogha_id="ogha", verdict=VERDICT_HIRED, report="ok"))
+            company_id="acme", ogha_id="ogha", verdict=VERDICT_PASSED,
+            report="ok", interview_recording=rec))
     """
 
     def __init__(

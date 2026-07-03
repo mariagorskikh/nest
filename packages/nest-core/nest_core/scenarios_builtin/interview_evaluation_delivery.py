@@ -1,35 +1,40 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Interview-evaluation delivery: a screening service hands a signed verdict to a company.
+"""Screening-evaluation delivery: a screening service hands a signed verdict to a company.
 
-This is the real pipeline of a "verified interview" business modelled on-protocol.
-The interview itself is a *human, off-protocol* event; what goes on the wire is the
-**evaluation artifact** and its delivery::
+This is the real pipeline of a *verified-screening* business modelled on-protocol.
+OGHA is the filter at the front of the funnel: it decides only ``PASSED``/``FAILED``;
+candidates who pass move on to the client's own rounds. The interview itself is a
+*human, off-protocol* event that is **recorded on video**; what goes on the wire is
+the recording reference, the evaluation artifact, and its delivery::
 
         company-acme                         (1) posts a job + filtered candidate
              |
              v
-        ogha-orchestrator   --publishes-->   interview_record   (the parent: the
-             |                               interview happened)
+        ogha-orchestrator   --publishes-->   interview_recording  (the video: the
+             |                               screening actually happened)
              | (2) assigns
              v
-        interviewer-7       --publishes-->   evaluation           parents=[interview_record]
-             |                               (HIRED/NOT_HIRED = PASS/FAIL + report)
-             | (3) returns verdict
+        interviewer-7       --publishes-->   evaluation           parents=[recording]
+             |                               (PASSED/FAILED verdict + report drawn
+             | (3) returns verdict            from the recording)
              v
         ogha-orchestrator   --delivers-->    company-acme         (4) verify + attack
 
+Every verdict is bound by provenance to the recording it came from, so nothing is
+fabricated: there is no evaluation without a real, published interview behind it.
+
 ``company-acme`` plays verifier **and** adversary. As verifier it walks the
-provenance chain back to the interview record, scans the delivered content for
-PII, and confirms it (an authorized reader) gets ``read`` access. As adversary
-it runs four attacks an untrustworthy pipeline would silently allow:
+provenance chain back to the interview recording, scans the delivered content for
+PII, and confirms it (an authorized reader) gets ``read`` access. As adversary it
+runs four attacks an untrustworthy pipeline would silently allow:
 
 * *Substitution* — republish a **tampered verdict** under the interviewer's exact
-  name; does it land on the real evaluation's URL? (A ``NOT_HIRED`` flipped to
-  ``HIRED`` with no new URL is a career-altering forgery.)
+  name; does it land on the real evaluation's URL? (A ``FAILED`` flipped to
+  ``PASSED`` with no new URL is a screening-integrity forgery.)
 * *Forged freshness* — republish the verdict signed by the attacker while
   claiming the interviewer as owner; does it read as freshly attested?
-* *Broken provenance* — publish an evaluation whose declared interview record was
-  never published; is it rejected?
+* *Broken provenance* — publish an evaluation whose interview recording was never
+  published (a verdict with no real interview behind it); is it rejected?
 * *ACL bypass* — a **rival company** that did not post the job requests the
   candidate's private verdict; do they get ``read`` (a leak) or ``metadata`` only?
 
@@ -52,23 +57,23 @@ from __future__ import annotations
 from typing import Any, cast
 
 from nest_plugins_reference.datafacts.ogha_facts import (
-    VERDICT_HIRED,
-    VERDICT_NOT_HIRED,
+    VERDICT_FAILED,
+    VERDICT_PASSED,
     evaluation_dataset,
     scan_pii,
 )
 
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
-from nest_core.types import AgentId, DatasetMetadata
+from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
 
 # A candidate's own words in a screening write-up routinely carry PII that has no
 # business in a permanent, company-readable record. This report embeds four
 # categories (salary, e-mail, phone, DOB) so the redaction validator has teeth.
 _RAW_REPORT = (
-    "Candidate performed strongly on system design and coding. "
+    "Candidate performed strongly on system design and coding in the recording. "
     "Currently earning $185,000 and reachable at alex.candidate@example.com "
-    "or 555-987-6543. DOB 1994-03-12. Clear recommend."
+    "or 555-987-6543. DOB 1994-03-12. Clears screening."
 )
 _PHANTOM_PARENT = "df://sha256-" + "0" * 64
 
@@ -191,14 +196,14 @@ class CompanyAgent(StateMachineAgent):
             )
 
     async def _attack_substitution(self, ctx: AgentContext, facts: Any, eval_url: str) -> None:
-        """Republish a tampered verdict under the interviewer's exact name."""
+        """Republish a tampered verdict (FAILED -> PASSED) under the interviewer's name."""
         real = await facts.fetch(eval_url)
         forged = DatasetMetadata(
             name=real.name,
             owner=real.owner,
             description="tampered-verdict",
             access_tier=real.access_tier,
-            metadata={**real.metadata, "verdict": VERDICT_HIRED, "outcome": "PASS"},
+            metadata={**real.metadata, "verdict": VERDICT_PASSED},
         )
         attacker_url = await facts.publish(forged)
         collided = int(str(attacker_url) == str(eval_url))
@@ -217,16 +222,16 @@ class CompanyAgent(StateMachineAgent):
         await ctx.send(self._id, f"attack_forged_freshness|{forged_url}|{int(fresh)}".encode())
 
     async def _attack_provenance(self, ctx: AgentContext, facts: Any) -> None:
-        """Publish an evaluation whose declared interview record was never published."""
+        """Publish a verdict whose interview recording was never published (a fabrication)."""
         phantom = evaluation_dataset(
             interviewer=INTERVIEWER,
             candidate_id=_CANDIDATE_ID,
             job_id=_JOB_ID,
             company_id=str(COMPANY),
             ogha_id=str(OGHA),
-            verdict=VERDICT_HIRED,
-            report="laundered",
-            parents=[cast("Any", _PHANTOM_PARENT)],
+            verdict=VERDICT_PASSED,
+            report="fabricated verdict with no interview behind it",
+            interview_recording=cast("DataFactsUrl", _PHANTOM_PARENT),
         )
         try:
             await facts.publish(phantom)
@@ -262,22 +267,23 @@ class OghaAgent(StateMachineAgent):
             return
         if msg.startswith("job_posted|"):
             _, job_id, candidate_id = msg.split("|", 2)
-            record = DatasetMetadata(
-                name=f"interview-record-{candidate_id}-{job_id}",
+            recording = DatasetMetadata(
+                name=f"interview-recording-{candidate_id}-{job_id}",
                 owner=self._id,
-                description="Interview scheduled and conducted in person",
+                description="Screening interview conducted in person and recorded on video",
                 access_tier="restricted",
                 metadata={
-                    "kind": "interview_record",
+                    "kind": "interview_recording",
                     "candidate_id": candidate_id,
                     "job_id": job_id,
+                    "media": "video",
                     "acl": sorted({str(self._id), str(self._interviewer), str(self._company)}),
                 },
             )
-            record_url = await facts.publish(record)
+            recording_url = await facts.publish(recording)
             await ctx.send(
                 self._interviewer,
-                f"assignment|{job_id}|{candidate_id}|{record_url}".encode(),
+                f"assignment|{job_id}|{candidate_id}|{recording_url}".encode(),
             )
         elif msg.startswith("evaluation|"):
             _, eval_url = msg.split("|", 1)
@@ -288,11 +294,11 @@ class OghaAgent(StateMachineAgent):
 
 
 class InterviewerAgent(StateMachineAgent):
-    """Publishes a signed evaluation parented on the interview record.
+    """Publishes a signed evaluation grounded in (parented on) the interview recording.
 
     Example::
 
-        interviewer = InterviewerAgent(INTERVIEWER, ogha=OGHA, verdict=VERDICT_NOT_HIRED)
+        interviewer = InterviewerAgent(INTERVIEWER, ogha=OGHA, verdict=VERDICT_FAILED)
     """
 
     def __init__(self, agent_id: AgentId, ogha: AgentId, verdict: str) -> None:
@@ -301,7 +307,7 @@ class InterviewerAgent(StateMachineAgent):
         self._verdict = verdict
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
-        """On assignment, publish the evaluation (parents=[record]) and return it.
+        """On assignment, publish the evaluation grounded in the recording and return it.
 
         Example::
 
@@ -313,7 +319,7 @@ class InterviewerAgent(StateMachineAgent):
         facts = ctx.plugins.get("datafacts")
         if facts is None:
             return
-        _, job_id, candidate_id, record_url = msg.split("|", 3)
+        _, job_id, candidate_id, recording_url = msg.split("|", 3)
         dataset = evaluation_dataset(
             interviewer=self._id,
             candidate_id=candidate_id,
@@ -323,7 +329,7 @@ class InterviewerAgent(StateMachineAgent):
             verdict=self._verdict,
             report=_RAW_REPORT,
             scores={"system_design": 4, "coding": 5, "communication": 4},
-            parents=[cast("Any", record_url)],
+            interview_recording=cast("DataFactsUrl", recording_url),
         )
         eval_url = await facts.publish(dataset)
         acl = ",".join(str(x) for x in dataset.metadata["acl"])
@@ -386,12 +392,12 @@ def interview_evaluation_delivery_factory(
     config: ScenarioConfig,
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
-    """Wire the five-party interview-evaluation delivery pipeline.
+    """Wire the five-party screening-evaluation delivery pipeline.
 
-    Reads an optional ``config.task.config["verdict"]`` (``HIRED``/``NOT_HIRED``,
-    default ``NOT_HIRED`` — the harder case to protect: a rejection an attacker
-    would love to flip). Instantiates per-agent identities (each party signs as
-    itself) and per-agent datafacts handles over one shared store.
+    Reads an optional ``config.task.config["verdict"]`` (``PASSED``/``FAILED``,
+    default ``FAILED`` — the harder case to protect: a rejection an attacker
+    would love to flip to ``PASSED``). Instantiates per-agent identities (each
+    party signs as itself) and per-agent datafacts handles over one shared store.
 
     Example::
 
@@ -400,7 +406,7 @@ def interview_evaluation_delivery_factory(
     all_ids = [COMPANY, OGHA, INTERVIEWER, CANDIDATE, RIVAL]
 
     task_config = config.task.config or {}
-    verdict = task_config.get("verdict", VERDICT_NOT_HIRED)
+    verdict = task_config.get("verdict", VERDICT_FAILED)
 
     identity_cls = plugins.get("identity")
     identities: dict[AgentId, Any] = {}
