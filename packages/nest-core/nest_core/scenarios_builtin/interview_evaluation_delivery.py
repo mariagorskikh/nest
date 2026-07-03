@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Authors: Puja Ivaturi, Mahesh Gottam
 """Screening-evaluation delivery: a screening service hands a signed verdict to a company.
 
 This is the real pipeline of a *verified-screening* business modelled on-protocol.

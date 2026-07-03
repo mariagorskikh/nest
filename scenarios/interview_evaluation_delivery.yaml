@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Authors: Puja Ivaturi, Mahesh Gottam
 # Screening-evaluation delivery: a screening service hands a company a signed,
 # provenance-chained, PII-redacted, access-controlled PASSED/FAILED verdict.
 # OGHA only screens; passed candidates go on to the client's own rounds.

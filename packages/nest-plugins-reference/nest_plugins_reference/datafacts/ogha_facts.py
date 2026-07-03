@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Authors: Puja Ivaturi, Mahesh Gottam
 """Interview-evaluation DataFacts: content addressing + audience ACLs + pre-hash PII redaction.
 
 This plugin is written by an **interview-integrity engineer**. It models the
