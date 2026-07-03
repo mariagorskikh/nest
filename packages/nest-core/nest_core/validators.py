@@ -2835,6 +2835,12 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_provenance_freshness_unforgeable,
         validate_provenance_chain_unforgeable,
     ],
+    "provenance_supply_chain_multi": [
+        validate_provenance_chain_integrity,
+        validate_provenance_substitution_resistant,
+        validate_provenance_freshness_unforgeable,
+        validate_provenance_chain_unforgeable,
+    ],
     "bft_hotstuff": [
         validate_bft_no_conflicting_commits,
         validate_bft_no_equivocation,

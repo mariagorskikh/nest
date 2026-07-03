@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# Provenance scenario: a configurable N×M fan-in pipeline, then four attacks.
+#
+#   supplier-0  supplier-1  ...  supplier-(N-1)
+#        \           |               /
+#         \          |              /
+#      manufacturer-0  ...  manufacturer-(M-1)
+#              \       ...       /
+#               \               /
+#              distributor-0     (join: parents = all manufacturer URLs)
+#                    |
+#               retailer-0     (verifier + attacker)
+#
+# Each supplier publishes a root dataset (no parents).
+# Each manufacturer waits for every supplier URL, then publishes a dataset
+# listing all of them as provenance parents, and forwards to the distributor.
+# The distributor waits for every manufacturer URL, publishes a join dataset,
+# and forwards to the retailer.
+# The retailer walks the full DAG and runs substitution, forged-freshness,
+# and broken-provenance attacks as an outsider.
+#
+# Configurable via task.config:
+#   num_suppliers:      number of supplier agents (default 2)
+#   num_manufacturers:  number of manufacturer agents (default 2)
+#
+# Verify::
+#
+#     nest run scenarios/provenance_supply_chain_multi.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/provenance_supply_chain_multi.jsonl'), 'provenance_supply_chain_multi')]"
+#
+name: provenance_supply_chain_multi
+description: "Configurable N×M provenance fan-in pipeline (suppliers → manufacturers → distributor → retailer) with adversarial attack checks."
+
+tier: 1
+seed: 42
+
+agents:
+  # NOTE: agents.count is NOT used by the state-machine brain path.
+  # The factory derives the actual agent set from task.config (num_suppliers,
+  # num_manufacturers). Changing this value has no runtime effect; it is kept
+  # at the default-topology total (2+2+1+1=6) for reference only.
+  count: 6
+  brain: state-machine
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: cid_facts
+
+task:
+  type: provenance_supply_chain_multi
+  config:
+    num_suppliers: 2
+    num_manufacturers: 2
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/provenance_supply_chain_multi.jsonl
