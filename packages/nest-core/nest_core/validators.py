@@ -2558,6 +2558,81 @@ def validate_provenance_chain_unforgeable(
 
 
 # ---------------------------------------------------------------------------
+# Interview-evaluation delivery validators (datafacts, ogha_facts persona)
+# ---------------------------------------------------------------------------
+
+
+def validate_evaluation_pii_redacted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No PII survives into the content-addressed (permanent) evaluation record.
+
+    The delivered evaluation is fetched and scanned; the scenario reports
+    ``pii_scan|<url>|<count>``. Because a content hash is immutable, redaction
+    must happen *before* publishing — so a plugin that stores the raw report
+    (``datafacts_v1``) leaves a non-zero count and FAILS, while ``ogha_facts``
+    (which redacts pre-hash) reports zero and PASSES. A trace with no
+    ``pii_scan`` at all FAILS: the check must actually have run.
+
+    Example::
+
+        results = validate_evaluation_pii_redacted(events)
+    """
+    rows = _provenance_field_msg(events, "pii_scan|")
+    if not rows:
+        return [ValidationResult("evaluation_pii_redacted", False, "no pii_scan recorded")]
+    leaks = [row for row in rows if len(row) >= 3 and row[2] != "0"]
+    if leaks:
+        detail = "; ".join(f"{row[2]} PII token(s) survived into {row[1]}" for row in leaks)
+        return [ValidationResult("evaluation_pii_redacted", False, detail)]
+    return [
+        ValidationResult(
+            "evaluation_pii_redacted",
+            True,
+            f"{len(rows)} delivered evaluation(s) carried no PII in the permanent record",
+        )
+    ]
+
+
+def validate_evaluation_acl_enforced(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Only the evaluation's audience reads content; every other party gets metadata only.
+
+    The scenario reports ``acl_result|<url>|<requester>|<actual_tier>|<expected_tier>``
+    where ``expected_tier`` is derived from the dataset's own content-bound
+    ``acl`` (independent of the plugin under test). The check FAILS if any
+    requester received a tier other than expected — most importantly a rival
+    company handed ``read`` on a private verdict. ``datafacts_v1`` grants
+    ``read`` to everyone and FAILS here; ``ogha_facts`` returns ``metadata`` to
+    outsiders and PASSES. A trace with no ``acl_result`` FAILS.
+
+    Example::
+
+        results = validate_evaluation_acl_enforced(events)
+    """
+    rows = _provenance_field_msg(events, "acl_result|")
+    if not rows:
+        return [ValidationResult("evaluation_acl_enforced", False, "no acl_result recorded")]
+    violations: list[str] = []
+    for row in rows:
+        if len(row) < 5:
+            continue
+        _, url, requester, actual, expected = row[0], row[1], row[2], row[3], row[4]
+        if actual != expected:
+            violations.append(f"{requester} got tier={actual!r} (expected {expected!r}) on {url}")
+    if violations:
+        return [ValidationResult("evaluation_acl_enforced", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "evaluation_acl_enforced",
+            True,
+            f"all {len(rows)} access decision(s) matched the content-bound ACL",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # BFT HotStuff validators
 # ---------------------------------------------------------------------------
 
@@ -2834,6 +2909,14 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_provenance_substitution_resistant,
         validate_provenance_freshness_unforgeable,
         validate_provenance_chain_unforgeable,
+    ],
+    "interview_evaluation_delivery": [
+        validate_provenance_chain_integrity,
+        validate_provenance_substitution_resistant,
+        validate_provenance_freshness_unforgeable,
+        validate_provenance_chain_unforgeable,
+        validate_evaluation_pii_redacted,
+        validate_evaluation_acl_enforced,
     ],
     "bft_hotstuff": [
         validate_bft_no_conflicting_commits,

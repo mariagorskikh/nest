@@ -41,6 +41,7 @@ hybrid_x25519 = "nest_plugins_reference.privacy.hybrid_x25519:HybridX25519Privac
 
 [project.entry-points."nest.plugins.datafacts"]
 cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
+ogha_facts = "nest_plugins_reference.datafacts.ogha_facts:OghaFacts"
 
 [build-system]
 requires = ["hatchling"]

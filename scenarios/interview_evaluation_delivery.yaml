@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# Interview-evaluation delivery: a screening service hands a company a signed,
+# provenance-chained, PII-redacted, access-controlled hiring verdict.
+#
+#        company-acme  --posts job-->  ogha-orchestrator
+#                                          |  publishes interview_record (parent)
+#                                          v
+#                                      interviewer-7
+#                                          |  publishes evaluation (HIRED/NOT_HIRED
+#                                          |  = PASS/FAIL + report), parents=[record]
+#                                          v
+#        company-acme  <--delivers--  ogha-orchestrator
+#             |
+#             +-- verify chain -> scan PII -> check ACL -> run 4 attacks
+#
+# company-acme is verifier AND adversary. It walks provenance back to the
+# interview record, scans the delivered report for PII, confirms it (an
+# authorized reader) gets `read`, then attempts: substitution (a tampered
+# verdict under the interviewer's name), forged freshness, broken provenance,
+# and an ACL bypass (a rival company reading a private verdict).
+#
+# Verify::
+#
+#     nest run scenarios/interview_evaluation_delivery.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/interview_evaluation_delivery.jsonl'), \
+#                                  'interview_evaluation_delivery')]"
+#
+# Swap `layers.datafacts` to `datafacts_v1` and every adversarial validator
+# flips to FAIL: that reference plugin is name-addressed (the tampered verdict
+# overwrites the real one), trusts any recent writer for freshness, has no
+# provenance, keeps raw PII in the permanent record, and grants read to anyone.
+name: interview_evaluation_delivery
+description: "A verified-interview service delivers a signed hiring verdict; an adversary attempts substitution, forged freshness, broken provenance, and an ACL bypass on the candidate's private evaluation."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 5
+  brain: state-machine
+  roles:
+    - name: company
+      count: 1
+    - name: ogha
+      count: 1
+    - name: interviewer
+      count: 1
+    - name: candidate
+      count: 1
+    - name: rival
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: ogha_facts
+
+task:
+  type: interview_evaluation_delivery
+  config:
+    verdict: NOT_HIRED
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/interview_evaluation_delivery.jsonl

@@ -119,3 +119,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("escrow_marketplace", escrow_marketplace_factory)
+    elif name == "interview_evaluation_delivery":
+        from nest_core.scenarios_builtin.interview_evaluation_delivery import (
+            interview_evaluation_delivery_factory,
+        )
+
+        register_scenario("interview_evaluation_delivery", interview_evaluation_delivery_factory)
