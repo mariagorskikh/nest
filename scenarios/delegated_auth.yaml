@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated-capability scenario: a coordinator roots a delegation tree of 3
+# intermediaries x 4 workers, who present capabilities to a gatekeeper. Three
+# live attacks run against the tree — scope escalation, stale (cascaded-revoke)
+# parent, and audience confusion. The `delegatable` auth plugin denies all
+# three; the reference `jwt` plugin admits them (swap `auth: jwt` to see the
+# validator fail, which is the charter's bar for "adversarial").
+name: delegated_auth
+description: "Coordinator delegates narrowed capabilities down a 3x4 tree; workers attempt scope-escalation, stale-parent, and audience-confusion attacks against a gatekeeper."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 17          # 1 coordinator + 1 gatekeeper + 3 intermediaries + 12 workers
+  brain: state-machine
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: delegatable
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: delegated_auth
+  config:
+    intermediaries: 3
+    workers_per_intermediary: 4
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+
+output:
+  trace: ./traces/delegated_auth.jsonl
