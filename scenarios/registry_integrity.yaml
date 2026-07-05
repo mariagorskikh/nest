@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# Registry integrity scenario: registration authenticity under Sybil attack.
+# Run once as-is (registry: verified) and once with registry: in_memory to
+# see the adversarial validators catch the unauthenticated default.
+name: registry_integrity
+description: "3 honest registrants, 3 sybil attackers, 1 auditor - registration authenticity."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 7
+  brain: state-machine
+  roles:
+    - name: honest
+      count: 3
+    - name: sybil
+      count: 3
+    - name: auditor
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: verified
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: registry_integrity
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/registry_integrity.jsonl

@@ -145,3 +145,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("rogue_trusted_agent", rogue_trusted_agent_factory)
+    elif name == "registry_integrity":
+        from nest_core.scenarios_builtin.registry_integrity import (
+            registry_integrity_factory,
+        )
+
+        register_scenario("registry_integrity", registry_integrity_factory)

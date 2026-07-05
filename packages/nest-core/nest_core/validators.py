@@ -4062,6 +4062,7 @@ def validate_bft_no_stuck_view(
 
 
 # ---------------------------------------------------------------------------
+
 # Failure-detection validators
 # ---------------------------------------------------------------------------
 
@@ -4267,6 +4268,7 @@ def validate_failure_detection_completeness(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Portable-reputation (PARC) migration validators
 #
 # The parc_migration scenario broadcasts one ``admit:<agent>:<decision>:
@@ -4360,6 +4362,159 @@ def _validate_role_denied(
             name,
             True,
             f"{len(decisions)} {role} agent(s) denied with {expected_reason!r}",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Registry integrity validators (adversarial)
+# ---------------------------------------------------------------------------
+
+# Attack kind -> the typed rejection reason a verifying registry must give.
+# Encoded here independently of any plugin so these checks can judge *any*
+# registry implementation -- including the default ``in_memory``, which
+# accepts all three attacks and fails.
+_REGISTRY_EXPECTED_REASONS = {
+    "impersonate": "signer_mismatch",
+    "unsigned": "missing_signature",
+    "tamper": "bad_signature",
+}
+
+
+def _parse_registry_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Parse trace sends of the form ``reg:<kind>:k=v:k=v...``.
+
+    Returns one dict per matching event with ``kind`` (``attempt`` or
+    ``lookup``) and parsed ``key=value`` fields. Only sender-recorded ``send``
+    events are inspected so per-recipient ``receive`` copies do not double
+    count. Non-matching messages are skipped silently.
+    """
+    out: list[dict[str, str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("reg:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 2 or parts[1] not in ("attempt", "lookup"):
+            continue
+        parsed: dict[str, str] = {"kind": parts[1], "agent": str(ev.get("agent", ""))}
+        for piece in parts[2:]:
+            if "=" in piece:
+                k, _, v = piece.partition("=")
+                parsed[k] = v
+        out.append(parsed)
+    return out
+
+
+def validate_registry_unauthenticated_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: every adversarial registration attempt must be rejected.
+
+    Scans ``reg:attempt:`` lines and fails if any attempt whose ``attack``
+    kind is not ``honest`` was ``accepted`` -- an unauthenticated registry
+    (``in_memory``) accepts all of them. Also fails when the trace contains
+    no adversarial attempts at all, so the check cannot pass vacuously.
+
+    Example::
+
+        results = validate_registry_unauthenticated_rejected(events)
+    """
+    name = "registry_unauthenticated_rejected"
+    attacks = [
+        rec
+        for rec in _parse_registry_events(events)
+        if rec["kind"] == "attempt" and rec.get("attack", "honest") != "honest"
+    ]
+    if not attacks:
+        return [ValidationResult(name, False, "no adversarial registration attempts in trace")]
+
+    accepted = [
+        f"{rec.get('actor', '?')} ({rec.get('attack', '?')} as {rec.get('claimed', '?')})"
+        for rec in attacks
+        if rec.get("verdict") != "rejected"
+    ]
+    if accepted:
+        detail = f"registry accepted {len(accepted)} adversarial registrations: " + "; ".join(
+            accepted
+        )
+        return [ValidationResult(name, False, detail)]
+    return [ValidationResult(name, True, f"all {len(attacks)} adversarial registrations rejected")]
+
+
+def validate_registry_honest_admitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Guard: honest, correctly signed registrations must all be accepted.
+
+    The anti-deny-everything check -- a registry that rejects everything
+    would trivially pass the attack validators. Fails when any ``honest``
+    attempt was rejected, or when no honest attempts appear in the trace.
+
+    Example::
+
+        results = validate_registry_honest_admitted(events)
+    """
+    name = "registry_honest_admitted"
+    honest = [
+        rec
+        for rec in _parse_registry_events(events)
+        if rec["kind"] == "attempt" and rec.get("attack") == "honest"
+    ]
+    if not honest:
+        return [ValidationResult(name, False, "no honest registration attempts in trace")]
+
+    rejected = [
+        f"{rec.get('actor', '?')} (reason={rec.get('reason', '?')})"
+        for rec in honest
+        if rec.get("verdict") != "accepted"
+    ]
+    if rejected:
+        detail = f"registry rejected {len(rejected)} honest registrations: " + "; ".join(rejected)
+        return [ValidationResult(name, False, detail)]
+    return [ValidationResult(name, True, f"all {len(honest)} honest registrations accepted")]
+
+
+def validate_registry_rejection_reasons(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every rejected attack must carry the *right* typed reason.
+
+    ``impersonate`` -> ``signer_mismatch``, ``unsigned`` ->
+    ``missing_signature``, ``tamper`` -> ``bad_signature``. A registry that
+    rejects for the wrong reason is misdiagnosing the attack; a registry
+    that rejects nothing (``in_memory``) fails outright.
+
+    Example::
+
+        results = validate_registry_rejection_reasons(events)
+    """
+    name = "registry_rejection_reasons"
+    attacks = [
+        rec
+        for rec in _parse_registry_events(events)
+        if rec["kind"] == "attempt" and rec.get("attack") in _REGISTRY_EXPECTED_REASONS
+    ]
+    rejected = [rec for rec in attacks if rec.get("verdict") == "rejected"]
+    if not rejected:
+        return [ValidationResult(name, False, "no rejected adversarial attempts in trace")]
+
+    wrong = [
+        (
+            f"{rec.get('actor', '?')}: {rec.get('attack', '?')} rejected with "
+            f"{rec.get('reason', '?')!r}, expected "
+            f"{_REGISTRY_EXPECTED_REASONS[rec.get('attack', '')]!r}"
+        )
+        for rec in rejected
+        if rec.get("reason") != _REGISTRY_EXPECTED_REASONS[rec.get("attack", "")]
+    ]
+    if wrong:
+        return [ValidationResult(name, False, "; ".join(wrong))]
+    return [
+        ValidationResult(
+            name, True, f"{len(rejected)} rejections all carry the expected typed reason"
         )
     ]
 
@@ -4467,6 +4622,39 @@ def validate_failure_detection_accuracy(
         )
 
     return [accuracy, recovery]
+
+
+def validate_registry_authentic_discovery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Discovery must resolve every honest agent to its authentic card.
+
+    Scans the auditor's ``reg:lookup:`` lines and fails if any honest agent
+    is missing from discovery (``present=0``) or resolves to a card that no
+    longer points at the owner's true endpoint (``authentic=0``) -- the
+    poisoned-lookup outcome of a successful impersonation.
+
+    Example::
+
+        results = validate_registry_authentic_discovery(events)
+    """
+    name = "registry_authentic_discovery"
+    lookups = [rec for rec in _parse_registry_events(events) if rec["kind"] == "lookup"]
+    if not lookups:
+        return [ValidationResult(name, False, "no discovery audit lines in trace")]
+
+    violations: list[str] = []
+    for rec in lookups:
+        claimed = rec.get("claimed", "?")
+        if rec.get("present") != "1":
+            violations.append(f"{claimed} not discoverable")
+        elif rec.get("authentic") != "1":
+            violations.append(f"{claimed} resolves to a poisoned card")
+    if violations:
+        return [ValidationResult(name, False, "; ".join(violations))]
+    return [
+        ValidationResult(name, True, f"discovery authentic for all {len(lookups)} honest agents")
+    ]
 
 
 def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:
@@ -4705,5 +4893,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "registry_integrity": [
+        validate_registry_unauthenticated_rejected,
+        validate_registry_honest_admitted,
+        validate_registry_rejection_reasons,
+        validate_registry_authentic_discovery,
     ],
 }
