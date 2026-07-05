@@ -61,15 +61,18 @@ Example::
     interviewer = DidKeyIdentity(AgentId("interviewer-7"), seed=b"sim-seed")
     facts = OghaFacts(interviewer)
     recording = await facts.publish(DatasetMetadata(name="rec", owner=AgentId("interviewer-7")))
+    transcript = await facts.publish(DatasetMetadata(
+        name="tx", owner=AgentId("interviewer-7"),
+        metadata={"text": "Q: rate limiter? A: token bucket.", "parents": [recording]}))
     ds = evaluation_dataset(
         interviewer=AgentId("interviewer-7"),
         candidate_id="cand_a", job_id="job_42",
         company_id="acme", ogha_id="ogha",
         verdict=VERDICT_PASSED,
-        report="Cleared system design. Reachable at cand@example.com, SSN 123-45-6789.",
-        interview_recording=recording,
-    )
-    url = await facts.publish(ds)                 # e-mail + SSN scrubbed pre-hash
+        notes="Correct rate-limiter answer. Reach at cand@example.com, SSN 123-45-6789.",
+        transcript=transcript,
+        qa=[{"q": "rate limiter?", "a": "token bucket"}])
+    url = await facts.publish(ds)                 # e-mail + SSN in notes scrubbed pre-hash
     grant = await facts.request_access(url, AgentId("acme"))   # tier == "read"
     leak = await facts.request_access(url, AgentId("rival"))   # tier == "metadata"
 """
@@ -254,6 +257,41 @@ def _redact_dataset(dataset: DatasetMetadata) -> tuple[DatasetMetadata, dict[str
 # ---------------------------------------------------------------------------
 
 
+def _normalize_quote(text: str) -> str:
+    """Collapse whitespace and lowercase, so quote matching is layout-insensitive."""
+    return " ".join(text.split()).lower()
+
+
+def ungrounded_quotes(qa: list[dict[str, str]], transcript_text: str) -> list[str]:
+    """Return the Q&A excerpts that are *not* verbatim in ``transcript_text``.
+
+    An interviewer writes their verdict as a rough *gist* (their own judgment).
+    The report also carries supporting question/answer pairs pulled from the
+    interview transcript so the client can see exactly what was asked and
+    answered. Those pulled excerpts must be **grounded** — actually present in
+    the transcript — or the report is asserting words the candidate never said.
+
+    Returns every excerpt (question or answer) not found in the transcript;
+    an empty list means fully grounded. Matching is whitespace-insensitive and
+    case-insensitive but otherwise exact — a paraphrase does not count as
+    grounded. Pure text, so it is deterministic and needs no model.
+
+    Example::
+
+        qa = [{"q": "Design a rate limiter?", "a": "Token bucket in Redis."}]
+        assert ungrounded_quotes(qa, "... Token bucket in Redis. ...") == []
+        assert ungrounded_quotes(qa, "unrelated transcript") != []
+    """
+    haystack = _normalize_quote(transcript_text)
+    missing: list[str] = []
+    for item in qa:
+        for key in ("q", "a"):
+            excerpt = str(item.get(key, ""))
+            if excerpt and _normalize_quote(excerpt) not in haystack:
+                missing.append(excerpt)
+    return missing
+
+
 def evaluation_dataset(
     *,
     interviewer: AgentId,
@@ -262,40 +300,46 @@ def evaluation_dataset(
     company_id: str,
     ogha_id: str,
     verdict: str,
-    report: str,
-    interview_recording: DataFactsUrl,
+    notes: str,
+    transcript: DataFactsUrl,
+    qa: list[dict[str, str]] | None = None,
     scores: dict[str, int] | None = None,
 ) -> DatasetMetadata:
     """Build the :class:`DatasetMetadata` for one screening evaluation.
 
-    Every field a client relies on — the ``verdict`` (``PASSED``/``FAILED``),
-    the interviewer's ``report``, the competency ``scores``, and the reference
-    to the ``interview_recording`` the report is drawn from — is placed in
-    ``metadata`` so it is covered by the content hash; a single byte changing
-    the verdict changes the URL.
+    The report a client receives has three parts, all placed in ``metadata`` so
+    they are covered by the content hash (change the verdict by one byte → new
+    URL):
 
-    Two invariants enforce *"nothing is fabricated"*:
-
-    * The verdict must be a member of :data:`VERDICTS`; anything else raises
-      ``ValueError`` (a screening result is ``PASSED`` or ``FAILED``, never a
+    * ``verdict`` — ``PASSED``/``FAILED`` (must be a member of :data:`VERDICTS`;
+      anything else raises ``ValueError`` — a screening result is never a
       free-form claim).
-    * ``interview_recording`` is recorded **and** listed as the sole provenance
-      parent, so the evaluation is cryptographically bound to the recorded
-      interview it derives from. :meth:`OghaFacts.publish` refuses to publish an
-      evaluation whose recording was never itself published — there is no
-      verdict without a real interview behind it.
+    * ``notes`` — the interviewer's own words, a *gist* of their judgment. This
+      is subjective and is PII-scrubbed on publish; it is **not** quote-checked.
+    * ``qa`` — supporting question/answer pairs *pulled verbatim from the
+      interview transcript* so the client can see exactly what was asked and
+      answered. A downstream check (:func:`ungrounded_quotes`) rejects any pair
+      not actually in the transcript, so evidence cannot be fabricated.
+
+    Provenance: the report derives from the ``transcript`` (its sole parent),
+    which in turn derives from the video recording. So the chain is
+    ``report → transcript → recording``. :meth:`OghaFacts.publish` refuses to
+    publish a report whose transcript was never published — no verdict without a
+    real interview behind it.
 
     The ``acl`` (interviewer, service, posting company, candidate) is part of
     the hashed content, so *who may read a verdict* cannot change without minting
-    a new URL. ``access_tier`` is ``"restricted"``, which makes
-    :meth:`OghaFacts.request_access` enforce that ACL.
+    a new URL. ``access_tier`` is ``"restricted"``.
 
     Example::
 
         ds = evaluation_dataset(
             interviewer=AgentId("iv-1"), candidate_id="cand_a", job_id="job_42",
             company_id="acme", ogha_id="ogha", verdict=VERDICT_PASSED,
-            report="Cleared system design.", interview_recording=recording_url)
+            notes="Correct rate-limiter answer; weak on sharding.",
+            transcript=transcript_url,
+            qa=[{"q": "Design a rate limiter?", "a": "Token bucket in Redis.",
+                 "supports": "backs the note"}])
         assert ds.metadata["verdict"] == "PASSED"
     """
     if verdict not in VERDICTS:
@@ -307,11 +351,12 @@ def evaluation_dataset(
         "job_id": job_id,
         "company_id": company_id,
         "verdict": verdict,
-        "report": report,
-        "interview_recording": str(interview_recording),
+        "notes": notes,
+        "qa": [dict(item) for item in qa] if qa else [],
+        "transcript": str(transcript),
         "scores": dict(scores) if scores else {},
         "acl": sorted({str(interviewer), ogha_id, company_id, candidate_id}),
-        "parents": [str(interview_recording)],
+        "parents": [str(transcript)],
     }
     return DatasetMetadata(
         name=f"eval-{candidate_id}-{job_id}",
@@ -340,10 +385,12 @@ class OghaFacts(CidFacts):
 
         facts = OghaFacts(DidKeyIdentity(AgentId("iv-1"), seed=b"s"))
         rec = await facts.publish(DatasetMetadata(name="rec", owner=AgentId("iv-1")))
+        tx = await facts.publish(DatasetMetadata(name="tx", owner=AgentId("iv-1"),
+            metadata={"text": "A: token bucket", "parents": [rec]}))
         url = await facts.publish(evaluation_dataset(
             interviewer=AgentId("iv-1"), candidate_id="c", job_id="j",
             company_id="acme", ogha_id="ogha", verdict=VERDICT_PASSED,
-            report="ok", interview_recording=rec))
+            notes="ok", transcript=tx, qa=[{"q": "?", "a": "token bucket"}]))
     """
 
     def __init__(

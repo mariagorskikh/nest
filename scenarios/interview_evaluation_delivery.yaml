@@ -6,21 +6,23 @@
 #
 #        company-acme  --posts job-->  ogha-orchestrator
 #                                          |  publishes interview_recording (video)
+#                                          |  publishes transcript (parent = recording)
 #                                          v
 #                                      interviewer-7
-#                                          |  publishes evaluation (PASSED/FAILED
-#                                          |  verdict + report drawn from the video)
+#                                          |  publishes report (PASSED/FAILED verdict
+#                                          |  + gist notes + Q&A pulled from transcript)
 #                                          v
 #        company-acme  <--delivers--  ogha-orchestrator
 #             |
-#             +-- verify chain -> scan PII -> check ACL -> run 4 attacks
+#             +-- verify chain -> scan PII -> check ACL -> check quote-grounding
+#             |   -> run 5 attacks
 #
-# company-acme is verifier AND adversary. It walks provenance back to the
-# interview recording, scans the delivered report for PII, confirms it (an
-# authorized reader) gets `read`, then attempts: substitution (a tampered
-# verdict under the interviewer's name), forged freshness, broken provenance
-# (a verdict with no interview behind it), and an ACL bypass (a rival company
-# reading a private verdict).
+# company-acme is verifier AND adversary. It walks provenance (report -> transcript
+# -> recording), scans the report for PII, confirms access, and checks every cited
+# Q&A is verbatim in the transcript, then attempts: substitution, forged freshness,
+# broken provenance (a verdict with no interview), an ACL bypass (a rival reading a
+# private verdict), and a fabricated-quote-with-transcript-tamper (caught only under
+# content-addressing).
 #
 # Verify::
 #
@@ -35,7 +37,7 @@
 # overwrites the real one), trusts any recent writer for freshness, has no
 # provenance, keeps raw PII in the permanent record, and grants read to anyone.
 name: interview_evaluation_delivery
-description: "A screening service delivers a signed PASSED/FAILED verdict bound to the interview recording; an adversary attempts substitution, forged freshness, broken provenance (a verdict with no interview), and an ACL bypass on the candidate's private evaluation."
+description: "A screening service delivers a signed PASSED/FAILED report (verdict + notes + transcript-grounded Q&A) chained recording->transcript->report; an adversary attempts substitution, forged freshness, broken provenance, an ACL bypass, and a fabricated-quote-with-transcript-tamper."
 
 tier: 1
 seed: 42

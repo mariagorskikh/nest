@@ -2632,6 +2632,65 @@ def validate_evaluation_acl_enforced(
     ]
 
 
+def validate_evaluation_quotes_grounded(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Report Q&A must be verbatim in the cited transcript, and fabrication must be caught.
+
+    Two properties, both required:
+
+    1. *Grounding* — every delivered report's cited Q&A excerpts are actually in
+       the transcript it was built on (``quote_grounding|<url>|1``). A report that
+       quotes words not in the transcript is asserting evidence the candidate never
+       gave.
+    2. *Un-fakeable grounding* — an attacker who fabricates a Q&A **and** tampers
+       the transcript to cover it must be caught (``attack_fabricated_quote|<url>|1``).
+       Under content-addressing the report's cited transcript URL is immutable, so
+       the tampered transcript is a *different* dataset and the fabrication is
+       detected; under name-addressing (``datafacts_v1``) the tampered transcript
+       overwrites the original at the same URL and the lie slips through — so this
+       check FAILS against ``datafacts_v1`` and PASSES against ``ogha_facts``.
+
+    A trace missing either marker FAILS: the check must actually have run.
+
+    Example::
+
+        results = validate_evaluation_quotes_grounded(events)
+    """
+    grounding = _provenance_field_msg(events, "quote_grounding|")
+    if not grounding:
+        return [
+            ValidationResult("evaluation_quotes_grounded", False, "no quote_grounding recorded")
+        ]
+    ungrounded = [row for row in grounding if len(row) >= 3 and row[2] != "1"]
+    if ungrounded:
+        detail = "; ".join(
+            f"{row[1]} cites Q&A not present in its transcript" for row in ungrounded
+        )
+        return [ValidationResult("evaluation_quotes_grounded", False, detail)]
+    attacks = _provenance_field_msg(events, "attack_fabricated_quote|")
+    if not attacks:
+        return [
+            ValidationResult(
+                "evaluation_quotes_grounded", False, "no fabricated-quote attack recorded"
+            )
+        ]
+    missed = [row for row in attacks if len(row) >= 3 and row[2] != "1"]
+    if missed:
+        detail = "; ".join(
+            f"fabricated Q&A against {row[1]} was not caught (transcript tampered under its URL)"
+            for row in missed
+        )
+        return [ValidationResult("evaluation_quotes_grounded", False, detail)]
+    return [
+        ValidationResult(
+            "evaluation_quotes_grounded",
+            True,
+            f"{len(grounding)} report(s) fully grounded; fabricated-quote attack caught",
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # BFT HotStuff validators
 # ---------------------------------------------------------------------------
@@ -2917,6 +2976,7 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_provenance_chain_unforgeable,
         validate_evaluation_pii_redacted,
         validate_evaluation_acl_enforced,
+        validate_evaluation_quotes_grounded,
     ],
     "bft_hotstuff": [
         validate_bft_no_conflicting_commits,

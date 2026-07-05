@@ -3,10 +3,11 @@
 """Tests for the interview-evaluation delivery scenario and its two new validators.
 
 The core claim: pointing ``layers.datafacts`` at ``ogha_facts`` makes every
-validator pass, while the reference ``datafacts_v1`` fails all four adversarial
-checks plus the two OGHA-specific ones (PII redaction, ACL enforcement). Both
-directions are driven from synthetic traces and a real simulator run, and the
-run is asserted byte-deterministic across the required seed bank.
+validator pass, while the reference ``datafacts_v1`` fails the four provenance
+adversarial checks plus the three OGHA-specific ones (PII redaction, ACL
+enforcement, quote grounding). Both directions are driven from synthetic traces
+and a real simulator run, and the run is asserted byte-deterministic across the
+required seed bank.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from nest_core.scenario import ScenarioConfig
 from nest_core.validators import (
     validate_evaluation_acl_enforced,
     validate_evaluation_pii_redacted,
+    validate_evaluation_quotes_grounded,
     validate_trace,
 )
 
@@ -66,6 +68,34 @@ class TestAclValidator:
         assert validate_evaluation_acl_enforced([])[0].passed is False
 
 
+class TestQuotesGroundedValidator:
+    def test_pass_when_grounded_and_attack_caught(self) -> None:
+        events = [
+            _send("quote_grounding|df://sha256-eval|1"),
+            _send("attack_fabricated_quote|df://sha256-tx|1"),
+        ]
+        assert validate_evaluation_quotes_grounded(events)[0].passed is True
+
+    def test_fail_when_report_cites_ungrounded_quote(self) -> None:
+        events = [
+            _send("quote_grounding|df://sha256-eval|0"),
+            _send("attack_fabricated_quote|df://sha256-tx|1"),
+        ]
+        assert validate_evaluation_quotes_grounded(events)[0].passed is False
+
+    def test_fail_when_fabrication_not_caught(self) -> None:
+        events = [
+            _send("quote_grounding|df://sha256-eval|1"),
+            _send("attack_fabricated_quote|df://sha256-tx|0"),
+        ]
+        result = validate_evaluation_quotes_grounded(events)[0]
+        assert result.passed is False
+        assert "not caught" in result.detail
+
+    def test_fail_when_nothing_recorded(self) -> None:
+        assert validate_evaluation_quotes_grounded([])[0].passed is False
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: real simulator run
 # ---------------------------------------------------------------------------
@@ -101,6 +131,7 @@ class TestScenarioEndToEnd:
         assert results["provenance_chain_unforgeable"] is False
         assert results["evaluation_pii_redacted"] is False
         assert results["evaluation_acl_enforced"] is False
+        assert results["evaluation_quotes_grounded"] is False
 
     def test_passed_verdict_configurable(self, tmp_path: Path) -> None:
         # The scenario honours task.config.verdict; both directions stay valid.

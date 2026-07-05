@@ -4,49 +4,49 @@
 
 This is the real pipeline of a *verified-screening* business modelled on-protocol.
 OGHA is the filter at the front of the funnel: it decides only ``PASSED``/``FAILED``;
-candidates who pass move on to the client's own rounds. The interview itself is a
-*human, off-protocol* event that is **recorded on video**; what goes on the wire is
-the recording reference, the evaluation artifact, and its delivery::
+candidates who pass move on to the client's own rounds. The interview is a *human,
+off-protocol* event **recorded on video**; the video is transcribed, and the report
+delivered to the company carries the verdict, the interviewer's gist notes, and
+supporting question/answer excerpts **pulled verbatim from the transcript** so the
+client can see exactly what was asked and answered::
 
-        company-acme                         (1) posts a job + filtered candidate
+        company-acme                          (1) posts a job + filtered candidate
              |
              v
-        ogha-orchestrator   --publishes-->   interview_recording  (the video: the
-             |                               screening actually happened)
-             | (2) assigns
+        ogha-orchestrator  --publishes-->  interview_recording  (the video)
+             |                                      |
+             |                             --publishes--> transcript  (parent = recording)
+             | (2) assigns (recording + transcript)
              v
-        interviewer-7       --publishes-->   evaluation           parents=[recording]
-             |                               (PASSED/FAILED verdict + report drawn
-             | (3) returns verdict            from the recording)
+        interviewer-7      --publishes-->  evaluation   parents=[transcript]
+             |                             (PASSED/FAILED + gist notes + Q&A pulled
+             | (3) returns verdict          verbatim from the transcript)
              v
-        ogha-orchestrator   --delivers-->    company-acme         (4) verify + attack
+        ogha-orchestrator  --delivers-->   company-acme   (4) verify + attack
 
-Every verdict is bound by provenance to the recording it came from, so nothing is
-fabricated: there is no evaluation without a real, published interview behind it.
+Chain of evidence: ``report -> transcript -> recording``. Every verdict is bound by
+provenance to a real recording, and every cited Q&A is checkable against the
+transcript, so nothing is fabricated.
 
-``company-acme`` plays verifier **and** adversary. As verifier it walks the
-provenance chain back to the interview recording, scans the delivered content for
-PII, and confirms it (an authorized reader) gets ``read`` access. As adversary it
-runs four attacks an untrustworthy pipeline would silently allow:
+``company-acme`` plays verifier **and** adversary. As verifier it walks the chain,
+scans the report for PII, confirms access, and checks that every cited Q&A is
+verbatim in the transcript. As adversary it runs five attacks:
 
-* *Substitution* — republish a **tampered verdict** under the interviewer's exact
-  name; does it land on the real evaluation's URL? (A ``FAILED`` flipped to
-  ``PASSED`` with no new URL is a screening-integrity forgery.)
-* *Forged freshness* — republish the verdict signed by the attacker while
-  claiming the interviewer as owner; does it read as freshly attested?
-* *Broken provenance* — publish an evaluation whose interview recording was never
-  published (a verdict with no real interview behind it); is it rejected?
-* *ACL bypass* — a **rival company** that did not post the job requests the
-  candidate's private verdict; do they get ``read`` (a leak) or ``metadata`` only?
+* *Substitution* — republish a tampered verdict (``FAILED``->``PASSED``) under the
+  interviewer's name; does it land on the real evaluation's URL?
+* *Forged freshness* — republish signed by the attacker; does it read as fresh?
+* *Broken provenance* — publish a verdict whose transcript was never published.
+* *ACL bypass* — a rival company requests the candidate's private verdict.
+* *Fabricated quote* — attach a Q&A the candidate never gave AND tamper the
+  transcript to cover it. Content-addressing keeps the report's cited transcript
+  immutable, so the lie is caught; a name-addressed store (``datafacts_v1``) lets
+  the tampered transcript overwrite the original and the fabrication slips through.
 
-Point ``layers.datafacts`` at ``ogha_facts`` and every validator passes. Point it
-at ``datafacts_v1`` and they fail: that reference plugin is name-addressed (so the
-tampered verdict overwrites the real one), trusts any recent writer for freshness,
-has no provenance concept, keeps raw PII in the permanent record, and grants
-``read`` to whoever asks (so the rival reads the verdict).
+Point ``layers.datafacts`` at ``ogha_facts`` and every validator passes. Point it at
+``datafacts_v1`` and the adversarial ones fail.
 
-Every step is reported as a ``|``-delimited trace message (``:`` collides with the
-``df://`` URL scheme), read by ``validate_trace(..., "interview_evaluation_delivery")``.
+Every step is reported as a ``|``-delimited trace message, read by
+``validate_trace(..., "interview_evaluation_delivery")``.
 
 Example::
 
@@ -62,21 +62,12 @@ from nest_plugins_reference.datafacts.ogha_facts import (
     VERDICT_PASSED,
     evaluation_dataset,
     scan_pii,
+    ungrounded_quotes,
 )
 
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
-
-# A candidate's own words in a screening write-up routinely carry PII that has no
-# business in a permanent, company-readable record. This report embeds four
-# categories (salary, e-mail, phone, DOB) so the redaction validator has teeth.
-_RAW_REPORT = (
-    "Candidate performed strongly on system design and coding in the recording. "
-    "Currently earning $185,000 and reachable at alex.candidate@example.com "
-    "or 555-987-6543. DOB 1994-03-12. Clears screening."
-)
-_PHANTOM_PARENT = "df://sha256-" + "0" * 64
 
 COMPANY = AgentId("company-acme")
 OGHA = AgentId("ogha-orchestrator")
@@ -85,6 +76,63 @@ CANDIDATE = AgentId("candidate-a")
 RIVAL = AgentId("rival-corp")
 _JOB_ID = "job_42"
 _CANDIDATE_ID = "candidate-a"
+_PHANTOM_PARENT = "df://sha256-" + "0" * 64
+
+# What a speech-to-text system would return for the interview audio (a stand-in for
+# the real transcriber). The supporting Q&A below are verbatim excerpts of this.
+_TRANSCRIPT = (
+    "Interviewer: How would you design a distributed rate limiter? "
+    "Candidate: I'd start with a token bucket per client stored in Redis, "
+    "and a sliding window log for accuracy. "
+    "Interviewer: How do you shard that across regions? "
+    "Candidate: Honestly I'm not fully sure; I'd probably just replicate Redis "
+    "and hope it stays consistent. "
+    "Interviewer: Walk me through idempotency for the payment API. "
+    "Candidate: I'd attach an idempotency key per request and dedupe on the server "
+    "before applying the charge. "
+    "Interviewer: Thanks, that's helpful."
+)
+
+# The interviewer's ROUGH notes - their own words, a gist (with PII -> auto-scrubbed).
+_RAW_NOTES = (
+    "Gave a correct, well-structured answer to the rate-limiter design question "
+    "(token-bucket + sliding-window). Clearly weak on cross-region sharding. Solid on "
+    "payment idempotency. Volunteered SSN 123-45-6789 and DOB 1994-03-12 during small talk. "
+    "Leaning FAIL for a senior role."
+)
+
+# Supporting Q&A auto-pulled to back the notes - each must be verbatim in the transcript.
+_SUPPORTING_QA: list[dict[str, str]] = [
+    {
+        "q": "How would you design a distributed rate limiter?",
+        "a": (
+            "I'd start with a token bucket per client stored in Redis, "
+            "and a sliding window log for accuracy."
+        ),
+        "supports": "backs the note: correct rate-limiter answer",
+    },
+    {
+        "q": "How do you shard that across regions?",
+        "a": (
+            "Honestly I'm not fully sure; I'd probably just replicate Redis "
+            "and hope it stays consistent."
+        ),
+        "supports": "backs the note: weak on cross-region sharding",
+    },
+    {
+        "q": "Walk me through idempotency for the payment API.",
+        "a": (
+            "I'd attach an idempotency key per request and dedupe on the server "
+            "before applying the charge."
+        ),
+        "supports": "backs the note: solid on idempotency",
+    },
+]
+
+# A fabricated answer the candidate never gave. The question IS real (so only the
+# answer decides grounding), letting the attack isolate transcript-tampering.
+_FABRICATED_Q = "How do you shard that across regions?"
+_FABRICATED_A = "I would use consistent hashing with virtual nodes and per-region quorums."
 
 
 def _parents_of(meta: DatasetMetadata) -> list[str]:
@@ -122,7 +170,7 @@ class CompanyAgent(StateMachineAgent):
         await ctx.send(self._ogha, f"job_posted|{_JOB_ID}|{_CANDIDATE_ID}".encode())
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
-        """On delivery, verify the chain + PII + access, then run four attacks.
+        """On delivery, verify chain + PII + access + quote-grounding, then run five attacks.
 
         Example::
 
@@ -136,16 +184,18 @@ class CompanyAgent(StateMachineAgent):
             return
         _, eval_url, _job, _cand = msg.split("|", 3)
 
-        record_url = await self._verify_chain(ctx, facts, eval_url)
+        root_url = await self._verify_chain(ctx, facts, eval_url)
         await self._scan_pii(ctx, facts, eval_url)
         await self._check_access(ctx, facts, eval_url)
-        if record_url is not None:
+        await self._check_quote_grounding(ctx, facts, eval_url)
+        if root_url is not None:
             await self._attack_substitution(ctx, facts, eval_url)
             await self._attack_forged_freshness(ctx, facts, eval_url)
         await self._attack_provenance(ctx, facts)
+        await self._attack_fabricated_quote(ctx, facts, eval_url)
 
     async def _verify_chain(self, ctx: AgentContext, facts: Any, leaf_url: str) -> str | None:
-        """Walk the provenance DAG from the evaluation back to the interview record.
+        """Walk the provenance DAG report -> transcript -> recording back to the root.
 
         Reports ``chain_ok|leaf|depth`` on success (returns the root) or
         ``chain_broken|leaf|url`` if any hop fails to resolve.
@@ -172,20 +222,14 @@ class CompanyAgent(StateMachineAgent):
         return sorted(roots)[0] if roots else None
 
     async def _scan_pii(self, ctx: AgentContext, facts: Any, eval_url: str) -> None:
-        """Fetch the delivered evaluation and count any PII that survived into the hash."""
+        """Fetch the delivered evaluation and count any PII surviving in the notes."""
         meta = await facts.fetch(eval_url)
-        report = str(meta.metadata.get("report", ""))
-        found = sum(scan_pii(report).values())
+        notes = str(meta.metadata.get("notes", ""))
+        found = sum(scan_pii(notes).values())
         await ctx.send(self._id, f"pii_scan|{eval_url}|{found}".encode())
 
     async def _check_access(self, ctx: AgentContext, facts: Any, eval_url: str) -> None:
-        """Confirm the ACL: the poster reads content; a rival gets metadata only.
-
-        ``expected`` is derived from the dataset's own content-bound ``acl``
-        (present under every plugin, since it is stored metadata), so the check
-        is independent of the plugin under test. ``actual`` is whatever tier the
-        plugin's ``request_access`` returns. A mismatch is the leak.
-        """
+        """Confirm the ACL: the poster reads content; a rival gets metadata only."""
         meta = await facts.fetch(eval_url)
         acl = {str(x) for x in meta.metadata.get("acl", [])}
         for requester in (self._id, RIVAL):
@@ -195,6 +239,20 @@ class CompanyAgent(StateMachineAgent):
                 self._id,
                 f"acl_result|{eval_url}|{requester}|{grant.tier}|{expected}".encode(),
             )
+
+    async def _check_quote_grounding(self, ctx: AgentContext, facts: Any, eval_url: str) -> None:
+        """Every cited Q&A must be verbatim in the transcript the report was built on."""
+        report = await facts.fetch(eval_url)
+        transcript_url = str(report.metadata.get("transcript", ""))
+        try:
+            transcript = await facts.fetch(cast("DataFactsUrl", transcript_url))
+        except KeyError:
+            await ctx.send(self._id, f"quote_grounding|{eval_url}|0".encode())
+            return
+        qa = cast("list[dict[str, str]]", report.metadata.get("qa", []))
+        missing = ungrounded_quotes(qa, str(transcript.metadata.get("text", "")))
+        all_grounded = int(not missing)
+        await ctx.send(self._id, f"quote_grounding|{eval_url}|{all_grounded}".encode())
 
     async def _attack_substitution(self, ctx: AgentContext, facts: Any, eval_url: str) -> None:
         """Republish a tampered verdict (FAILED -> PASSED) under the interviewer's name."""
@@ -223,7 +281,7 @@ class CompanyAgent(StateMachineAgent):
         await ctx.send(self._id, f"attack_forged_freshness|{forged_url}|{int(fresh)}".encode())
 
     async def _attack_provenance(self, ctx: AgentContext, facts: Any) -> None:
-        """Publish a verdict whose interview recording was never published (a fabrication)."""
+        """Publish a verdict whose transcript was never published (a fabrication)."""
         phantom = evaluation_dataset(
             interviewer=INTERVIEWER,
             candidate_id=_CANDIDATE_ID,
@@ -231,8 +289,9 @@ class CompanyAgent(StateMachineAgent):
             company_id=str(COMPANY),
             ogha_id=str(OGHA),
             verdict=VERDICT_PASSED,
-            report="fabricated verdict with no interview behind it",
-            interview_recording=cast("DataFactsUrl", _PHANTOM_PARENT),
+            notes="fabricated verdict with no interview behind it",
+            transcript=cast("DataFactsUrl", _PHANTOM_PARENT),
+            qa=[],
         )
         try:
             await facts.publish(phantom)
@@ -241,9 +300,40 @@ class CompanyAgent(StateMachineAgent):
             rejected = 1
         await ctx.send(self._id, f"attack_provenance|{_PHANTOM_PARENT}|{rejected}".encode())
 
+    async def _attack_fabricated_quote(self, ctx: AgentContext, facts: Any, eval_url: str) -> None:
+        """Fabricate a Q&A the candidate never gave AND tamper the transcript to cover it.
+
+        Under content-addressing the report's cited transcript URL is immutable, so
+        re-fetching it still yields the original (no fabricated line) and the lie is
+        caught. Under a name-addressed store the tampered transcript overwrites the
+        original at the same URL, so the fabricated answer appears "grounded".
+        """
+        report = await facts.fetch(eval_url)
+        transcript_url = str(report.metadata.get("transcript", ""))
+        try:
+            real_tx = await facts.fetch(cast("DataFactsUrl", transcript_url))
+        except KeyError:
+            await ctx.send(self._id, f"attack_fabricated_quote|{transcript_url}|0".encode())
+            return
+        tampered = DatasetMetadata(
+            name=real_tx.name,
+            owner=real_tx.owner,
+            access_tier=real_tx.access_tier,
+            metadata={
+                **real_tx.metadata,
+                "text": str(real_tx.metadata.get("text", "")) + " " + _FABRICATED_A,
+            },
+        )
+        await facts.publish(tampered)
+        cited = await facts.fetch(cast("DataFactsUrl", transcript_url))
+        fabricated_qa = [{"q": _FABRICATED_Q, "a": _FABRICATED_A}]
+        missing = ungrounded_quotes(fabricated_qa, str(cited.metadata.get("text", "")))
+        caught = int(bool(missing))
+        await ctx.send(self._id, f"attack_fabricated_quote|{transcript_url}|{caught}".encode())
+
 
 class OghaAgent(StateMachineAgent):
-    """The screening service: records the interview, assigns it, and delivers the verdict.
+    """The screening service: records + transcribes the interview, assigns it, delivers the verdict.
 
     Example::
 
@@ -256,7 +346,7 @@ class OghaAgent(StateMachineAgent):
         self._company = company
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
-        """Handle a job posting (publish record + assign) or a returned verdict (deliver).
+        """Handle a job posting (publish recording + transcript, assign) or deliver the verdict.
 
         Example::
 
@@ -268,6 +358,7 @@ class OghaAgent(StateMachineAgent):
             return
         if msg.startswith("job_posted|"):
             _, job_id, candidate_id = msg.split("|", 2)
+            audience = sorted({str(self._id), str(self._interviewer), str(self._company)})
             recording = DatasetMetadata(
                 name=f"interview-recording-{candidate_id}-{job_id}",
                 owner=self._id,
@@ -278,13 +369,28 @@ class OghaAgent(StateMachineAgent):
                     "candidate_id": candidate_id,
                     "job_id": job_id,
                     "media": "video",
-                    "acl": sorted({str(self._id), str(self._interviewer), str(self._company)}),
+                    "acl": audience,
                 },
             )
             recording_url = await facts.publish(recording)
+            transcript = DatasetMetadata(
+                name=f"transcript-{candidate_id}-{job_id}",
+                owner=self._id,
+                description="Transcript of the recorded interview (speech-to-text)",
+                access_tier="restricted",
+                metadata={
+                    "kind": "transcript",
+                    "text": _TRANSCRIPT,
+                    "candidate_id": candidate_id,
+                    "job_id": job_id,
+                    "acl": audience,
+                    "parents": [str(recording_url)],
+                },
+            )
+            transcript_url = await facts.publish(transcript)
             await ctx.send(
                 self._interviewer,
-                f"assignment|{job_id}|{candidate_id}|{recording_url}".encode(),
+                f"assignment|{job_id}|{candidate_id}|{recording_url}|{transcript_url}".encode(),
             )
         elif msg.startswith("evaluation|"):
             _, eval_url = msg.split("|", 1)
@@ -295,7 +401,7 @@ class OghaAgent(StateMachineAgent):
 
 
 class InterviewerAgent(StateMachineAgent):
-    """Publishes a signed evaluation grounded in (parented on) the interview recording.
+    """Publishes a signed evaluation built on the transcript (verdict + notes + grounded Q&A).
 
     Example::
 
@@ -308,11 +414,11 @@ class InterviewerAgent(StateMachineAgent):
         self._verdict = verdict
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
-        """On assignment, publish the evaluation grounded in the recording and return it.
+        """On assignment, publish the evaluation grounded in the transcript and return it.
 
         Example::
 
-            await interviewer.on_message(ctx, OGHA, b"assignment|job_42|candidate-a|df://sha256-x")
+            await interviewer.on_message(ctx, OGHA, b"assignment|job_42|candidate-a|df://a|df://b")
         """
         msg = payload.decode("utf-8", errors="replace")
         if not msg.startswith("assignment|"):
@@ -320,7 +426,7 @@ class InterviewerAgent(StateMachineAgent):
         facts = ctx.plugins.get("datafacts")
         if facts is None:
             return
-        _, job_id, candidate_id, recording_url = msg.split("|", 3)
+        _, job_id, candidate_id, _recording_url, transcript_url = msg.split("|", 4)
         dataset = evaluation_dataset(
             interviewer=self._id,
             candidate_id=candidate_id,
@@ -328,9 +434,10 @@ class InterviewerAgent(StateMachineAgent):
             company_id=str(COMPANY),
             ogha_id=str(OGHA),
             verdict=self._verdict,
-            report=_RAW_REPORT,
-            scores={"system_design": 4, "coding": 5, "communication": 4},
-            interview_recording=cast("DataFactsUrl", recording_url),
+            notes=_RAW_NOTES,
+            transcript=cast("DataFactsUrl", transcript_url),
+            qa=_SUPPORTING_QA,
+            scores={"system_design": 2, "coding": 4, "communication": 4},
         )
         eval_url = await facts.publish(dataset)
         acl = ",".join(str(x) for x in dataset.metadata["acl"])
@@ -341,8 +448,8 @@ class InterviewerAgent(StateMachineAgent):
 class PassiveAgent(StateMachineAgent):
     """A party with an identity but no protocol actions (candidate, rival company).
 
-    Present so the town has real, registered identities for the ACL audience and
-    the rival attacker, without driving any messages.
+    Present so the town has real, registered identities for the ACL audience and the
+    rival attacker, without driving any messages.
 
     Example::
 
@@ -361,9 +468,9 @@ def _per_agent_datafacts(
     """Give each agent a datafacts handle over one shared store (mirrors provenance builder).
 
     Plugins taking ``(identity, datasets=, proofs=, clock=)`` (``cid_facts`` /
-    ``ogha_facts``) get one handle per agent over shared dicts and a shared
-    logical clock, so every party sees the same published datasets. Plugins with
-    a no-arg constructor (``datafacts_v1``) get one shared instance.
+    ``ogha_facts``) get one handle per agent over shared dicts and a shared logical
+    clock, so every party sees the same published datasets. Plugins with a no-arg
+    constructor (``datafacts_v1``) get one shared instance.
 
     Example::
 
@@ -396,9 +503,9 @@ def interview_evaluation_delivery_factory(
     """Wire the five-party screening-evaluation delivery pipeline.
 
     Reads an optional ``config.task.config["verdict"]`` (``PASSED``/``FAILED``,
-    default ``FAILED`` — the harder case to protect: a rejection an attacker
-    would love to flip to ``PASSED``). Instantiates per-agent identities (each
-    party signs as itself) and per-agent datafacts handles over one shared store.
+    default ``FAILED`` — the harder case to protect: a rejection an attacker would
+    love to flip to ``PASSED``). Instantiates per-agent identities (each party signs
+    as itself) and per-agent datafacts handles over one shared store.
 
     Example::
 
