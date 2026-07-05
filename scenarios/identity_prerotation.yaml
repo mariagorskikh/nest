@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Identity pre-rotation scenario: signers publish next-key commitments and rotate
+# to the committed key mid-run, while a byzantine agent attempts a rotation
+# hijack, post-rotation forgery, and backdating — then recovers legitimately.
+name: identity_prerotation
+description: "10 signers with KERI-style pre-rotation commitments; byzantine agent attempts rotation hijack + forgery + backdating, then recovers via the pre-committed key."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 11
+  brain: state-machine
+  roles:
+    # 9 honest + 1 byzantine over 10 signers = 10% byzantine (plus 1 auditor).
+    - name: honest
+      count: 9
+    - name: byzantine
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: ed25519_prerotation
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: identity_prerotation
+  config:
+    rounds: 6
+    rotate_at_round: 3
+    hijack_at_round: 4
+    byzantine_fraction: 0.10
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+
+output:
+  trace: ./traces/identity_prerotation.jsonl

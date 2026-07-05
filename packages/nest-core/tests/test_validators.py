@@ -920,6 +920,7 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "identity_rotation",
+            "identity_prerotation",
             "memory_concurrent_writers",
             "streaming_payments",
             "comms_versioning",

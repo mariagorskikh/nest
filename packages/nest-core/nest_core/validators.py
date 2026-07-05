@@ -2774,6 +2774,9 @@ def validate_bft_no_stuck_view(
 # Validator registry
 # ---------------------------------------------------------------------------
 
+from nest_core.chainaim.identity_prerotation_validator import (  # noqa: E402
+    validate_identity_prerotation,
+)
 
 VALIDATORS: dict[str, list[Any]] = {
     "comms_versioning": [
@@ -2811,6 +2814,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "identity_rotation": [
         validate_identity_rotation_occurred,
         validate_identity_rotation_signatures,
+    ],
+    "identity_prerotation": [
+        validate_identity_rotation_occurred,
+        validate_identity_prerotation,
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
