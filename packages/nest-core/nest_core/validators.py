@@ -2775,7 +2775,182 @@ def validate_bft_no_stuck_view(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Fair-ordering (engine-authored FIFO) validators
+#
+# The fair_ordering scenario broadcasts ``order:submit`` (from traders, stamped
+# with the engine's monotonic ``corr`` id) and ``order:execute`` (from the
+# sequencer). These validators reconstruct the NEUTRAL arrival order from the
+# ``corr`` ids -- a field the sequencer cannot forge -- and assert the executed
+# order matches it, with no order dropped or injected. They FAIL against
+# ``contract_net`` (no fair-ordering API -> no ``order:*`` events) and against
+# ``predatory`` (reorders by price), and PASS against ``fifo_fair``.
+#
+# KEY: the verdict keys on ``corr`` (engine record), never on anything the
+# sequencer wrote into ``msg`` -- that is the whole point.
+# ---------------------------------------------------------------------------
+
+
+def _parse_order_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Parse ``order:<kind>:k=v:...`` broadcasts, preserving the event timestamp.
+
+    Example::
+
+        parsed = _parse_order_events(events)
+        commits = [e for e in parsed if e["kind"] == "commit"]
+    """
+    parsed: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("order:"):
+            continue
+        corr = str(ev.get("corr", ""))
+        key = f"{corr}|{msg}"
+        if key in seen:
+            continue
+        seen.add(key)
+        parts = msg[len("order:") :].split(":")
+        record: dict[str, str] = {
+            "kind": parts[0],
+            "ts": str(ev.get("ts", "")),
+            "corr": str(ev.get("corr", "")),
+        }
+        for token in parts[1:]:
+            field, _, value = token.partition("=")
+            record[field] = value
+        parsed.append(record)
+    return parsed
+
+
+def _corr_int(rec: dict[str, str]) -> int | None:
+    """Parse the integer from an engine ``corr-N`` id, or ``None`` if malformed.
+
+    The engine always stamps a well-formed ``corr`` on every event, so a missing
+    or malformed one on an ``order:`` event means the trace is corrupt or forged.
+    Callers treat ``None`` as a hard failure -- never silently bucket it -- so a
+    mangled ``corr`` cannot collapse the neutral order and slip a reorder past the
+    integrity check.
+    """
+    parts = str(rec.get("corr", "")).split("-")
+    if len(parts) != 2 or not parts[1].isdigit():
+        return None
+    return int(parts[1])
+
+
+def _fail(name: str, detail: str) -> list[ValidationResult]:
+    return [ValidationResult(name, False, detail)]
+
+
+def validate_fair_ordering_integrity(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Executed order equals the engine-authored arrival order (no front-running).
+
+    The neutral arrival order is reconstructed from the monotonic, engine-assigned
+    ``corr`` id of each ``order:submit`` broadcast -- a field the sequencer cannot
+    forge -- NOT from anything the sequencer wrote. The executed order
+    (``order:execute`` by ``pos``) must equal it. A sequencer that reorders the
+    batch (front-running) diverges here and FAILS.
+
+    Robustness: a missing / malformed / duplicate ``corr`` on a submit, or a
+    missing / malformed / duplicate ``pos`` on an execute, FAILS loudly -- the
+    neutral and executed orders rest on these keys, so an ambiguous one must
+    never be allowed to pass.
+    """
+    name = "fair_ordering_integrity"
+    parsed = _parse_order_events(events)
+    submits = [e for e in parsed if e["kind"] == "submit"]
+    executes = [e for e in parsed if e["kind"] == "execute"]
+    if not submits or not executes:
+        return _fail(name, "no order:submit/execute events observed -- plugin lacks fair-ordering")
+
+    # Neutral order key: engine ``corr`` on each submit. Missing/malformed/dup -> FAIL.
+    corr_keys: list[int] = []
+    for e in submits:
+        key = _corr_int(e)
+        if key is None:
+            return _fail(
+                name, "order:submit with missing/malformed corr -- neutral order unprovable"
+            )
+        corr_keys.append(key)
+    if len(set(corr_keys)) != len(corr_keys):
+        return _fail(name, "duplicate corr across order:submit events -- neutral order ambiguous")
+
+    # Execution order key: ``pos`` on each execute. Missing/malformed/dup -> FAIL.
+    pos_keys: list[int] = []
+    for e in executes:
+        raw = e.get("pos", "")
+        if not raw.lstrip("-").isdigit():
+            return _fail(
+                name, "order:execute with missing/malformed pos -- execution order unprovable"
+            )
+        pos_keys.append(int(raw))
+    if len(set(pos_keys)) != len(pos_keys):
+        return _fail(name, "duplicate pos across order:execute events -- execution order ambiguous")
+    if set(pos_keys) != set(range(len(pos_keys))):
+        return _fail(name, "order:execute pos is not a clean 0..n-1 permutation -- order malformed")
+
+    s_agents = [e.get("agent", "") for e in submits]
+    x_agents = [e.get("agent", "") for e in executes]
+    neutral = [a for _, a in sorted(zip(corr_keys, s_agents, strict=True))]
+    executed = [a for _, a in sorted(zip(pos_keys, x_agents, strict=True))]
+    if executed != neutral:
+        moved = sum(1 for a, b in zip(executed, neutral, strict=False) if a != b)
+        return _fail(
+            name, f"execution != engine arrival order; {moved} positions reordered (front-run)"
+        )
+    return [
+        ValidationResult(
+            name,
+            True,
+            f"executed {len(executed)} orders in exact engine-authored arrival order",
+        )
+    ]
+
+
+def validate_fair_ordering_no_injection(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Every submitted order is executed exactly once; none dropped or injected.
+
+    Catches a sequencer that censors a submitted order or inserts one that was
+    never submitted, by comparing the multiset of executed agents against the
+    submitted agents (again keyed off engine-recorded broadcasts).
+    """
+    parsed = _parse_order_events(events)
+    submitted = sorted(e.get("agent", "") for e in parsed if e["kind"] == "submit")
+    executed = sorted(e.get("agent", "") for e in parsed if e["kind"] == "execute")
+    if not submitted or not executed:
+        return [
+            ValidationResult(
+                "fair_ordering_no_injection",
+                False,
+                "no order:submit/execute events observed -- plugin lacks fair-ordering",
+            )
+        ]
+    if submitted != executed:
+        dropped = sorted(set(submitted) - set(executed))
+        injected = sorted(set(executed) - set(submitted))
+        return [
+            ValidationResult(
+                "fair_ordering_no_injection",
+                False,
+                f"dropped={dropped} injected={injected}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "fair_ordering_no_injection",
+            True,
+            f"all {len(submitted)} submitted orders executed exactly once",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "fair_ordering": [
+        validate_fair_ordering_integrity,
+        validate_fair_ordering_no_injection,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,
