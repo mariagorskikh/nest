@@ -294,4 +294,18 @@ class TypedCrdtMemory:
             },
         }
     
-    
+    def _merge_vote(self, old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+        """Merge vote memory by keeping one ballot per writer.
+
+        The majority result is derived from the preserved ballots.
+        """
+        old_norm = self._normalize_vote(old)
+        new_norm = self._normalize_vote(new)
+
+        merged_ballots = dict(old_norm["ballots"])
+        merged_ballots.update(new_norm["ballots"])
+
+        return self._normalize_vote({
+            "type": "vote",
+            "ballots": merged_ballots,
+        })
