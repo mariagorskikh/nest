@@ -111,6 +111,9 @@ class TypedCrdtMemory:
         
         if old_type == "counter":
             return self._merge_counter(old, new)
+        
+        if old_type == "vote":
+            return self._merge_vote(old, new)
 
         raise ValueError(f"Unsupported typed CRDT memory type: {old_type!r}")
     
