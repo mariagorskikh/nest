@@ -8,7 +8,9 @@ replace last-writer-wins writes with type-aware CRDT merge behavior.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 
 class TypedCrdtMemory:
