@@ -31,10 +31,20 @@ class TypedCrdtMemory:
         return self._store.get(key)
 
     async def write(self, key: str, value: bytes) -> None:
-        """Write a value for a key, notifying subscribers."""
-        self._store[key] = value
+        """Merge a value into a key, notifying subscribers."""
+        current = self._store.get(key)
+
+        if current is None:
+            merged = self._encode(self._normalize_state(self._decode(value)))
+        else:
+            old_state = self._decode(current)
+            new_state = self._decode(value)
+            merged = self._encode(self._merge_state(old_state, new_state))
+
+        self._store[key] = merged
+
         for q in self._subscribers.get(key, []):
-            await q.put(value)
+            await q.put(merged)
 
     async def subscribe(self, key: str) -> AsyncIterator[bytes]:
         """Subscribe to changes for a key."""
