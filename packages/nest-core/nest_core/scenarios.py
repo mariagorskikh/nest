@@ -103,6 +103,12 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("multi_attribute_market", multi_attribute_market_factory)
+    elif name == "serialization_invariance":
+        from nest_core.scenarios_builtin.serialization_invariance import (
+            serialization_invariance_factory,
+        )
+
+        register_scenario("serialization_invariance", serialization_invariance_factory)
     elif name == "provenance_supply_chain":
         from nest_core.scenarios_builtin.provenance_supply_chain import (
             provenance_supply_chain_factory,

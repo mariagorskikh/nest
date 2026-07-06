@@ -2775,6 +2775,107 @@ def validate_bft_no_stuck_view(
 # ---------------------------------------------------------------------------
 
 
+def _sic_field_msg(events: list[dict[str, Any]], prefix: str) -> list[list[str]]:
+    """Collect ``|``-delimited trace rows for the serialization_invariance scenario.
+
+    Example::
+
+        rows = _sic_field_msg(events, "launder_collapsed|")
+    """
+    rows: list[list[str]] = []
+    for e in events:
+        msg = e.get("msg")
+        if isinstance(msg, str) and msg.startswith(prefix):
+            rows.append(msg.split("|"))
+    return rows
+
+
+def validate_sic_launder_neutralized(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The re-encoded republish must collapse onto the original address.
+
+    A ``launder_forked`` row means the same logical content received a second,
+    clean URL -- the provenance-laundering attack succeeded (byte-level
+    addressing does this). A ``launder_collapsed`` row means the registry
+    resolved the re-encoding to the original address and history stayed attached.
+
+    Example::
+
+        results = validate_sic_launder_neutralized(events)
+    """
+    forked = _sic_field_msg(events, "launder_forked|")
+    if forked:
+        detail = f"re-encoded copy minted a fresh address: {forked[0][1:]} (history severed)"
+        return [ValidationResult("sic_launder_neutralized", False, detail)]
+    collapsed = _sic_field_msg(events, "launder_collapsed|")
+    if not collapsed:
+        return [ValidationResult("sic_launder_neutralized", False, "no launder attempt recorded")]
+    return [
+        ValidationResult(
+            "sic_launder_neutralized",
+            True,
+            f"re-encoded republish collapsed onto {collapsed[0][1]}",
+        )
+    ]
+
+
+def validate_sic_tamper_still_detected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Normalization must not blunt integrity: changed content -> changed address.
+
+    Example::
+
+        results = validate_sic_tamper_still_detected(events)
+    """
+    missed = _sic_field_msg(events, "tamper_missed|")
+    if missed:
+        return [
+            ValidationResult(
+                "sic_tamper_still_detected",
+                False,
+                f"tampered content resolved to the original address {missed[0][1]}",
+            )
+        ]
+    detected = _sic_field_msg(events, "tamper_detected|")
+    if not detected:
+        return [ValidationResult("sic_tamper_still_detected", False, "no tamper probe recorded")]
+    return [
+        ValidationResult(
+            "sic_tamper_still_detected",
+            True,
+            f"tamper produced distinct address {detected[0][2]}",
+        )
+    ]
+
+
+def validate_sic_phantom_parent_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Provenance must refuse parents that were never published.
+
+    Example::
+
+        results = validate_sic_phantom_parent_rejected(events)
+    """
+    accepted = _sic_field_msg(events, "phantom_accepted|")
+    if accepted:
+        return [
+            ValidationResult(
+                "sic_phantom_parent_rejected", False, "dataset with unpublished parent accepted"
+            )
+        ]
+    rejected = _sic_field_msg(events, "phantom_rejected|")
+    if not rejected:
+        return [
+            ValidationResult(
+                "sic_phantom_parent_rejected", False, "no phantom-parent probe recorded"
+            )
+        ]
+    return [ValidationResult("sic_phantom_parent_rejected", True, "unpublished parent rejected")]
+
+
 VALIDATORS: dict[str, list[Any]] = {
     "comms_versioning": [
         validate_comms_reject_unknown_major,
@@ -2828,6 +2929,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
         validate_multi_attribute_individually_rational,
+    ],
+    "serialization_invariance": [
+        validate_sic_launder_neutralized,
+        validate_sic_tamper_still_detected,
+        validate_sic_phantom_parent_rejected,
     ],
     "provenance_supply_chain": [
         validate_provenance_chain_integrity,

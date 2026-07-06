@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+# Serialization-invariance scenario: provenance laundering by re-encoding.
+#
+#     supplier-0  ->  launder-0  ->  audit-0
+#
+# supplier-0 publishes a quarantined dataset. launder-0 re-serializes the
+# SAME logical content (int -> float, key reorder, NFC -> NFD unicode) and
+# republishes it under a new name and checksum, hoping for a fresh, clean
+# address. audit-0 then confirms integrity is not blunted: genuinely
+# tampered content must still change the address, and a phantom provenance
+# parent must still be rejected.
+#
+# Verify::
+#
+#     nest run scenarios/serialization_invariance.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/serialization_invariance.jsonl'), 'serialization_invariance')]"
+#
+# Swap `layers.datafacts` to `cid_facts` and sic_launder_neutralized flips to
+# FAIL: byte-level content addressing gives the re-encoded copy a fresh URL,
+# severing quarantine flags and provenance. That is the gap this plugin closes
+# -- demonstrated against the currently-merged plugin, not a strawman.
+name: serialization_invariance
+description: "A launderer re-encodes identical content to shed its quarantine flag; structural addressing collapses the alias while still detecting real tampering."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 3
+  brain: state-machine
+  roles:
+    - name: supplier
+      count: 1
+    - name: launder
+      count: 1
+    - name: audit
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: sic_facts
+
+task:
+  type: serialization_invariance
