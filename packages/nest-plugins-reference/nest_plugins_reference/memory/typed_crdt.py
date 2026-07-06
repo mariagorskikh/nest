@@ -80,3 +80,16 @@ class TypedCrdtMemory:
             return self._normalize_set(state)
 
         raise ValueError(f"Unsupported typed CRDT memory type: {memory_type!r}")
+    
+    def _merge_state(self, old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+        """Merge two decoded CRDT states."""
+        old_type = old.get("type")
+        new_type = new.get("type")
+
+        if old_type != new_type:
+            raise ValueError(f"Cannot merge different memory types: {old_type!r} and {new_type!r}")
+
+        if old_type == "set":
+            return self._merge_set(old, new)
+
+        raise ValueError(f"Unsupported typed CRDT memory type: {old_type!r}")
