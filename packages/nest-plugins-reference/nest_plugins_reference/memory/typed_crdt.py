@@ -208,3 +208,18 @@ class TypedCrdtMemory:
             "counts": sorted_counts,
             "total": sum(sorted_counts.values()),
         }
+    
+    def _merge_counter(self, old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+        """Merge counter memory by taking the max count per writer."""
+        old_norm = self._normalize_counter(old)
+        new_norm = self._normalize_counter(new)
+
+        merged_counts = dict(old_norm["counts"])
+
+        for writer, count in new_norm["counts"].items():
+            merged_counts[writer] = max(merged_counts.get(writer, 0), count)
+
+        return self._normalize_counter({
+            "type": "counter",
+            "counts": merged_counts,
+        })
