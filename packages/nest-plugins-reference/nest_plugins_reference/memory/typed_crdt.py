@@ -227,3 +227,71 @@ class TypedCrdtMemory:
             "type": "counter",
             "counts": merged_counts,
         })
+    
+    def _normalize_vote(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Normalize vote memory into per-writer ballots.
+
+        Accepted simple write shape:
+            {"type": "vote", "writer": "agent_1", "value": "approve"}
+
+        Canonical stored shape:
+            {
+                "type": "vote",
+                "ballots": {"agent_1": "approve"},
+                "result": {
+                    "winner": "approve",
+                    "confidence": 1.0,
+                    "counts": {"approve": 1}
+                }
+            }
+        """
+        ballots = state.get("ballots", {})
+
+        if not ballots and "writer" in state and "value" in state:
+            writer = str(state["writer"])
+            ballots = {writer: state["value"]}
+
+        if not isinstance(ballots, dict):
+            raise ValueError("vote memory requires a 'ballots' object")
+
+        clean_ballots = {
+            str(writer): value
+            for writer, value in ballots.items()
+        }
+
+        sorted_ballots = {
+            writer: clean_ballots[writer]
+            for writer in sorted(clean_ballots, key=str)
+        }
+
+        counts = Counter(sorted_ballots.values())
+
+        if counts:
+            # Deterministic tie-break:
+            # 1. highest vote count wins
+            # 2. if tied, lexicographically smallest value wins
+            winner, winner_count = sorted(
+                counts.items(),
+                key=lambda item: (-item[1], str(item[0])),
+            )[0]
+            confidence = winner_count / len(sorted_ballots)
+        else:
+            winner = None
+            confidence = 0.0
+
+        sorted_counts = {
+            value: counts[value]
+            for value in sorted(counts, key=str)
+        }
+
+        return {
+            "type": "vote",
+            "ballots": sorted_ballots,
+            "result": {
+                "winner": winner,
+                "confidence": confidence,
+                "counts": sorted_counts,
+            },
+        }
+    
+    
