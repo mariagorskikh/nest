@@ -104,6 +104,9 @@ class TypedCrdtMemory:
 
         if old_type == "set":
             return self._merge_set(old, new)
+        
+        if old_type == "counter":
+            return self._merge_counter(old, new)
 
         raise ValueError(f"Unsupported typed CRDT memory type: {old_type!r}")
     
