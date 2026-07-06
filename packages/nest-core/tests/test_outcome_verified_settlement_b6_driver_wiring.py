@@ -22,14 +22,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from nest_core.scenarios_builtin.chainaim.outcome_verified_settlement import (
+from nest_core.scenarios_builtin.outcome_verified_settlement import (
     OutcomeVerifiedSettlementBuyerAgent,
     OutcomeVerifiedSettlementSellerAgent,
 )
 from nest_core.sim.simulator import Simulator
 from nest_core.types import AgentId, PaymentRef
 from nest_core.validators import validate_events
-from nest_plugins_reference.payments.chainaim.outcome_verified_settlement import (
+from nest_plugins_reference.payments.outcome_verified_settlement import (
     OutcomeVerifiedSettlement,
 )
 

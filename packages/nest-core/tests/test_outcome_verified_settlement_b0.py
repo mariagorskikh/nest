@@ -14,7 +14,7 @@ from typing import Any
 
 from nest_core.plugins import PluginRegistry
 from nest_core.scenarios import get_scenario_factory
-from nest_core.scenarios_builtin.chainaim.outcome_verified_settlement import (
+from nest_core.scenarios_builtin.outcome_verified_settlement import (
     outcome_verified_settlement_factory,
 )
 from nest_core.validators import (
@@ -25,7 +25,7 @@ from nest_core.validators import (
     validate_outcome_verified_settlement_no_overbill_on_failed_verification,
     validate_outcome_verified_settlement_verdicts_match_committed_criterion,
 )
-from nest_plugins_reference.payments.chainaim.outcome_verified_settlement import (
+from nest_plugins_reference.payments.outcome_verified_settlement import (
     OutcomeVerifiedSettlement,
 )
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 
-from nest_core.scenarios_builtin.chainaim.gates import (
+from nest_core.scenarios_builtin.gates import (
     UnitContext,
     artifact_match,
     json_schema,

@@ -8,7 +8,7 @@ if any validator failed.
 
 Example::
 
-    uv run python scripts/chainaim/validate_streaming.py TRACE.jsonl --streams
+    uv run python scripts/validate_streaming.py TRACE.jsonl --streams
 """
 
 from __future__ import annotations

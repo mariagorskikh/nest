@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
-from nest_core.scenarios_builtin.chainaim.gates import (
+from nest_core.scenarios_builtin.gates import (
     ChecksumGate,
     EvaluatorGate,
     Gate,

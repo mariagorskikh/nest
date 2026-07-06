@@ -25,10 +25,10 @@ from typing import Any
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from nest_core.chainaim.outcome_verified_settlement_validator import (
+from nest_core.validators import (
+    validate_events,
     validate_outcome_verified_settlement_no_overbill_on_failed_verification,
 )
-from nest_core.validators import validate_events
 
 type Event = dict[str, Any]
 

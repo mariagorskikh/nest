@@ -22,10 +22,10 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from nest_core.chainaim.outcome_verified_settlement_validator import (
+from nest_core.validators import (
+    validate_events,
     validate_outcome_verified_settlement_verdicts_match_committed_criterion,
 )
-from nest_core.validators import validate_events
 
 type Event = dict[str, Any]
 

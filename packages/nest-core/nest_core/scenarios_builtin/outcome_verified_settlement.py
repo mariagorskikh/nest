@@ -3,7 +3,7 @@
 
 Each buyer opens one payment stream to a seller, then drives the stream one
 logical tick at a time. Billing is **outcome-gated**: each delivered tick is run
-through a settlement :class:`~nest_core.scenarios_builtin.chainaim.gates.Gate`
+through a settlement :class:`~nest_core.scenarios_builtin.gates.Gate`
 before one unit is billed. The default gate (``ack_received``) reproduces today's
 delivery-gated billing exactly -- a tick bills once the seller acknowledges it --
 so a retried or delayed delivery never over-bills and a partition bills nothing.
@@ -12,7 +12,7 @@ a declared checksum, and the buyer settles a unit only when a checksum recompute
 over the delivered bytes matches the declared one. The ``evaluator`` gate is also
 content-gated and additionally requires a named criterion (``criterion``, default
 ``"reference_match"``) to pass -- see
-``nest_core.scenarios_builtin.chainaim.gates`` for what each gate actually checks.
+``nest_core.scenarios_builtin.gates`` for what each gate actually checks.
 
 The ``bill_on_send`` flag (default ``False`` = correct) flips delivery billing to
 happen on send instead of on ack; with it ``True`` the buyer over-bills under
@@ -67,7 +67,7 @@ import hashlib
 from typing import Any
 
 from nest_core.scenario import ScenarioConfig
-from nest_core.scenarios_builtin.chainaim.gates import Gate, UnitContext, canonical_chunk
+from nest_core.scenarios_builtin.gates import Gate, UnitContext, canonical_chunk
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, PaymentRef
 
@@ -79,7 +79,7 @@ class OutcomeVerifiedSettlementBuyerAgent(StateMachineAgent):
     """A buyer that opens one outcome-gated payment stream to a seller.
 
     Drives ticks via ``ctx.schedule`` and settles each delivered tick through a
-    :class:`~nest_core.scenarios_builtin.chainaim.gates.Gate`. The default
+    :class:`~nest_core.scenarios_builtin.gates.Gate`. The default
     delivery gate bills exactly one unit per delivered ``ack`` (via a logical
     counter, so a retry never over-bills); the ``checksum``/``evaluator``
     content gates bill only when their verdict passes and otherwise close the

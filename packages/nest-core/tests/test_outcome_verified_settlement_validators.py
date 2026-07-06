@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from nest_core.chainaim.outcome_verified_settlement_validator import (
+from nest_core.validators import (
+    validate_events,
     validate_outcome_verified_settlement_no_drain_after_close,
     validate_outcome_verified_settlement_no_overbill,
 )
-from nest_core.validators import validate_events
 
 type Event = dict[str, Any]
 

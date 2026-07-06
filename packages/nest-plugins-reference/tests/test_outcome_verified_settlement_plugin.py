@@ -8,7 +8,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from nest_core.layers.payments import Payments
 from nest_core.types import AgentId, Money, PaymentRef, PaymentStatus
-from nest_plugins_reference.payments.chainaim.outcome_verified_settlement import (
+from nest_plugins_reference.payments.outcome_verified_settlement import (
     OutcomeVerifiedSettlement,
     StreamHandle,
 )

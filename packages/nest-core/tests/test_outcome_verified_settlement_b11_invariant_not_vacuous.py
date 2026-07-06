@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from nest_core.scenarios_builtin.chainaim.gates import canonical_chunk
+from nest_core.scenarios_builtin.gates import canonical_chunk
 from nest_core.validators import validate_events
 
 type Event = dict[str, Any]
