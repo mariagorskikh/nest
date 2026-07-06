@@ -67,3 +67,7 @@ class TypedCrdtMemory:
             raise ValueError("TypedCrdtMemory value must decode to a JSON object")
 
         return decoded
+    
+    def _encode(self, state: dict[str, Any]) -> bytes:
+        """Encode a Python dictionary into deterministic JSON bytes."""
+        return json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8")
