@@ -169,3 +169,42 @@ class TypedCrdtMemory:
             "type": "set",
             "items": merged_items,
         })
+    
+    def _normalize_counter(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Normalize counter memory into per-writer counts.
+
+        Accepted simple write shape:
+            {"type": "counter", "writer": "agent_1", "count": 1}
+
+        Canonical stored shape:
+            {
+                "type": "counter",
+                "counts": {"agent_1": 1},
+                "total": 1
+            }
+        """
+        counts = state.get("counts", {})
+
+        if not counts and "writer" in state:
+            writer = str(state["writer"])
+            count = int(state.get("count", state.get("value", 1)))
+            counts = {writer: count}
+
+        if not isinstance(counts, dict):
+            raise ValueError("counter memory requires a 'counts' object")
+
+        clean_counts = {
+            str(writer): int(count)
+            for writer, count in counts.items()
+        }
+
+        sorted_counts = {
+            writer: clean_counts[writer]
+            for writer in sorted(clean_counts, key=str)
+        }
+
+        return {
+            "type": "counter",
+            "counts": sorted_counts,
+            "total": sum(sorted_counts.values()),
+        }
