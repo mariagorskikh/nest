@@ -36,6 +36,9 @@ Repository = "https://github.com/projnanda/nandatown"
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
 
+[project.entry-points."nest.plugins.auth"]
+capability_tokens = "nest_plugins_reference.auth.capability_tokens:CapabilityTokens"
+
 [project.entry-points."nest.plugins.memory"]
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"
 

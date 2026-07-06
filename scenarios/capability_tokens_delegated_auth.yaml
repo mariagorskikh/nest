@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated auth: a 1 -> 3 -> 12 capability-token tree with offline
+# attenuation, mid-run cascading revocation, and fail-closed revocation epoch
+# semantics for a partitioned verifier.
+
+name: capability_tokens_delegated_auth
+description: |
+  One coordinator issues a root capability token, attenuates it to three
+  intermediaries, and each intermediary attenuates offline to four leaves.
+  The scenario records adversarial auth probes for scope escalation, revoked
+  ancestor replay, audience confusion, confused deputy use, and a stale
+  revocation epoch under partition.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 16
+  brain: state-machine
+  roles:
+    - name: coordinator
+      count: 1
+      config: {}
+    - name: intermediary
+      count: 3
+      config: {}
+    - name: leaf
+      count: 12
+      config: {}
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: capability_tokens
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: capability_tokens_delegated_auth
+  config: {}
+
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+  network_partition:
+    groups:
+      - [coordinator-0, intermediary-0, intermediary-1, intermediary-2, leaf-0, leaf-1, leaf-2, leaf-3]
+      - [leaf-4, leaf-5, leaf-6, leaf-7, leaf-8, leaf-9, leaf-10, leaf-11]
+  partition_heal_at_tick: 80
+
+duration: "ticks: 1200"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/capability_tokens_delegated_auth.jsonl

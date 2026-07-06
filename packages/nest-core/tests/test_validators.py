@@ -2008,6 +2008,7 @@ class TestValidatorRegistry:
             "multi_attribute_market",
             "provenance_supply_chain",
             "bft_hotstuff",
+            "capability_tokens_delegated_auth",
             "escrow_marketplace",
             "failure_detection",
             "parc_migration",

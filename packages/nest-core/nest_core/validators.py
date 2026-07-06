@@ -4793,6 +4793,277 @@ def validate_attested_sybil_quarantined(
 
 
 # ---------------------------------------------------------------------------
+# Capability-token delegated auth validators
+# ---------------------------------------------------------------------------
+
+
+def _parse_auth_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Parse ``auth:<kind>|k=v|k=v`` trace broadcasts.
+
+    Example::
+
+        rows = _parse_auth_events(events)
+    """
+    rows: list[dict[str, str]] = []
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("auth:"):
+            continue
+        prefix, separator, field_blob = msg.partition("|")
+        kind = prefix.removeprefix("auth:")
+        if not separator or not kind:
+            continue
+        parsed: dict[str, str] = {"kind": kind, "agent": str(ev.get("agent", ""))}
+        for piece in field_blob.split("|"):
+            if "=" in piece:
+                key, _, value = piece.partition("=")
+                parsed[key] = value
+        rows.append(parsed)
+    return rows
+
+
+def _auth_rows(events: list[dict[str, Any]], kind: str) -> list[dict[str, str]]:
+    return [row for row in _parse_auth_events(events) if row.get("kind") == kind]
+
+
+def _rejected_with(rows: list[dict[str, str]], expected_error: str) -> bool:
+    return any(row.get("rejected") == "1" and row.get("error") == expected_error for row in rows)
+
+
+def validate_delegated_auth_tree_exercised(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The scenario must build the requested 1 -> 3 -> 12 delegation tree.
+
+    This prevents a vacuous pass where attack rows are emitted but no real leaf
+    token ever verifies. It reads only trace evidence: three coordinator
+    delegations, twelve leaf delegations, and twelve successful leaf
+    verifications.
+
+    Example::
+
+        results = validate_delegated_auth_tree_exercised(events)
+    """
+    delegated = _auth_rows(events, "delegated")
+    parent_edges = {
+        row.get("child", "") for row in delegated if row.get("parent") == "coordinator-0"
+    }
+    leaf_edges = {
+        row.get("child", "") for row in delegated if row.get("child", "").startswith("leaf-")
+    }
+    verified = {
+        row.get("leaf", "")
+        for row in _auth_rows(events, "leaf_verified")
+        if row.get("verified") == "1"
+    }
+    problems: list[str] = []
+    if len(parent_edges) != 3:
+        problems.append(f"expected 3 intermediary delegations, saw {len(parent_edges)}")
+    if len(leaf_edges) != 12:
+        problems.append(f"expected 12 leaf delegations, saw {len(leaf_edges)}")
+    if len(verified) != 12:
+        problems.append(f"expected 12 verified leaves, saw {len(verified)}")
+    if problems:
+        return [ValidationResult("delegated_auth_tree_exercised", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "delegated_auth_tree_exercised",
+            True,
+            "coordinator delegated to 3 intermediaries and 12 leaves verified",
+        )
+    ]
+
+
+def validate_delegated_auth_scope_escalation_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: a child cannot request a scope outside the parent grant.
+
+    Example::
+
+        results = validate_delegated_auth_scope_escalation_blocked(events)
+    """
+    rows = _auth_rows(events, "attack_scope_escalation")
+    if not rows:
+        return [
+            ValidationResult(
+                "delegated_auth_scope_escalation_blocked",
+                False,
+                "no scope-escalation attack recorded",
+            )
+        ]
+    matching_scope = [row for row in rows if row.get("requested") == "admin:all"]
+    if matching_scope and _rejected_with(matching_scope, "ScopeEscalationError"):
+        return [
+            ValidationResult(
+                "delegated_auth_scope_escalation_blocked",
+                True,
+                "admin:all escalation rejected with ScopeEscalationError",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_scope_escalation_blocked",
+            False,
+            f"admin:all escalation was not rejected correctly: {rows}",
+        )
+    ]
+
+
+def validate_delegated_auth_cascading_revocation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: a child must not verify after any ancestor is revoked.
+
+    The scenario revokes ``intermediary-1`` and then has its four leaves verify
+    their already-issued children. Every one must fail with
+    ``RevokedAncestorError``.
+
+    Example::
+
+        results = validate_delegated_auth_cascading_revocation(events)
+    """
+    rows = _auth_rows(events, "attack_stale_parent")
+    if len(rows) != 4:
+        return [
+            ValidationResult(
+                "delegated_auth_cascading_revocation",
+                False,
+                f"expected 4 revoked-descendant checks, saw {len(rows)}",
+            )
+        ]
+    accepted = [row for row in rows if row.get("rejected") != "1"]
+    wrong_error = [row for row in rows if row.get("error") != "RevokedAncestorError"]
+    if accepted or wrong_error:
+        return [
+            ValidationResult(
+                "delegated_auth_cascading_revocation",
+                False,
+                f"accepted={accepted}; wrong_error={wrong_error}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_cascading_revocation",
+            True,
+            "revoked intermediary invalidated all 4 descendants",
+        )
+    ]
+
+
+def validate_delegated_auth_audience_confusion_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: a token for one audience cannot be presented by another agent.
+
+    Example::
+
+        results = validate_delegated_auth_audience_confusion_blocked(events)
+    """
+    rows = _auth_rows(events, "attack_audience_confusion")
+    if not rows:
+        return [
+            ValidationResult(
+                "delegated_auth_audience_confusion_blocked",
+                False,
+                "no audience-confusion attack recorded",
+            )
+        ]
+    if _rejected_with(rows, "AudienceMismatchError"):
+        return [
+            ValidationResult(
+                "delegated_auth_audience_confusion_blocked",
+                True,
+                "wrong presenter rejected with AudienceMismatchError",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_audience_confusion_blocked",
+            False,
+            f"audience confusion was not rejected correctly: {rows}",
+        )
+    ]
+
+
+def validate_delegated_auth_confused_deputy_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack: a deputy cannot spend its token on an unscoped third-party action.
+
+    The trace records a deputy attempting ``payments:write`` on behalf of a leaf
+    with a token scoped only for ``payments:read``. The expected fail-closed
+    verdict is ``ScopeEscalationError``.
+
+    Example::
+
+        results = validate_delegated_auth_confused_deputy_blocked(events)
+    """
+    rows = _auth_rows(events, "attack_confused_deputy")
+    if not rows:
+        return [
+            ValidationResult(
+                "delegated_auth_confused_deputy_blocked",
+                False,
+                "no confused-deputy attack recorded",
+            )
+        ]
+    matching_resource = [row for row in rows if row.get("resource") == "payments:write"]
+    if matching_resource and _rejected_with(matching_resource, "ScopeEscalationError"):
+        return [
+            ValidationResult(
+                "delegated_auth_confused_deputy_blocked",
+                True,
+                "deputy payments:write action rejected as an escalation",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_confused_deputy_blocked",
+            False,
+            f"confused deputy was not rejected correctly: {rows}",
+        )
+    ]
+
+
+def validate_delegated_auth_epoch_fence_fail_closed(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Partition semantics: a stale revocation view must fail closed.
+
+    Example::
+
+        results = validate_delegated_auth_epoch_fence_fail_closed(events)
+    """
+    rows = _auth_rows(events, "attack_partition_stale_epoch")
+    if not rows:
+        return [
+            ValidationResult(
+                "delegated_auth_epoch_fence_fail_closed",
+                False,
+                "no stale-epoch partition attack recorded",
+            )
+        ]
+    if _rejected_with(rows, "RevocationViewStaleError"):
+        return [
+            ValidationResult(
+                "delegated_auth_epoch_fence_fail_closed",
+                True,
+                "partitioned verifier failed closed on stale revocation epoch",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_epoch_fence_fail_closed",
+            False,
+            f"stale epoch was not rejected correctly: {rows}",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -5016,6 +5287,14 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_bft_no_equivocation,
         validate_bft_forged_quorum,
         validate_bft_no_stuck_view,
+    ],
+    "capability_tokens_delegated_auth": [
+        validate_delegated_auth_tree_exercised,
+        validate_delegated_auth_scope_escalation_blocked,
+        validate_delegated_auth_cascading_revocation,
+        validate_delegated_auth_audience_confusion_blocked,
+        validate_delegated_auth_confused_deputy_blocked,
+        validate_delegated_auth_epoch_fence_fail_closed,
     ],
     "escrow_marketplace": [
         validate_escrow_state_machine,

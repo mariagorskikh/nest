@@ -131,6 +131,15 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.delegated_auth import delegated_auth_factory
 
         register_scenario("delegated_auth", delegated_auth_factory)
+    elif name == "capability_tokens_delegated_auth":
+        from nest_core.scenarios_builtin.capability_tokens_delegated_auth import (
+            capability_tokens_delegated_auth_factory,
+        )
+
+        register_scenario(
+            "capability_tokens_delegated_auth",
+            capability_tokens_delegated_auth_factory,
+        )
     elif name == "multi_attribute_market":
         from nest_core.scenarios_builtin.multi_attribute_market import (
             multi_attribute_market_factory,

@@ -42,6 +42,35 @@ Source: [`nest_plugins_reference/auth/delegatable.py`](../../packages/nest-plugi
 Validators: [`nest_plugins_reference/validators/delegation_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/delegation_validators.py).
 Scenario: [`scenarios/delegated_auth.yaml`](../../scenarios/delegated_auth.yaml).
 
+## Capability delegation plugin: `capability_tokens`
+
+`capability_tokens` is an HMAC-chained, macaroon-style capability-token
+plugin for offline attenuation. A root token is signed by the issuer. Each
+holder can delegate a child token without an issuer round-trip by signing the
+child caveats with the parent link signature as the HMAC key. Verification
+replays the entire chain from the root secret, so scope widening, TTL
+extension, signature tampering, and parent-hash substitution fail closed.
+
+The plugin satisfies the base `Auth` protocol and adds explicit audience and
+resource guards:
+
+```python
+auth = CapabilityTokens(secret=b"root", clock=0.0)
+root = await auth.issue(AgentId("coordinator"), ["read", "write"])
+child = await auth.delegate(root, AgentId("worker"), ["read"], ttl=60)
+ctx = await auth.verify_for_audience(child, AgentId("worker"))
+ctx = await auth.authorize(child, AgentId("worker"), "read")
+```
+
+Revocation is by chain hash. Revoking any ancestor causes every descendant
+to fail verification with `RevokedAncestorError` once the verifier has a
+fresh revocation view. Revocation views also carry a monotonic epoch: a
+verifier configured with `stale_after=0` and cut off from the latest epoch
+raises `RevocationViewStaleError` instead of accepting with stale knowledge.
+
+Source: [`nest_plugins_reference/auth/capability_tokens.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/capability_tokens.py).
+Scenario: [`scenarios/capability_tokens_delegated_auth.yaml`](../../scenarios/capability_tokens_delegated_auth.yaml).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under
