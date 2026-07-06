@@ -55,3 +55,15 @@ class TypedCrdtMemory:
                 await q.put(new)
             return True
         return False
+    
+    def _decode(self, value: bytes) -> dict[str, Any]:
+        """Decode JSON bytes into a Python dictionary."""
+        try:
+            decoded = json.loads(value.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("TypedCrdtMemory values must be JSON-encoded bytes") from exc
+
+        if not isinstance(decoded, dict):
+            raise ValueError("TypedCrdtMemory value must decode to a JSON object")
+
+        return decoded
