@@ -23,6 +23,7 @@ dependencies = [
     "nest-shell",
     "nest-plugins-reference",
     "nest-marketplace",
+    "nest-registry-backends",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +65,7 @@ members = [
     "packages/nest-shell",
     "packages/nest-plugins-reference",
     "packages/nest-marketplace",
+    "packages/nest-registry-backends",
 ]
 
 [tool.uv]
@@ -78,6 +80,11 @@ dev-dependencies = [
     # nest-cli is a deprecated shim — only installed for the dev test suite
     # so the shim's smoke tests can import it.
     "nest-cli",
+    # Test dependencies for nest-registry-backends
+    "fakeredis>=2.23",
+    "aiosqlite>=0.20",
+    "asyncpg>=0.29",
+    "redis>=5.0",
 ]
 
 [tool.uv.sources]
@@ -89,6 +96,7 @@ nest-scenarios = { workspace = true }
 nest-shell = { workspace = true }
 nest-plugins-reference = { workspace = true }
 nest-marketplace = { workspace = true }
+nest-registry-backends = { workspace = true }
 
 [tool.ruff]
 target-version = "py312"
@@ -112,6 +120,7 @@ extraPaths = [
     "packages/nest-shell",
     "packages/nest-plugins-reference",
     "packages/nest-marketplace",
+    "packages/nest-registry-backends",
     ".",
 ]
 
