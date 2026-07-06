@@ -140,3 +140,16 @@ class TypedCrdtMemory:
             "items": sorted_items,
             "values": values,
         }
+
+    def _merge_set(self, old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+        """Merge set memory by unioning tagged items."""
+        old_norm = self._normalize_set(old)
+        new_norm = self._normalize_set(new)
+
+        merged_items = dict(old_norm["items"])
+        merged_items.update(new_norm["items"])
+
+        return self._normalize_set({
+            "type": "set",
+            "items": merged_items,
+        })
