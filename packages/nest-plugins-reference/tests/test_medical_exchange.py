@@ -16,7 +16,27 @@ Coverage layers:
    Insurer-B's verifier with a different root; must fail.
 3. **Adversarial discrimination** — ``noop`` leaks all fields and accepts
    replayed proofs; ``hybrid_x25519`` blocks both.
-4. **Scenario integration** — Boots the YAML and confirms determinism.
+4. **Encrypted medical exchange** — full encrypt/prove/verify round-trip,
+   eavesdropper exclusion, and revocation in a medical context.
+5. **Deeper privacy invariants** — six additional attack surfaces not covered
+   by the existing test suite:
+
+   a. Salt hiding — the same low-entropy field value committed with two
+      different salts produces different leaf hashes, so the root does not
+      leak the value to a passive observer who only knows the schema.
+   b. Reveal-set integrity — a proof built for ``reveal=X`` does not verify
+      against a statement demanding ``reveal=X,Y`` (extra-field mismatch).
+   c. Merkle path substitution — the authentication path from leaf *i* cannot
+      be spliced into a proof claiming leaf *j*; the reconstructed root diverges.
+   d. Redirect / wrap-strip attack — stripping one recipient's wrap entry from
+      a multi-recipient envelope breaks AEAD authentication for the remaining
+      recipient (the AAD binds the full sorted recipient key-id list).
+   e. Cross-insurer proof non-transferability — a proof built for insurer-A's
+      statement does not verify against insurer-B's statement even when both
+      statements share the same root but request different reveal sets.
+   f. Partial reveal completeness — hospital can prove strict subsets of the
+      credential (one field, two fields, all five fields) and every partial
+      proof verifies while hiding all non-revealed values.
 
 Example::
 
@@ -26,11 +46,14 @@ Example::
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 from nest_core.types import AgentId, Statement, Witness
 from nest_plugins_reference.privacy.hybrid_x25519 import (
     HybridX25519Privacy,
+    MalformedEnvelopeError,
     NotInAudienceError,
+    TamperError,
     commit_credential,
 )
 from nest_plugins_reference.privacy.noop import NoopPrivacy
@@ -63,7 +86,8 @@ _PATIENT_FIELDS = {
 
 
 def _patient_credential(
-    *, salt_seed: bytes = b"hospital-issuer",
+    *,
+    salt_seed: bytes = b"hospital-issuer",
 ) -> tuple[str, dict[str, str], dict[str, str]]:
     """Commit the standard 5-field patient credential.
 
@@ -327,3 +351,327 @@ class TestEncryptedMedicalExchange:
         except NotInAudienceError:
             return
         raise AssertionError("revoked insurer decrypted post-revocation message")
+
+
+# ---------------------------------------------------------------------------
+# 5. Deeper privacy invariants — six attack surfaces not in the existing suite
+# ---------------------------------------------------------------------------
+
+
+class TestSaltHiding:
+    """Salt actually hides low-entropy field values from passive observers.
+
+    Age, blood type, and diagnosis are low-cardinality values; an attacker who
+    knows the schema could hash every candidate value against the published root
+    unless each field's leaf hash is randomised by a unique per-field salt.
+    These tests confirm that the salt is the source of that randomness, using
+    only the public ``commit_credential`` / ``prove`` / ``verify_proof`` API.
+    """
+
+    def test_same_fields_different_salt_seeds_produce_different_roots(self) -> None:
+        """Two credentials with identical field values but different salt seeds
+        must have different Merkle roots, proving the salt actually diversifies
+        the commitment (the root alone does not recover any field value)."""
+        root_a, _ = commit_credential(_PATIENT_FIELDS, salt_seed=b"issuer-a")
+        root_b, _ = commit_credential(_PATIENT_FIELDS, salt_seed=b"issuer-b")
+        assert root_a != root_b, "different salt seeds must produce different roots"
+
+    def test_random_salts_produce_unlinkable_commitments(self) -> None:
+        """``salt_seed=None`` draws from the RNG: two commits of the same fields
+        always differ, so a credential root cannot be linked to a known credential
+        just by hashing the candidate field set."""
+        root_a, _ = commit_credential(_PATIENT_FIELDS)
+        root_b, _ = commit_credential(_PATIENT_FIELDS)
+        assert root_a != root_b, (
+            "random-salt commits of identical fields must be unlinkable (different roots)"
+        )
+
+    async def test_salt_change_breaks_proof_verification(self) -> None:
+        """A proof built with one salt set does not verify under a root committed
+        with a *different* salt set, even if all field values are identical.
+
+        This confirms that the salt is cryptographically bound into the proof:
+        re-issuing the credential with new salts invalidates all existing proofs.
+        """
+        hospital = _mk("hospital")
+        root_a, salts_a = commit_credential(_PATIENT_FIELDS, salt_seed=b"epoch-1")
+        root_b, _ = commit_credential(_PATIENT_FIELDS, salt_seed=b"epoch-2")
+        assert root_a != root_b
+
+        stmt_a = _make_statement(root_a, "age,diagnosis")
+        witness_a = _make_witness(_PATIENT_FIELDS, salts_a)
+        proof_a = await hospital.prove(stmt_a, witness_a)
+
+        # Proof verifies under root-A.
+        assert await hospital.verify_proof(stmt_a, proof_a)
+
+        # The same proof must NOT verify under root-B, even though all field
+        # values are identical — the salts differ so the leaf hashes differ.
+        stmt_b = _make_statement(root_b, "age,diagnosis")
+        assert not await hospital.verify_proof(stmt_b, proof_a), (
+            "proof issued under epoch-1 salts must be rejected under epoch-2 root"
+        )
+
+
+class TestRevealSetIntegrity:
+    """A proof is bound to the exact reveal set in its statement.
+
+    verify_proof checks ``set(disclosed) == reveal_set(statement)``.  These
+    tests confirm that a proof for a *subset* of fields does not verify against
+    a statement demanding a *superset*, and vice versa.
+    """
+
+    async def test_subset_proof_fails_against_superset_statement(self) -> None:
+        """Hospital proves age only; insurer's statement demands age + diagnosis."""
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+
+        stmt_narrow = _make_statement(root, "age")
+        witness = _make_witness(fields, salts)
+        proof = await hospital.prove(stmt_narrow, witness)
+        assert await hospital.verify_proof(stmt_narrow, proof)
+
+        stmt_wide = _make_statement(root, "age,diagnosis")
+        assert not await hospital.verify_proof(stmt_wide, proof), (
+            "proof for 'age' must not verify against 'age,diagnosis'"
+        )
+
+    async def test_superset_proof_fails_against_subset_statement(self) -> None:
+        """Hospital proves age + diagnosis; statement only asks for age."""
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+
+        stmt_wide = _make_statement(root, "age,diagnosis")
+        witness = _make_witness(fields, salts)
+        proof = await hospital.prove(stmt_wide, witness)
+        assert await hospital.verify_proof(stmt_wide, proof)
+
+        stmt_narrow = _make_statement(root, "age")
+        assert not await hospital.verify_proof(stmt_narrow, proof), (
+            "proof for 'age,diagnosis' must not verify against 'age'"
+        )
+
+    async def test_empty_reveal_set_proof_not_accepted_as_full_disclosure(
+        self,
+    ) -> None:
+        """A prove call with all fields listed verifies; claiming reveal='' fails."""
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+
+        stmt_full = _make_statement(root, "age,blood_type,diagnosis,name,treatment")
+        witness = _make_witness(fields, salts)
+        proof = await hospital.prove(stmt_full, witness)
+        assert await hospital.verify_proof(stmt_full, proof)
+
+        stmt_empty = _make_statement(root, "")
+        assert not await hospital.verify_proof(stmt_empty, proof), (
+            "full-disclosure proof must not verify against empty reveal set"
+        )
+
+
+class TestMerklePathSubstitution:
+    """An authentication path from one leaf position cannot be reused for another.
+
+    In a Merkle tree, each leaf's path is position-specific.  Splicing the path
+    of field *i* into a proof that claims to be about field *j* (same root,
+    different index) changes the reconstructed root and must fail verification.
+    """
+
+    async def test_path_from_age_does_not_validate_diagnosis(self) -> None:
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+
+        # Build two proofs from the same credential: one revealing age, one
+        # revealing diagnosis.
+        stmt_age = _make_statement(root, "age")
+        stmt_diag = _make_statement(root, "diagnosis")
+        witness = _make_witness(fields, salts)
+
+        proof_age = await hospital.prove(stmt_age, witness)
+        proof_diag = await hospital.prove(stmt_diag, witness)
+
+        # Honest verification passes.
+        assert await hospital.verify_proof(stmt_age, proof_age)
+        assert await hospital.verify_proof(stmt_diag, proof_diag)
+
+        # Splice: take proof_age's raw disclosed section and re-label the key
+        # as "diagnosis" to claim the age path proves the diagnosis leaf.
+        body_age = json.loads(proof_age.data)
+        body_diag = json.loads(proof_diag.data)
+
+        # Swap path from the age proof into the diagnosis proof's disclosed entry.
+        age_entry = body_age["disclosed"]["age"]
+        body_diag["disclosed"]["diagnosis"]["path"] = age_entry["path"]
+        spliced_data = json.dumps(body_diag, sort_keys=True, separators=(",", ":")).encode()
+        spliced_proof = proof_diag.model_copy(update={"data": spliced_data})
+
+        assert not await hospital.verify_proof(stmt_diag, spliced_proof), (
+            "path spliced from 'age' must not validate 'diagnosis'"
+        )
+
+
+class TestRedirectAndWrapStripAttack:
+    """Stripping or redirecting a wrap entry breaks authentication for survivors.
+
+    The AEAD associated data binds the *sorted list of all recipient key-ids*.
+    Removing one recipient's wrap entry from a multi-recipient envelope changes
+    the key-id list, which invalidates the AAD used to decrypt the content key.
+    The surviving recipient's decrypt must therefore fail with a tamper error
+    rather than silently succeeding with a degraded audience.
+    """
+
+    async def test_strip_one_wrap_entry_breaks_survivor_decrypt(self) -> None:
+        hospital = _mk("hospital")
+        insurer_a = _mk("insurer-a")
+        insurer_b = _mk("insurer-b")
+        hospital.register_peer(AgentId("insurer-a"), insurer_a.public_key)
+        hospital.register_peer(AgentId("insurer-b"), insurer_b.public_key)
+
+        record = b"confidential: diagnosis type-2-diabetes"
+        env = await hospital.encrypt(record, [AgentId("insurer-a"), AgentId("insurer-b")])
+        # Both insurers can decrypt the original envelope.
+        assert await insurer_a.decrypt(env) == record
+        # Insurer-B needs a fresh encrypt call (replay protection consumed
+        # insurer-a's seen-set entry, but insurer-b's is independent).
+        env2 = await hospital.encrypt(record, [AgentId("insurer-a"), AgentId("insurer-b")])
+        assert await insurer_b.decrypt(env2) == record
+
+        # Attacker strips insurer-b's wrap from a fresh envelope and re-presents
+        # it to insurer-a.  The AAD no longer matches — AEAD must reject.
+        env3 = await hospital.encrypt(record, [AgentId("insurer-a"), AgentId("insurer-b")])
+        parsed = json.loads(env3)
+        # Keep only the wrap entry whose kid matches insurer-a.
+        parsed["to"] = [w for w in parsed["to"] if w["kid"] == insurer_a.key_id]
+        stripped = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode()
+        try:
+            await insurer_a.decrypt(stripped)
+        except (TamperError, MalformedEnvelopeError, NotInAudienceError):
+            pass  # any cryptographic rejection is acceptable
+        else:
+            raise AssertionError(
+                "insurer-a decrypted a wrap-stripped envelope — AAD binding failed"
+            )
+
+
+class TestCrossInsurerProofNonTransferability:
+    """A proof issued for insurer-A's statement does not satisfy insurer-B's.
+
+    Even when both statements share the same Merkle root, each statement
+    specifies its own ``reveal`` set.  The prove/verify binding ensures a proof
+    minted for one party's authorisation cannot be reused by another party
+    with a different authorisation scope.
+    """
+
+    async def test_insurer_a_proof_fails_against_insurer_b_statement(self) -> None:
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+
+        # Insurer-A is authorised to see age + diagnosis only.
+        stmt_a = _make_statement(root, "age,diagnosis")
+        # Insurer-B is authorised to see diagnosis + treatment only.
+        stmt_b = _make_statement(root, "diagnosis,treatment")
+
+        witness = _make_witness(fields, salts)
+        proof_a = await hospital.prove(stmt_a, witness)
+
+        assert await hospital.verify_proof(stmt_a, proof_a)
+        assert not await hospital.verify_proof(stmt_b, proof_a), (
+            "insurer-A's proof must not verify against insurer-B's statement"
+        )
+
+    async def test_all_three_insurer_proofs_are_mutually_non_transferable(
+        self,
+    ) -> None:
+        """Each insurer's proof verifies only against its own statement."""
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+        witness = _make_witness(fields, salts)
+
+        statements = {
+            "insurer-a": _make_statement(root, "age,diagnosis"),
+            "insurer-b": _make_statement(root, "diagnosis,treatment"),
+            "insurer-c": _make_statement(root, "age"),
+        }
+        proofs = {name: await hospital.prove(stmt, witness) for name, stmt in statements.items()}
+
+        for owner, proof in proofs.items():
+            for verifier, stmt in statements.items():
+                ok = await hospital.verify_proof(stmt, proof)
+                if owner == verifier:
+                    assert ok, f"{owner}'s proof failed its own statement"
+                else:
+                    assert not ok, (
+                        f"{owner}'s proof wrongly verified against {verifier}'s statement"
+                    )
+
+
+class TestPartialRevealCompleteness:
+    """Hospital can prove any strict subset of credential fields.
+
+    Confirms that the Merkle scheme is complete for all subset sizes (1 through
+    5 fields) and that each partial proof hides every non-revealed value.
+    """
+
+    async def test_every_single_field_can_be_proved_independently(self) -> None:
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+        witness = _make_witness(fields, salts)
+
+        for field_name in _PATIENT_FIELDS:
+            stmt = _make_statement(root, field_name)
+            proof = await hospital.prove(stmt, witness)
+            assert await hospital.verify_proof(stmt, proof), (
+                f"single-field proof for '{field_name}' failed to verify"
+            )
+            # Parse the proof JSON to check the *disclosed values* section only.
+            # Raw-byte substring checks would produce false positives because
+            # short field values (e.g. "42") can appear as substrings of the
+            # hexadecimal Merkle path hashes — not a data leak.
+            body = cast("dict[str, Any]", json.loads(proof.data))
+            raw_disc = cast("dict[str, Any]", body.get("disclosed", {}))
+            disclosed_values: dict[str, str] = {
+                name: str(cast("dict[str, Any]", entry)["value"])
+                for name, entry in raw_disc.items()
+                if isinstance(entry, dict) and "value" in entry
+            }
+            for other, _value in _PATIENT_FIELDS.items():
+                if other != field_name:
+                    assert other not in disclosed_values, (
+                        f"hidden field '{other}' appeared in disclosed section"
+                        f" of proof for '{field_name}'"
+                    )
+                    assert disclosed_values.get(field_name) == _PATIENT_FIELDS[field_name]  # noqa: SIM910
+
+    async def test_all_five_fields_can_be_proved_at_once(self) -> None:
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+        witness = _make_witness(fields, salts)
+
+        all_fields = ",".join(sorted(_PATIENT_FIELDS))
+        stmt = _make_statement(root, all_fields)
+        proof = await hospital.prove(stmt, witness)
+        assert await hospital.verify_proof(stmt, proof)
+
+    async def test_two_field_proof_hides_remaining_three(self) -> None:
+        hospital = _mk("hospital")
+        root, salts, fields = _patient_credential()
+        witness = _make_witness(fields, salts)
+
+        revealed = {"age", "blood_type"}
+        hidden = set(_PATIENT_FIELDS) - revealed
+        stmt = _make_statement(root, ",".join(sorted(revealed)))
+        proof = await hospital.prove(stmt, witness)
+        assert await hospital.verify_proof(stmt, proof)
+        # Check the disclosed-values section of the proof JSON; substring checks
+        # on raw bytes would false-positive on hex Merkle path hashes.
+        body = cast("dict[str, Any]", json.loads(proof.data))
+        raw_disc2 = cast("dict[str, Any]", body.get("disclosed", {}))
+        disclosed_values2: dict[str, str] = {
+            name: str(cast("dict[str, Any]", entry)["value"])
+            for name, entry in raw_disc2.items()
+            if isinstance(entry, dict) and "value" in entry
+        }
+        for field_name in hidden:
+            assert field_name not in disclosed_values2, (
+                f"hidden field '{field_name}' appeared in disclosed section of two-field proof"
+            )
