@@ -92,6 +92,9 @@ class TypedCrdtMemory:
         
         if memory_type == "counter":
             return self._normalize_counter(state)
+        
+        if memory_type == "vote":
+            return self._normalize_vote(state)
 
         raise ValueError(f"Unsupported typed CRDT memory type: {memory_type!r}")
     
