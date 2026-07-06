@@ -71,3 +71,12 @@ class TypedCrdtMemory:
     def _encode(self, state: dict[str, Any]) -> bytes:
         """Encode a Python dictionary into deterministic JSON bytes."""
         return json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    
+    def _normalize_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Convert a user write into the canonical stored CRDT shape."""
+        memory_type = state.get("type")
+
+        if memory_type == "set":
+            return self._normalize_set(state)
+
+        raise ValueError(f"Unsupported typed CRDT memory type: {memory_type!r}")
