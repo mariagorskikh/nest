@@ -93,3 +93,50 @@ class TypedCrdtMemory:
             return self._merge_set(old, new)
 
         raise ValueError(f"Unsupported typed CRDT memory type: {old_type!r}")
+    
+    def _normalize_set(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Normalize set memory into a deterministic add-only set.
+
+        Accepted simple write shape:
+            {"type": "set", "writer": "agent_1", "value": "fact A"}
+
+        Canonical stored shape:
+            {
+                "type": "set",
+                "items": {
+                    "agent_1:fact A": {"writer": "agent_1", "value": "fact A"}
+                },
+                "values": ["fact A"]
+            }
+        """
+        items = state.get("items", {})
+
+        if not items and "writer" in state and "value" in state:
+            writer = str(state["writer"])
+            value = state["value"]
+            tag = str(state.get("tag", f"{writer}:{value}"))
+            items = {
+                tag: {
+                    "writer": writer,
+                    "value": value,
+                }
+            }
+
+        if not isinstance(items, dict):
+            raise ValueError("set memory requires an 'items' object")
+
+        sorted_items = {
+            str(tag): items[tag]
+            for tag in sorted(items, key=str)
+        }
+
+        values = [
+            sorted_items[tag].get("value")
+            for tag in sorted_items
+        ]
+
+        return {
+            "type": "set",
+            "items": sorted_items,
+            "values": values,
+        }
