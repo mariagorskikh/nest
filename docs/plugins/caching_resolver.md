@@ -104,10 +104,26 @@ real DNS resolver sits in front of authoritative, signed (DNSSEC) zones.
 - Third-party health probes (actively pinging endpoints) could complement
   heartbeat-based liveness for agents that cannot re-register on their own.
 
+## Benchmark: the hidden property, made explicit
+
+`tests/test_resolver_benchmark.py` churns 2,000 agents through both registries, four
+in five of which "crash" (register once, never heartbeat), then advances time and asks
+who is still resolvable:
+
+- `in_memory` returns all 2,000, including the 1,600 crashed ones, and holds all 2,000
+  in memory — it grows with the total number of agents ever seen and advertises dead
+  addresses as live.
+- `resolver` returns only the 400 still alive and prunes the rest, so its memory is
+  bounded to the live set.
+
+The gap (1,600) is the count of dead agents the default registry would hand out as
+reachable, and the resolver removes.
+
 ## Try it
 
 ```bash
 uv run pytest packages/nest-plugins-reference/tests/test_caching_resolver.py \
+               packages/nest-plugins-reference/tests/test_resolver_benchmark.py \
                packages/nest-plugins-reference/tests/test_discovery_resolver_scenario.py -v
 uv run nest run discovery_resolver     # 8 stable providers resolve, 4 crashed self-evict
 ```

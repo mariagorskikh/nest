@@ -75,6 +75,28 @@ class TestResolver:
         await reg.deregister(AgentId("x"))
         assert await reg.lookup(Query(capabilities=[_CAP])) == []
 
+    @pytest.mark.asyncio
+    async def test_reregister_after_expiry_revives(self) -> None:
+        reg = CachingResolverRegistry(clock=0.0)
+        await reg.register(_card("a", ttl=10.0))
+        reg.set_clock(50.0)  # expired
+        assert await reg.lookup(Query(capabilities=[_CAP])) == []
+        await reg.register(_card("a", ttl=10.0))  # comes back on re-register
+        assert [str(c.agent_id) for c in await reg.lookup(Query(capabilities=[_CAP]))] == ["a"]
+
+    @pytest.mark.asyncio
+    async def test_deregister_unknown_is_noop(self) -> None:
+        reg = CachingResolverRegistry(clock=0.0)
+        await reg.deregister(AgentId("never-registered"))  # must not raise
+        assert reg.live_agents() == set()
+
+    @pytest.mark.asyncio
+    async def test_expiry_boundary_is_exclusive(self) -> None:
+        reg = CachingResolverRegistry(clock=0.0)
+        await reg.register(_card("a", ttl=10.0))  # expires_at == 10
+        reg.set_clock(10.0)  # exactly at expiry: pruned (expires_at <= now)
+        assert await reg.lookup(Query(capabilities=[_CAP])) == []
+
     def test_registry_resolves_resolver(self) -> None:
         cls = PluginRegistry().resolve("registry", "resolver")
         assert cls is CachingResolverRegistry
