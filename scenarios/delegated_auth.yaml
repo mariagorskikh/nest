@@ -1,0 +1,19 @@
+name: delegated_auth
+tier: 1
+seed: 42
+agents:
+  count: 16
+  roles:
+    - name: coordinator
+      count: 1
+    - name: intermediary
+      count: 3
+    - name: leaf
+      count: 12
+layers:
+  auth: macaroons
+task:
+  type: delegation_tree
+  config:
+    depth: 2
+duration: "ticks: 1000"
