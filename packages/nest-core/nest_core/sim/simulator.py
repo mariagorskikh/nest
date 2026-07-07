@@ -127,6 +127,21 @@ class _SimAgentContext:
             )
         )
 
+    def emit(self, event: dict[str, Any]) -> None:
+        """Write a custom structured event directly to the trace.
+
+        Use this to record domain events (e.g. ``stream_opened``,
+        ``payment_debited``) that validators read as top-level JSONL records.
+        No-op when no trace writer is configured.
+
+        Example::
+
+            ctx.emit({"event_type": "stream_opened", "stream_ref": "s1",
+                      "agent": str(ctx.agent_id), "tick": int(ctx.time)})
+        """
+        if self._trace is not None:
+            self._trace.record(event)
+
 
 # Verify _SimAgentContext satisfies the protocol at import time
 _ctx_check: type[AgentContext] = _SimAgentContext  # noqa: F841
