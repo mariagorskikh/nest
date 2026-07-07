@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# Adversarial control: same market as multi_attribute_market but using the
+# alternating_offers plugin, which negotiates on price only and never moves
+# the quantity axis.  Used to verify the Pareto validator catches dominated
+# agreements.
+name: multi_attribute_market
+description: >
+  50 client-consultant pairs negotiate using alternating_offers (price-only).
+  Used as the adversarial control: agreements are expected to be Pareto-dominated
+  by bundles that were never proposed (quantity axis is never moved).
+
+tier: 1
+seed: 7
+
+agents:
+  count: 100
+  brain: state-machine
+  roles:
+    - name: client
+      count: 50
+    - name: consultant
+      count: 50
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: multi_attribute_market
+  config:
+    rounds: 10
+    pairs: 50
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/multi_attribute_market_altoffers.jsonl

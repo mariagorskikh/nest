@@ -33,7 +33,7 @@ from nest_plugins_reference.negotiation.pareto import (
 # Test harness helpers
 # ---------------------------------------------------------------------------
 
-_SEED = 7  # joint zone: p=[15,62] n=[6,27]  — wide enough for all strategies
+_SEED = 13  # joint zone: p=[36,52] n=[6,40]  — wide enough for all strategies
 _Q = 0.75
 
 
@@ -380,7 +380,9 @@ class TestStrategyBehavior:
 
         session = await buyer.open(AgentId("seller-0"), _terms(mid_p, open_n, q))
         meta = buyer.session_meta(session)
-        meta["tau"] = 0.7  # fixed aspiration
+        # tau is initialized by open() to the buyer's max feasible utility.
+        # Do not override with a hardcoded value — it may exceed the reachable
+        # maximum for some seeds, making the contour empty and breaking the assertion.
 
         contour_tol = 0.05  # matches _CONTOUR_TOL in pareto.py
         for opp_n in [open_n, open_n + 3, open_n - 2]:

@@ -130,6 +130,7 @@ Example::
 
 from __future__ import annotations
 
+import hashlib
 import random
 from dataclasses import dataclass
 from typing import Any
@@ -165,7 +166,7 @@ _CONTOUR_TOL = 0.05
 
 def _agent_rng(agent_id: AgentId, scenario_seed: int) -> random.Random:
     """Deterministic per-agent RNG from agent_id and scenario seed."""
-    h = hash(str(agent_id)) & 0xFFFF_FFFF_FFFF_FFFF
+    h = int(hashlib.sha256(str(agent_id).encode()).hexdigest(), 16) & 0xFFFF_FFFF_FFFF_FFFF
     return random.Random(scenario_seed ^ h)
 
 

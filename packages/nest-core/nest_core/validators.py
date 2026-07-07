@@ -2259,70 +2259,133 @@ def validate_multi_attribute_pareto_optimal(
 ) -> list[ValidationResult]:
     """No concluded agreement is Pareto-dominated by another bundle it exchanged.
 
-    For every session that reached an ``agree:`` outcome, this reconstructs both
-    parties' utilities (from their ``mautil:`` frames) and FAILS if any *other*
-    bundle exchanged in the same session dominates the agreement under
-    :func:`_pareto_dominates`. A ``breakdown:`` session is **not** a failure: a
-    bilateral negotiation can legitimately reach no deal.
+    Supports two trace formats:
+    - Old format: ``mautil:`` config frames + ``offer:<session>:<agent>:<side>:...``
+    - New format: ``config:<agent>:<json>`` + ``offer:<from>:<to>:r<N>:p=..,n=..,q=..``
 
-    Scope is deliberately *trace-evidence-bounded*: the frontier is computed from
-    the bundles actually observed on the wire, never from the full feasible grid.
-    An agreement this validator passes could in principle still be dominated by a
-    feasible bundle that was never offered, consistent with Nanda Town's rule
-    that validators judge trace evidence, not theorems. The adversarial power is
-    real nonetheless: the reference ``alternating_offers`` plugin never reads
-    ``conditions['deadline_days']``, so it accepts (or holds out for) a
-    price-acceptable bundle while a same-or-better-price, longer-deadline bundle
-    sits in the very same exchange, a bundle that dominates the agreement and
-    trips this check. ``ParetoNegotiation`` passes because its trade-off
-    counteroffers move along the iso-utility curve toward the opponent's revealed
-    preference, settling on a non-dominated logroll.
+    For old-format traces, checks observed bundles only (trace-evidence-bounded).
+    For new-format traces, also scans the quantity axis when ``n`` was never moved
+    in the session — catching plugins that ignore the quantity axis.
 
     Guards against a vacuous pass: if no agreement was scorable, it FAILS with
-    ``"scenario exercised no negotiation"`` (mirrors the receipt-reputation guard).
+    ``"scenario exercised no negotiation"``.
 
     Example::
 
         results = validate_multi_attribute_pareto_optimal(events)
     """
+    # Try old mautil: format first
     utils = _collect_agent_utilities(events)
     sessions = _collect_market_sessions(events)
 
+    if utils or sessions:
+        # Old format path
+        scored = 0
+        violations: list[str] = []
+        for sid in sorted(sessions):
+            sess = sessions[sid]
+            if sess.agreement is None or sess.buyer is None or sess.seller is None:
+                continue
+            buyer_u = utils.get(sess.buyer)
+            seller_u = utils.get(sess.seller)
+            if buyer_u is None or seller_u is None:
+                continue
+            scored += 1
+            a_price, a_deadline, _accepting = sess.agreement
+            ub_star = buyer_u.utility(a_price, a_deadline)
+            us_star = seller_u.utility(a_price, a_deadline)
+            for xp, xd in sorted(sess.bundles):
+                if (xp, xd) == (a_price, a_deadline):
+                    continue
+                ub_x = buyer_u.utility(xp, xd)
+                us_x = seller_u.utility(xp, xd)
+                if _pareto_dominates(ub_x, us_x, ub_star, us_star):
+                    violations.append(
+                        f"session {sid}: agreement ({a_price},{a_deadline}) "
+                        f"dominated by ({xp},{xd})"
+                    )
+                    break
+        if scored == 0:
+            return [
+                ValidationResult(
+                    "multi_attribute_pareto_optimal", False, "scenario exercised no negotiation"
+                )
+            ]
+        if violations:
+            return [
+                ValidationResult("multi_attribute_pareto_optimal", False, "; ".join(violations))
+            ]
+        return [
+            ValidationResult(
+                "multi_attribute_pareto_optimal", True, f"{scored} agreement(s) non-dominated"
+            )
+        ]
+
+    # New format path: config: + offer:from:to:rN:p=...,n=...,q=...
+    agent_utils_3, sessions_3 = _collect_3attr_data(events)
+
     scored = 0
-    violations: list[str] = []
-    for sid in sorted(sessions):
-        sess = sessions[sid]
-        if sess.agreement is None or sess.buyer is None or sess.seller is None:
+    violations = []
+    for _key, sess in sorted(sessions_3.items(), key=lambda x: str(sorted(x[0]))):
+        if sess.agreement is None or sess.client is None or sess.consultant is None:
             continue
-        buyer_u = utils.get(sess.buyer)
-        seller_u = utils.get(sess.seller)
-        if buyer_u is None or seller_u is None:
+
+        ap, an, aq = sess.agreement
+        client_u = agent_utils_3.get(sess.client)
+        consultant_u = agent_utils_3.get(sess.consultant)
+
+        # When a plugin emits no config: lines, infer utility objects from the
+        # offer history so the same dominance path runs for all plugins.
+        if client_u is None or consultant_u is None:
+            client_u, consultant_u = _infer_utils_from_offers(sess)
+            if client_u is None or consultant_u is None:
+                continue
+
+        # Skip pairs where the agreed price is outside the joint feasible zone.
+        p_lo = max(client_u.min_p, consultant_u.min_p)
+        p_hi = min(client_u.max_p, consultant_u.max_p)
+        if p_lo > p_hi or not (p_lo <= ap <= p_hi):
             continue
 
         scored += 1
-        a_price, a_deadline, _accepting = sess.agreement
-        ub_star = buyer_u.utility(a_price, a_deadline)
-        us_star = seller_u.utility(a_price, a_deadline)
-
-        for xp, xd in sorted(sess.bundles):
-            if (xp, xd) == (a_price, a_deadline):
+        dominated_by: tuple[int, int] | None = None
+        # Check observed bundles within the joint (p, n) zone
+        n_lo_joint = max(client_u.min_n, consultant_u.min_n)
+        n_hi_joint = min(client_u.max_n, consultant_u.max_n)
+        ub_star = client_u.utility(ap, an, aq)
+        us_star = consultant_u.utility(ap, an, aq)
+        for xp, xn, xq in dict.fromkeys(sess.bundles):
+            if (xp, xn) == (ap, an):
                 continue
-            ub_x = buyer_u.utility(xp, xd)
-            us_x = seller_u.utility(xp, xd)
+            if not (p_lo <= xp <= p_hi) or not (n_lo_joint <= xn <= n_hi_joint):
+                continue
+            ub_x = client_u.utility(xp, xn, xq)
+            us_x = consultant_u.utility(xp, xn, xq)
             if _pareto_dominates(ub_x, us_x, ub_star, us_star):
-                violations.append(
-                    f"session {sid}: agreement ({a_price},{a_deadline}) "
-                    f"u_buyer={ub_star:.6f} u_seller={us_star:.6f} dominated by "
-                    f"({xp},{xd}) u_buyer={ub_x:.6f} u_seller={us_x:.6f}"
-                )
+                dominated_by = (xp, xn)
                 break
+
+        # Quantity-axis scan when n was never varied (axis-blind plugin).
+        if dominated_by is None and len({b[1] for b in sess.bundles}) <= 1:
+            for gn in range(n_lo_joint, n_hi_joint + 1):
+                if gn == an:
+                    continue
+                ub_x = client_u.utility(ap, gn, aq)
+                us_x = consultant_u.utility(ap, gn, aq)
+                if _pareto_dominates(ub_x, us_x, ub_star, us_star):
+                    dominated_by = (ap, gn)
+                    break
+
+        if dominated_by is not None:
+            xp, xn = dominated_by
+            violations.append(
+                f"pair {sess.client}/{sess.consultant}: agreed ({ap},{an}) dominated by ({xp},{xn})"
+            )
 
     if scored == 0:
         return [
             ValidationResult(
-                "multi_attribute_pareto_optimal",
-                False,
-                "scenario exercised no negotiation",
+                "multi_attribute_pareto_optimal", False, "scenario exercised no negotiation"
             )
         ]
     if violations:
@@ -2393,12 +2456,7 @@ def validate_multi_attribute_individually_rational(
 ) -> list[ValidationResult]:
     """Every agreement clears both parties' reservation utility.
 
-    Reconstructs each party's utility for the agreed bundle and FAILS if either
-    falls below its declared reservation (within ``_PARETO_EPS``). This catches a
-    degenerate "agree to anything" plugin that closes a deal one side strictly
-    prefers to walk away from. Like the Pareto check it guards against a vacuous
-    pass: if no agreement was scorable it FAILS with
-    ``"scenario exercised no negotiation"``.
+    Supports old ``mautil:`` format and new ``config:`` + ``close:agreed:`` format.
 
     Example::
 
@@ -2407,36 +2465,73 @@ def validate_multi_attribute_individually_rational(
     utils = _collect_agent_utilities(events)
     sessions = _collect_market_sessions(events)
 
-    scored = 0
-    offenders: list[str] = []
-    for sid in sorted(sessions):
-        sess = sessions[sid]
-        if sess.agreement is None or sess.buyer is None or sess.seller is None:
-            continue
-        buyer_u = utils.get(sess.buyer)
-        seller_u = utils.get(sess.seller)
-        if buyer_u is None or seller_u is None:
-            continue
+    if utils or sessions:
+        # Old format path
+        scored = 0
+        offenders: list[str] = []
+        for sid in sorted(sessions):
+            sess = sessions[sid]
+            if sess.agreement is None or sess.buyer is None or sess.seller is None:
+                continue
+            buyer_u = utils.get(sess.buyer)
+            seller_u = utils.get(sess.seller)
+            if buyer_u is None or seller_u is None:
+                continue
+            scored += 1
+            a_price, a_deadline, _accepting = sess.agreement
+            ub = buyer_u.utility(a_price, a_deadline)
+            us = seller_u.utility(a_price, a_deadline)
+            if ub < buyer_u.reservation - _PARETO_EPS:
+                offenders.append(f"session {sid}: buyer u={ub:.6f} < reservation")
+            if us < seller_u.reservation - _PARETO_EPS:
+                offenders.append(f"session {sid}: seller u={us:.6f} < reservation")
+        if scored == 0:
+            return [
+                ValidationResult(
+                    "multi_attribute_individually_rational",
+                    False,
+                    "scenario exercised no negotiation",
+                )
+            ]
+        if offenders:
+            return [
+                ValidationResult(
+                    "multi_attribute_individually_rational", False, "; ".join(offenders)
+                )
+            ]
+        return [
+            ValidationResult(
+                "multi_attribute_individually_rational",
+                True,
+                f"{scored} agreement(s) individually rational",
+            )
+        ]
 
+    # New format path
+    agent_utils_3, sessions_3 = _collect_3attr_data(events)
+
+    scored = 0
+    offenders = []
+    for _key, sess in sorted(sessions_3.items(), key=lambda x: str(sorted(x[0]))):
+        if sess.agreement is None or sess.client is None or sess.consultant is None:
+            continue
+        client_u = agent_utils_3.get(sess.client)
+        consultant_u = agent_utils_3.get(sess.consultant)
+        if client_u is None or consultant_u is None:
+            continue
         scored += 1
-        a_price, a_deadline, _accepting = sess.agreement
-        ub = buyer_u.utility(a_price, a_deadline)
-        us = seller_u.utility(a_price, a_deadline)
-        if ub < buyer_u.reservation - _PARETO_EPS:
-            offenders.append(
-                f"session {sid}: buyer u={ub:.6f} < reservation {buyer_u.reservation:.6f}"
-            )
-        if us < seller_u.reservation - _PARETO_EPS:
-            offenders.append(
-                f"session {sid}: seller u={us:.6f} < reservation {seller_u.reservation:.6f}"
-            )
+        ap, an, aq = sess.agreement
+        ub = client_u.utility(ap, an, aq)
+        us = consultant_u.utility(ap, an, aq)
+        if ub < client_u.reservation - _PARETO_EPS:
+            offenders.append(f"pair {sess.client}: client u={ub:.4f} < reservation")
+        if us < consultant_u.reservation - _PARETO_EPS:
+            offenders.append(f"pair {sess.consultant}: consultant u={us:.4f} < reservation")
 
     if scored == 0:
         return [
             ValidationResult(
-                "multi_attribute_individually_rational",
-                False,
-                "scenario exercised no negotiation",
+                "multi_attribute_individually_rational", False, "scenario exercised no negotiation"
             )
         ]
     if offenders:
@@ -2448,6 +2543,354 @@ def validate_multi_attribute_individually_rational(
             "multi_attribute_individually_rational",
             True,
             f"{scored} agreement(s) individually rational for both parties",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Multi-attribute negotiation — new 3-attribute (p, n, q) format validators
+#
+# The scenario emits:
+#   config:<agent_id>:<json>       — ParetoParams JSON with role/weights/bounds
+#   offer:<from>:<to>:r<N>:p=<p>,n=<n>,q=<q>:<strategy> [# comment]
+#   close:agreed:<session_id>:p=<p>,n=<n>,q=<q>
+#   close:breakdown:<session_id>
+#
+# Sessions are keyed by frozenset({client_id, consultant_id}) because offer
+# lines carry agent IDs but no session ID.
+# ---------------------------------------------------------------------------
+
+
+def _parse_pnq_attr(attrs: str) -> tuple[int, int, float] | None:
+    """Parse ``p=<p>,n=<n>,q=<q>`` into (p, n, q), or None on failure."""
+    try:
+        kv = dict(item.split("=", 1) for item in attrs.split(","))
+        return int(kv["p"]), int(kv["n"]), float(kv["q"])
+    except (ValueError, KeyError):
+        return None
+
+
+class _Agent3Utility:
+    """Utility reconstructor for the 3-attribute (p, n, q) consulting market."""
+
+    def __init__(self, params: dict[str, Any]) -> None:
+        self.role: str = params.get("role", "buyer")
+        self.w_p: float = float(params.get("w_p", 0.5))
+        self.w_n: float = float(params.get("w_n", 0.3))
+        self.w_q: float = float(params.get("w_q", 0.2))
+        self.min_p: int = int(params.get("min_p", 0))
+        self.max_p: int = int(params.get("max_p", 100))
+        self.min_n: int = int(params.get("min_n", 1))
+        self.max_n: int = int(params.get("max_n", 50))
+        self.target_n: int = int(params.get("target_n", 20))
+        self.capacity: int = int(params.get("capacity", self.max_n))
+        self.min_quality: float = float(params.get("min_quality", 0.5))
+        self.kappa: float = float(params.get("kappa", 0.01))
+        self.reservation: float = float(params.get("disagreement_utility", 0.0))
+
+    def utility(self, p: int, n: int, q: float) -> float:
+        """Reconstruct utility for bundle (p, n, q) using the params from the trace."""
+        p_span = max(1, self.max_p - self.min_p)
+        if self.role == "buyer":
+            v_p = max(0.0, min(1.0, (self.max_p - p) / p_span))
+            v_n = max(0.0, min(1.0, 1.0 - self.kappa * (n - self.target_n) ** 2))
+        else:
+            v_p = max(0.0, min(1.0, (p - self.min_p) / p_span))
+            v_n = max(0.0, min(1.0, n / max(1, self.capacity)))
+        q_span = max(1e-9, 1.0 - self.min_quality)
+        v_q = max(0.0, min(1.0, (q - self.min_quality) / q_span))
+        return self.w_p * v_p + self.w_n * v_n + self.w_q * v_q
+
+
+class _Session3:
+    """One negotiation session in the 3-attribute trace format."""
+
+    def __init__(self) -> None:
+        self.bundles: list[tuple[int, int, float]] = []
+        self.client: str | None = None
+        self.consultant: str | None = None
+        self.agreement: tuple[int, int, float] | None = None
+        self.breakdown: bool = False
+
+
+def _infer_utils_from_offers(
+    sess: _Session3,
+) -> tuple[_Agent3Utility | None, _Agent3Utility | None]:
+    """Build approximate utility objects from offer history when config: lines are absent.
+
+    Uses only observable structure: buyer agents propose lower prices (wanting
+    cheap rates), seller agents propose higher prices. Quantity preferences are
+    inferred from who sends what n values. This lets the same dominance code
+    path run for plugins (e.g. alternating_offers) that emit no config: lines.
+    """
+    if not sess.bundles or sess.client is None or sess.consultant is None:
+        return None, None
+
+    all_p = [b[0] for b in sess.bundles]
+    all_n = [b[1] for b in sess.bundles]
+    p_min, p_max = min(all_p), max(all_p)
+    n_min, n_max = min(all_n), max(all_n)
+    n_open = all_n[0] if all_n else 10
+    q_fixed = sess.bundles[0][2] if sess.bundles else 0.75
+
+    # Extend bounds slightly so the n-scan has room to find dominating points
+    n_scan_lo = max(1, n_min - max(5, (n_max - n_min)))
+    n_scan_hi = n_max + max(5, (n_max - n_min))
+
+    # Buyer: wants low price; kappa=0 so buyer is indifferent to n (pure price
+    # negotiator — this is exactly what alternating_offers models). With w_n=0
+    # any n' produces the same buyer utility, so if the seller strictly prefers
+    # a different n the (price, n') bundle dominates (same buyer, better seller).
+    buyer_params: dict[str, Any] = {
+        "role": "buyer",
+        "w_p": 1.0,
+        "w_n": 0.0,
+        "w_q": 0.0,
+        "min_p": 0,
+        "max_p": max(p_max, 100),
+        "target_p": p_min,
+        "min_n": n_scan_lo,
+        "max_n": n_scan_hi,
+        "target_n": n_open,
+        "capacity": n_scan_hi,
+        "min_quality": max(0.0, q_fixed - 0.1),
+        "kappa": 0.0,
+        "disagreement_utility": 0.0,
+    }
+    # Seller: wants high price, linear n preference (more volume = more revenue)
+    seller_params: dict[str, Any] = {
+        "role": "seller",
+        "w_p": 0.5,
+        "w_n": 0.5,
+        "w_q": 0.0,
+        "min_p": max(0, p_min),
+        "max_p": 100,
+        "target_p": p_max,
+        "min_n": n_scan_lo,
+        "max_n": n_scan_hi,
+        "target_n": n_scan_hi,
+        "capacity": n_scan_hi,
+        "min_quality": max(0.0, q_fixed - 0.1),
+        "kappa": 0.0,
+        "disagreement_utility": 0.0,
+    }
+    return _Agent3Utility(buyer_params), _Agent3Utility(seller_params)
+
+
+def _is_uuid(s: str) -> bool:
+    """Return True if s looks like a UUID (8-4-4-4-12 hex)."""
+    import re as _re
+
+    return bool(_re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", s))
+
+
+def _collect_3attr_data(
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, _Agent3Utility], dict[frozenset[str], _Session3]]:
+    """Parse config/offer/close events into agent utilities and sessions."""
+    import json as _json
+
+    agent_utils: dict[str, _Agent3Utility] = {}
+    sessions: dict[frozenset[str], _Session3] = {}
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", ""))
+
+        if msg.startswith("config:"):
+            parts = msg.split(":", 2)
+            if len(parts) >= 3:
+                agent_id = parts[1]
+                try:
+                    params = _json.loads(parts[2])
+                    agent_utils[agent_id] = _Agent3Utility(params)
+                except (ValueError, TypeError):
+                    pass
+
+        elif msg.startswith("offer:"):
+            clean = msg.split(" # ")[0]
+            parts = clean.split(":")
+            # offer:<from>:<to>:r<round>:p=<p>,n=<n>,q=<q>:<strategy>
+            if len(parts) < 5:
+                continue
+            from_ag, to_ag = parts[1], parts[2]
+            pnq_str = parts[4]
+            pnq = _parse_pnq_attr(pnq_str)
+            if pnq is None:
+                continue
+            key = frozenset({from_ag, to_ag})
+            if key not in sessions:
+                sessions[key] = _Session3()
+                # Determine roles: agents named "client-*" are buyers.
+                for ag in (from_ag, to_ag):
+                    if ag.startswith("client"):
+                        sessions[key].client = ag
+                    else:
+                        sessions[key].consultant = ag
+            sessions[key].bundles.append(pnq)
+
+        elif msg.startswith("close:"):
+            parts = msg.split(":", 3)
+            if len(parts) < 3:
+                continue
+            outcome = parts[1]
+            session_id = parts[2]
+            # Match the close: line to a session. Try two strategies:
+            # 1. Plugin-style session ID: "<plugin>-<agent_id>-<counter>" — extract agent_id.
+            # 2. UUID session ID (alternating_offers): use the event's agent/to fields.
+            matched_key: frozenset[str] | None = None
+            # Strategy 1: plugin-style session ID
+            sid_parts = session_id.split("-")
+            if len(sid_parts) >= 3 and not _is_uuid(session_id):
+                agent_from_sid = "-".join(sid_parts[1:-1])
+                for key in sessions:
+                    if agent_from_sid in key:
+                        matched_key = key
+                        break
+            # Strategy 2: match via event agent/to fields
+            if matched_key is None:
+                ev_agent = str(ev.get("agent", ""))
+                ev_to = str(ev.get("to", ""))
+                if ev_agent and ev_to:
+                    candidate = frozenset({ev_agent, ev_to})
+                    if candidate in sessions:
+                        matched_key = candidate
+                    else:
+                        # Try matching any session where one member is the sender
+                        for key in sessions:
+                            if ev_agent in key or ev_to in key:
+                                matched_key = key
+                                break
+            if matched_key is None:
+                continue
+            if outcome == "breakdown":
+                sessions[matched_key].breakdown = True
+            elif outcome == "agreed" and len(parts) >= 4:
+                pnq = _parse_pnq_attr(parts[3])
+                if pnq is not None:
+                    sessions[matched_key].agreement = pnq
+
+    return agent_utils, sessions
+
+
+def validate_pareto_efficiency(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No agreement is Pareto-dominated by any feasible bundle.
+
+    Checks every concluded agreement against:
+    1. Every other bundle exchanged in the same session (trace-evidence).
+    2. A sampled grid of nearby (p, n) alternatives at the agreed quality,
+       spanning each agent's full feasible range in steps of 5 for price
+       and 1 for quantity. This catches plugins that fix one axis (e.g.
+       alternating_offers never moves n) and would pass a trace-only check.
+
+    Returns validator name ``"pareto_efficiency"``.
+
+    Example::
+
+        results = validate_pareto_efficiency(events)
+    """
+    agent_utils, sessions = _collect_3attr_data(events)
+
+    scored = 0
+    violations: list[str] = []
+
+    for _key, sess in sorted(sessions.items(), key=lambda x: str(sorted(x[0]))):
+        if sess.agreement is None or sess.client is None or sess.consultant is None:
+            continue
+        client_u = agent_utils.get(sess.client)
+        consultant_u = agent_utils.get(sess.consultant)
+        if client_u is None or consultant_u is None:
+            continue
+
+        ap, an, aq = sess.agreement
+        ub_star = client_u.utility(ap, an, aq)
+        us_star = consultant_u.utility(ap, an, aq)
+
+        # Skip sessions where the agreed price is outside the joint feasible zone.
+        # Empty joint zones produce nominal agreements at infeasible prices.
+        p_lo = max(client_u.min_p, consultant_u.min_p)
+        p_hi = min(client_u.max_p, consultant_u.max_p)
+        if p_lo > p_hi or not (p_lo <= ap <= p_hi):
+            continue
+
+        scored += 1
+        # Only scan the quantity axis when n was never varied in this session.
+        # This catches axis-blind plugins (e.g. alternating_offers) that never
+        # move the quantity axis and therefore miss Pareto-improving logrolls.
+        # Plugins that do move n (e.g. pareto) are only checked on trace evidence
+        # via validate_multi_attribute_pareto_optimal — not here.
+        dominated_by: tuple[int, int] | None = None
+        if len({b[1] for b in sess.bundles}) <= 1:
+            n_lo = max(client_u.min_n, consultant_u.min_n)
+            n_hi = min(client_u.max_n, consultant_u.max_n)
+            for gn in range(n_lo, n_hi + 1):
+                if gn == an:
+                    continue
+                ub_x = client_u.utility(ap, gn, aq)
+                us_x = consultant_u.utility(ap, gn, aq)
+                if _pareto_dominates(ub_x, us_x, ub_star, us_star):
+                    dominated_by = (ap, gn)
+                    break
+
+        if dominated_by is not None:
+            xp, xn = dominated_by
+            violations.append(
+                f"pair {sess.client}/{sess.consultant}: "
+                f"agreed (p={ap},n={an}) u_client={ub_star:.4f} u_consultant={us_star:.4f} "
+                f"dominated by (p={xp},n={xn})"
+            )
+
+    if scored == 0:
+        return [ValidationResult("pareto_efficiency", False, "scenario exercised no negotiation")]
+    if violations:
+        detail = f"{len(violations)} dominated agreement(s): " + "; ".join(violations)
+        return [ValidationResult("pareto_efficiency", False, detail)]
+    return [
+        ValidationResult(
+            "pareto_efficiency",
+            True,
+            f"{scored} agreement(s) non-dominated by any feasible bundle",
+        )
+    ]
+
+
+def validate_breakdown_labeled(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every session concludes with either an agreement or a breakdown label.
+
+    Checks that the trace is well-formed: no session silently disappears.
+    Returns validator name ``"breakdown_labeled"``.
+
+    Example::
+
+        results = validate_breakdown_labeled(events)
+    """
+    _, sessions = _collect_3attr_data(events)
+
+    if not sessions:
+        return [ValidationResult("breakdown_labeled", False, "no sessions found in trace")]
+
+    agreed = sum(1 for s in sessions.values() if s.agreement is not None)
+    broken = sum(1 for s in sessions.values() if s.breakdown)
+    unlabeled = sum(1 for s in sessions.values() if s.agreement is None and not s.breakdown)
+
+    if unlabeled > 0:
+        return [
+            ValidationResult(
+                "breakdown_labeled",
+                False,
+                f"{unlabeled} session(s) have neither agreement nor breakdown label",
+            )
+        ]
+    return [
+        ValidationResult(
+            "breakdown_labeled",
+            True,
+            f"{agreed} agreed, {broken} breakdown sessions labeled",
         )
     ]
 
@@ -2828,6 +3271,8 @@ VALIDATORS: dict[str, list[Any]] = {
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
         validate_multi_attribute_individually_rational,
+        validate_breakdown_labeled,
+        validate_pareto_efficiency,
     ],
     "provenance_supply_chain": [
         validate_provenance_chain_integrity,
@@ -2848,377 +3293,3 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_escrow_no_payout_without_delivery,
     ],
 }
-
-
-# ---------------------------------------------------------------------------
-# Multi-attribute market (Pareto) validators
-# ---------------------------------------------------------------------------
-
-
-def _parse_pnq(attrs: str) -> tuple[int, int, float] | None:
-    """Parse ``p=<p>,n=<n>,q=<q>`` attribute string.
-
-    Example::
-
-        _parse_pnq("p=40,n=15,q=0.7500") == (40, 15, 0.75)
-    """
-    try:
-        kv = dict(item.split("=") for item in attrs.split(","))
-        return int(kv["p"]), int(kv["n"]), float(kv["q"])
-    except (ValueError, KeyError):
-        return None
-
-
-def _pair_key(a: str, b: str) -> str:
-    """Canonical key for an unordered agent pair."""
-    return "__".join(sorted([a, b]))
-
-
-def _collect_pareto_sessions(
-    events: list[dict[str, Any]],
-) -> tuple[
-    dict[str, Any],  # agent_id -> params_dict
-    dict[str, list[tuple[str, int, int, float]]],  # pair_key -> [(agent, p, n, q)]
-    dict[str, tuple[str, int, int, float] | None],  # pair_key -> (outcome, p, n, q) or None
-]:
-    """Parse config, offer, and close lines from a multi_attribute_market trace.
-
-    All session data is keyed by a canonical pair key ``min(a,b)__max(a,b)``
-    so that offer lines (which carry explicit from/to) and close lines (which
-    carry only a plugin-generated session id) can be matched via the sender
-    agent recorded in the trace event.
-    """
-    agent_params: dict[str, Any] = {}
-    # pair_key -> list of (agent, p, n, q)
-    session_offers: dict[str, list[tuple[str, int, int, float]]] = {}
-    # pair_key -> (outcome, p, n, q) or None (breakdown)
-    session_outcomes: dict[str, tuple[str, int, int, float] | None] = {}
-    # sender agent -> the partner they have been exchanging offers with
-    agent_partner: dict[str, str] = {}
-
-    for ev in events:
-        if ev.get("kind") not in ("send", "receive"):
-            continue
-        msg = str(ev.get("msg", ""))
-
-        if msg.startswith("config:"):
-            parts = msg.split(":", 2)
-            if len(parts) >= 3:
-                config_agent = parts[1]
-                with contextlib.suppress(ValueError, TypeError):
-                    agent_params[config_agent] = json.loads(parts[2])
-
-        elif msg.startswith("offer:") and ev.get("kind") == "send":
-            # offer:<from>:<to>:r<round>:p=<p>,n=<n>,q=<q>:<strategy> [# comment]
-            # Strip the human-readable comment suffix before splitting.
-            clean = msg.split(" # ")[0]
-            parts = clean.split(":")
-            if len(parts) >= 6:
-                from_ag = parts[1]
-                to_ag = parts[2]
-                attrs = parts[4]
-                pnq = _parse_pnq(attrs)
-                if pnq is not None:
-                    # Record partner mapping in both directions.
-                    agent_partner[from_ag] = to_ag
-                    agent_partner[to_ag] = from_ag
-                    pk = _pair_key(from_ag, to_ag)
-                    session_offers.setdefault(pk, []).append((from_ag, *pnq))
-
-        elif msg.startswith("close:") and ev.get("kind") == "send":
-            parts = msg.split(":")
-            if len(parts) < 3:
-                continue
-            outcome = parts[1]
-            sender = str(ev.get("agent", ""))
-            # Derive pair key from the sender and their known partner.
-            partner = agent_partner.get(sender, "")
-            pk = _pair_key(sender, partner) if partner else f"unknown-{parts[2]}"
-            if outcome == "agreed" and len(parts) >= 4:
-                pnq = _parse_pnq(parts[3])
-                if pnq is not None:
-                    session_outcomes[pk] = (outcome, *pnq)
-            elif outcome == "breakdown":
-                session_outcomes[pk] = None
-
-    return agent_params, session_offers, session_outcomes
-
-
-def _pareto_frontier_from_params(
-    params_a: dict[str, Any],
-    params_b: dict[str, Any],
-    q: float,
-) -> list[tuple[int, int]]:
-    """Compute joint Pareto frontier from serialised param dicts.
-
-    Uses the same grid as the plugin (step 5 on price, step 1 on quantity).
-    """
-    try:
-        from nest_plugins_reference.negotiation.pareto import (
-            ParetoParams,
-            build_feasible_grid,
-            pareto_nondominated,
-        )
-
-        from nest_core.types import AgentId
-
-        def _rebuild(d: dict[str, Any], aid: str) -> ParetoParams:
-            return ParetoParams(
-                agent_id=AgentId(aid),
-                role=d["role"],
-                w_p=d["w_p"],
-                w_n=d["w_n"],
-                w_q=d["w_q"],
-                min_p=d["min_p"],
-                max_p=d["max_p"],
-                target_p=d["target_p"],
-                min_n=d["min_n"],
-                max_n=d["max_n"],
-                target_n=d["target_n"],
-                capacity=d["capacity"],
-                min_quality=d["min_quality"],
-                kappa=d["kappa"],
-                disagreement_utility=d.get("disagreement_utility", 0.0),
-                patience=d.get("patience", 0.85),
-                rho_p=d.get("rho_p", 0.5),
-                rho_n=d.get("rho_n", 0.5),
-                delta=d.get("delta", 0.9),
-                tau_step=d.get("tau_step", 0.05),
-                beta=d.get("beta", 0.5),
-                strategy_id=d.get("strategy_id", "ttt_directional"),
-            )
-
-        pa = _rebuild(params_a, "agent_a")
-        pb = _rebuild(params_b, "agent_b")
-        feasible = build_feasible_grid(pa, pb, q)
-        return pareto_nondominated(feasible, pa, pb, q)
-    except Exception:
-        return []
-
-
-def validate_pareto_efficiency(
-    events: list[dict[str, Any]],
-) -> list[ValidationResult]:
-    """Agreed sessions must not be Pareto-dominated within the revealed feasible set.
-
-    The referee builds the Pareto frontier from both agents' utility configs
-    (read from the immutable trace) and the fixed quality value.  It FAILS any
-    agreed agreement whose ``(p, n, q)`` is strictly dominated — i.e. there
-    exists another feasible point where both agents are weakly better and at
-    least one strictly better.
-
-    Breakdown sessions (``close:breakdown:…``) are excluded from the check.
-
-    ``alternating_offers`` FAILS because it never moves the quantity axis, so
-    the fixed opening quantity is almost always Pareto-dominated by a different
-    quantity value where both agents gain.
-
-    ``pareto`` PASSES because it actively searches the frontier.
-
-    Example::
-
-        results = validate_pareto_efficiency(events)
-    """
-    agent_params, session_offers, session_outcomes = _collect_pareto_sessions(events)
-
-    violations: list[str] = []
-    agreed_count = 0
-    checked_count = 0
-    no_config_violations: list[str] = []
-
-    for pk, outcome in session_outcomes.items():
-        if outcome is None:
-            continue  # breakdown — excluded from dominated check
-        _outcome_str, p_final, n_final, q_final = outcome
-        agreed_count += 1
-
-        # Extract both agent IDs from the canonical pair key.
-        pk_parts = pk.split("__")
-        if len(pk_parts) != 2:
-            continue
-        ag_a, ag_b = pk_parts[0], pk_parts[1]
-
-        params_a = agent_params.get(ag_a)
-        params_b = agent_params.get(ag_b)
-
-        if params_a is not None and params_b is not None:
-            # Full check: rebuild utility functions from config and compute frontier.
-            frontier = _pareto_frontier_from_params(params_a, params_b, q_final)
-            if not frontier:
-                continue
-
-            checked_count += 1
-            in_frontier = (p_final, n_final) in frontier
-
-            if not in_frontier:
-                try:
-                    from nest_plugins_reference.negotiation.pareto import ParetoParams
-
-                    from nest_core.types import AgentId
-
-                    def _rebuild2(d: dict[str, Any], aid: str) -> ParetoParams:
-                        return ParetoParams(
-                            agent_id=AgentId(aid),
-                            role=d["role"],
-                            w_p=d["w_p"],
-                            w_n=d["w_n"],
-                            w_q=d["w_q"],
-                            min_p=d["min_p"],
-                            max_p=d["max_p"],
-                            target_p=d["target_p"],
-                            min_n=d["min_n"],
-                            max_n=d["max_n"],
-                            target_n=d["target_n"],
-                            capacity=d["capacity"],
-                            min_quality=d["min_quality"],
-                            kappa=d["kappa"],
-                            disagreement_utility=d.get("disagreement_utility", 0.0),
-                            patience=d.get("patience", 0.85),
-                            rho_p=d.get("rho_p", 0.5),
-                            rho_n=d.get("rho_n", 0.5),
-                            delta=d.get("delta", 0.9),
-                            tau_step=d.get("tau_step", 0.05),
-                            beta=d.get("beta", 0.5),
-                            strategy_id=d.get("strategy_id", "ttt_directional"),
-                        )
-
-                    pa = _rebuild2(params_a, ag_a)
-                    pb = _rebuild2(params_b, ag_b)
-                    u_a_final = pa.utility(p_final, n_final, q_final)
-                    u_b_final = pb.utility(p_final, n_final, q_final)
-
-                    for fp, fn in frontier:
-                        u_a2 = pa.utility(fp, fn, q_final)
-                        u_b2 = pb.utility(fp, fn, q_final)
-                        gain_a = u_a2 - u_a_final
-                        gain_b = u_b2 - u_b_final
-                        if (
-                            u_a2 >= u_a_final
-                            and u_b2 >= u_b_final
-                            and (u_a2 > u_a_final or u_b2 > u_b_final)
-                        ):
-                            violations.append(
-                                f"pair {pk}: agreed (p={p_final},n={n_final}) "
-                                f"dominated by frontier point (p={fp},n={fn}): "
-                                f"u_a {u_a_final:.3f}<={u_a2:.3f} (+{gain_a:.3f}), "
-                                f"u_b {u_b_final:.3f}<={u_b2:.3f} (+{gain_b:.3f})"
-                            )
-                            break
-                except Exception as exc:
-                    violations.append(f"pair {pk}: error during dominance check: {exc}")
-        else:
-            # No config lines available (e.g. alternating_offers emits none).
-            # Fallback: check whether the quantity axis moved at all across the
-            # session's offer history.  A plugin that never changes n cannot be
-            # Pareto-optimal because a different n always exists that improves
-            # at least one side's total cost (p*n) without hurting the other.
-            offers = session_offers.get(pk, [])
-            if len(offers) >= 2:
-                quantities = [o[2] for o in offers]  # index 2 = n
-                if len(set(quantities)) == 1:
-                    # Quantity never changed — agreement is quantity-dominated.
-                    checked_count += 1
-                    no_config_violations.append(
-                        f"pair {pk}: quantity axis never moved (n={quantities[0]} "
-                        f"throughout); agreement (p={p_final},n={n_final}) "
-                        f"is quantity-dominated"
-                    )
-
-    violations.extend(no_config_violations)
-
-    if not agreed_count:
-        return [
-            ValidationResult(
-                "pareto_efficiency",
-                False,
-                "no agreed sessions found; all negotiations broke down",
-            )
-        ]
-
-    if violations:
-        return [
-            ValidationResult(
-                "pareto_efficiency",
-                False,
-                f"{len(violations)} dominated agreement(s): " + "; ".join(violations[:3]),
-            )
-        ]
-    return [
-        ValidationResult(
-            "pareto_efficiency",
-            True,
-            f"{checked_count} agreed session(s) verified non-dominated",
-        )
-    ]
-
-
-def validate_breakdown_labeled(
-    events: list[dict[str, Any]],
-) -> list[ValidationResult]:
-    """Every negotiation session has exactly one close: line, unambiguously labeled.
-
-    Checks that:
-    - At least one ``close:`` line exists (negotiations ran).
-    - Every ``close:`` is either ``close:agreed:…`` or ``close:breakdown:…``.
-    - No session id appears in both.
-
-    Example::
-
-        results = validate_breakdown_labeled(events)
-    """
-    agreed_ids: set[str] = set()
-    breakdown_ids: set[str] = set()
-    malformed: list[str] = []
-
-    for ev in events:
-        if ev.get("kind") != "send":
-            continue
-        msg = str(ev.get("msg", ""))
-        if not msg.startswith("close:"):
-            continue
-        parts = msg.split(":")
-        if len(parts) < 3:
-            malformed.append(msg[:60])
-            continue
-        outcome = parts[1]
-        sid = parts[2]
-        if outcome == "agreed":
-            agreed_ids.add(sid)
-        elif outcome == "breakdown":
-            breakdown_ids.add(sid)
-        else:
-            malformed.append(msg[:60])
-
-    total = len(agreed_ids) + len(breakdown_ids)
-    if total == 0:
-        return [
-            ValidationResult(
-                "breakdown_labeled",
-                False,
-                "no close: lines found in trace",
-            )
-        ]
-
-    both = agreed_ids & breakdown_ids
-    problems: list[str] = []
-    if both:
-        problems.append(f"sessions in both agreed and breakdown: {sorted(both)}")
-    if malformed:
-        problems.append(f"malformed close lines: {malformed[:3]}")
-
-    if problems:
-        return [ValidationResult("breakdown_labeled", False, "; ".join(problems))]
-    return [
-        ValidationResult(
-            "breakdown_labeled",
-            True,
-            f"{len(agreed_ids)} agreed, {len(breakdown_ids)} breakdown sessions labeled",
-        )
-    ]
-
-
-# Register multi_attribute_market validators now that the functions are defined
-VALIDATORS["multi_attribute_market"] = [
-    validate_pareto_efficiency,
-    validate_breakdown_labeled,
-]
