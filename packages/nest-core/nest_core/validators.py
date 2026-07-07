@@ -1680,6 +1680,7 @@ def validate_empic_delivery_policy_integrity(
         )
     ]
 
+
 def validate_empic_pubsub_billing_caps(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -1698,60 +1699,49 @@ def validate_empic_pubsub_billing_caps(
     for ev in audit:
         event_type = ev.get("event_type")
         ref = _empic_ref(ev)
-
         if not ref:
             continue
-
         if event_type == "empic_stream_opened":
             rate = _safe_amount(ev.get("rate_per_tick"))
-            max_total = _safe_amount(ev.get("max_total"))
-            streams[ref] = (rate, max_total)
-
+            max_total = _safe_amount(ev.get("max_total") or ev.get("amount"))
+            if rate <= 0 or max_total <= 0:
+                violations.append(f"{ref}: invalid stream terms rate={rate} max_total={max_total}")
+            else:
+                streams[ref] = (rate, max_total)
         elif (
             event_type == "empic_delivery_evaluated"
             and ev.get("accepted") is True
-            and ref in streams
+            and ev.get("mode") == "pubsub"
         ):
             delivery_id = _empic_delivery_id(ev)
             if delivery_id:
                 accepted[ref].add(delivery_id)
-
-        elif event_type == "empic_escrow_released" and ref in streams:
+        elif event_type == "empic_escrow_released" and ev.get("mode") == "pubsub":
             amount = _safe_amount(ev.get("amount"))
             delivery_id = _empic_delivery_id(ev)
-
-            rate, _max_total = streams[ref]
-
+            terms = streams.get(ref)
+            if terms is None:
+                violations.append(f"{ref}: pubsub release without stream_opened")
+                continue
+            rate, _max_total = terms
             if amount > rate:
                 violations.append(
-                    f"{ref}/{delivery_id or ''}: release {amount} > rate {rate}"
+                    f"{ref}/{delivery_id or '<missing>'}: release {amount} > rate {rate}"
                 )
-
             released[ref] += amount
 
     for ref, (rate, max_total) in streams.items():
         released_total = released.get(ref, 0)
         accepted_cap = rate * len(accepted.get(ref, set()))
-
         if released_total > max_total:
-            violations.append(
-                f"{ref}: released {released_total} > max_total {max_total}"
-            )
-
+            violations.append(f"{ref}: released {released_total} > max_total {max_total}")
         if released_total > accepted_cap:
             violations.append(
                 f"{ref}: released {released_total} > accepted delivery cap {accepted_cap}"
             )
 
     if violations:
-        return [
-            ValidationResult(
-                "empic_pubsub_billing_caps",
-                False,
-                "; ".join(violations),
-            )
-        ]
-
+        return [ValidationResult("empic_pubsub_billing_caps", False, "; ".join(violations))]
     return [
         ValidationResult(
             "empic_pubsub_billing_caps",
@@ -1759,6 +1749,7 @@ def validate_empic_pubsub_billing_caps(
             f"checked {len(streams)} pubsub streams",
         )
     ]
+
 
 def validate_empic_max_spend_enforced(
     events: list[dict[str, Any]],
