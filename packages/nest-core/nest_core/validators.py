@@ -4306,7 +4306,6 @@ def validate_bft_no_stuck_view(
     ]
 
 
-# ---------------------------------------------------------------------------
 # Failure-detection validators
 # ---------------------------------------------------------------------------
 
@@ -5153,6 +5152,97 @@ def validate_attested_sybil_quarantined(
 # Validator registry
 # ---------------------------------------------------------------------------
 
+# Delegated Auth Validators
+# ---------------------------------------------------------------------------
+
+def validate_delegated_auth_no_escalation(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Verify that no child token escalates beyond its parent's scopes."""
+    agent_scopes: dict[str, set[str]] = {}
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("auth:issue:"):
+            parts = msg.split(":")
+            if len(parts) >= 4:
+                agent = parts[2]
+                scopes = set(parts[3].split(",")) if parts[3] else set()
+                agent_scopes[agent] = scopes
+        elif msg.startswith("auth:delegate:") and not msg.startswith("auth:delegate:FAIL:"):
+            parts = msg.split(":")
+            if len(parts) >= 5:
+                parent = parts[2]
+                child = parts[3]
+                scopes = set(parts[4].split(",")) if parts[4] else set()
+                if parent in agent_scopes:
+                    parent_scopes = agent_scopes[parent]
+                    escalated = scopes - parent_scopes
+                    if escalated:
+                        return [ValidationResult(
+                            "delegated_auth_no_escalation",
+                            False,
+                            f"Escalation: {child} granted {scopes} but parent {parent} only has {parent_scopes}",
+                        )]
+                agent_scopes[child] = scopes
+    return [ValidationResult("delegated_auth_no_escalation", True, "No scope escalation detected")]
+
+def validate_delegated_auth_stale_parent(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Verify that revoking a parent prevents downstream verification."""
+    revoked_agents = set()
+    failed_verifications = 0
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("auth:revoke:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                revoked_agents.add(parts[2])
+        elif msg.startswith("auth:verify:FAIL:"):
+            parts = msg.split(":")
+            if len(parts) >= 5:
+                error = parts[4]
+                if error == "RevokedAncestorError":
+                    failed_verifications += 1
+
+    if len(revoked_agents) > 0 and failed_verifications == 0:
+        return [ValidationResult(
+            "delegated_auth_stale_parent",
+            False,
+            "An agent was revoked but no RevokedAncestorError was observed downstream",
+        )]
+    return [
+        ValidationResult(
+            "delegated_auth_stale_parent",
+            True,
+            f"Cascading revocation succeeded (observed {failed_verifications} cascading failures)",
+        )
+    ]
+
+def validate_delegated_auth_audience_confusion(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Verify that tokens are not accepted by the wrong audience."""
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("auth:verify:FAIL:"):
+            parts = msg.split(":")
+            if len(parts) >= 5:
+                error = parts[4]
+                if error == "AudienceConfusionError":
+                    return [
+                        ValidationResult(
+                            "delegated_auth_audience_confusion",
+                            True,
+                            "Audience confusion was correctly rejected",
+                        )
+                    ]
+    return [ValidationResult("delegated_auth_audience_confusion", True, "No audience confusion observed")]
+
+
+# ---------------------------------------------------------------------------
+# Validator registry
+# ---------------------------------------------------------------------------
 
 _SYBIL_FLOOR = 0.0
 """Untrusted-floor score an unbonded identity may not exceed."""
@@ -5389,6 +5479,7 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_escrow_bps_in_range,
         validate_escrow_no_payout_without_delivery,
     ],
+<<<<<<< HEAD
     "failure_detection": [
         validate_failure_detection_completeness,
         validate_failure_detection_accuracy,
@@ -5409,5 +5500,13 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "sybil_bond": [
+        validate_sybil_bond_reputation,
+    ],
+    "delegated_auth": [
+        validate_delegated_auth_no_escalation,
+        validate_delegated_auth_stale_parent,
+        validate_delegated_auth_audience_confusion,
     ],
 }

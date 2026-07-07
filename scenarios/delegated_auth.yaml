@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-# Delegated auth scenario: a three-level capability tree under attack.
-# One intermediary attempts scope escalation, the coordinator revokes an
-# intermediary's grant mid-run, and one leaf presents a sibling's token.
-# Under auth: delegatable all three validators pass; under auth: jwt all
-# three fail (see nest_plugins_reference.validators.delegation_validators).
+# Delegated auth scenario: coordinator issues a root token and delegates
+# narrowing sub-capabilities through 3 intermediary agents to 12 leaf agents.
+# Validates scope enforcement, cascading revocation, and audience binding.
 
 name: delegated_auth
 description: |
-  A coordinator delegates attenuated capabilities to 3 intermediaries,
-  which sub-delegate to 12 leaves. Adversarial behaviours: scope
-  escalation at delegation, presentation after ancestor revocation, and
-  audience confusion via a shared token.
+  A coordinator holds a root token with full scopes [read, write, exec, admin].
+  It delegates [read, write, exec] to 3 intermediaries; each intermediary
+  delegates [read, exec] to 4 leaf agents.  Mid-scenario the coordinator
+  revokes one intermediary's token; the downstream 4 leaves must fail
+  verification.  Three adversarial validators check: no scope escalation
+  occurred, no stale-parent token was accepted, and no audience confusion.
 
 tier: 1
 seed: 42
@@ -21,10 +21,16 @@ agents:
   roles:
     - name: coordinator
       count: 1
+      config:
+        root_scopes: [read, write, exec, admin]
     - name: intermediary
       count: 3
+      config:
+        delegate_scopes: [read, write, exec]
     - name: leaf
       count: 12
+      config:
+        expected_scopes: [read, exec]
 
 layers:
   transport: in_memory
@@ -43,15 +49,14 @@ layers:
 task:
   type: delegated_auth
   config:
-    revoke_tick: 20
-    presents: 4
-    present_interval: 10
+    rounds: 50
+    revoke_intermediary: 1
 
 failures:
   message_drop: 0.0
   byzantine_agents: 0.0
 
-duration: "ticks: 100"
+duration: "ticks: 5000"
 
 metrics:
   - message_count
