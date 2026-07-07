@@ -119,6 +119,7 @@ class EMPICPaymentRecord:
     escrow_id: str = ""
     opened_at_tick: int = 0
     closed_at_tick: int | None = None
+    timeout_ticks: int = 100
     rate_per_tick: int = 0
     max_total: int = 0
     escrowed: int = 0
@@ -158,6 +159,7 @@ class EMPICEscrowPayments:
         self._balances.setdefault(ESCROW_AGENT, 0)
         self._payments = payments if payments is not None else {}
         self._services = services if services is not None else {}
+        self._current_tick = 0
 
     def balance(self, agent: AgentId) -> int:
         """Return the local simulation balance for an agent.
@@ -262,6 +264,27 @@ class EMPICEscrowPayments:
             )
         """
         self._validate_new_payment(to, amount.amount, ref)
+
+        # FIX: If no service_id is provided, treat as a generic payment and release immediately
+        if service_id is None:
+            self._move(self._agent_id, to, amount.amount)
+            record = EMPICPaymentRecord(
+                ref=ref,
+                payer=self._agent_id,
+                payee=to,
+                amount=amount,
+                mode="pull",
+                status=PaymentStatus.CONFIRMED,
+                service_id=None,
+                escrow_id=f"empic-pull:{ref}",
+                max_total=amount.amount,
+                escrowed=0,
+                released=amount.amount,
+            )
+            self._payments[ref] = record
+            return Receipt(ref=ref, payer=self._agent_id, payee=to, amount=amount)
+
+        # EMPIC-specific escrow logic
         self._move(self._agent_id, ESCROW_AGENT, amount.amount)
         record = EMPICPaymentRecord(
             ref=ref,
@@ -299,6 +322,7 @@ class EMPICEscrowPayments:
                 ref=PaymentRef("stream-1"),
             )
         """
+        self._update_tick(opened_at_tick)
         if rate_per_tick <= 0:
             msg = f"rate_per_tick must be positive: {rate_per_tick}"
             raise ValueError(msg)
@@ -352,6 +376,7 @@ class EMPICEscrowPayments:
                 data={"temperature_c": 20.0},
             )
         """
+        self._update_tick(tick)
         record = self._require_record(ref)
         delivery = EMPICDeliveryRecord(
             delivery_id=delivery_id,
@@ -374,6 +399,7 @@ class EMPICEscrowPayments:
 
             still_open = await payments.tick_stream(PaymentRef("stream-1"), 3)
         """
+        self._update_tick(current_tick)
         record = self._require_record(ref)
         if record.mode != "pubsub":
             msg = f"Payment is not a pubsub stream: {ref}"
@@ -498,6 +524,17 @@ class EMPICEscrowPayments:
         record = self._payments.get(ref)
         if record is None:
             return PaymentStatus.FAILED
+
+        # FIX: Auto-refund if the escrow has timed out
+        if record.status is PaymentStatus.PENDING and record.service_id is not None:
+            if self._current_tick > record.opened_at_tick + record.timeout_ticks:
+                if record.escrowed > 0:
+                    self._move(ESCROW_AGENT, record.payer, record.escrowed)
+                    record.refunded += record.escrowed
+                    record.escrowed = 0
+                record.closed_at_tick = self._current_tick
+                record.status = PaymentStatus.REFUNDED
+
         return record.status
 
     async def refund(self, ref: PaymentRef) -> None:
@@ -526,6 +563,10 @@ class EMPICEscrowPayments:
             record = payments.payment_record(PaymentRef("p1"))
         """
         return self._payments.get(ref)
+
+    def _update_tick(self, tick: int) -> None:
+        if tick > self._current_tick:
+            self._current_tick = tick
 
     def _validate_new_payment(self, to: AgentId, amount: int, ref: PaymentRef) -> None:
         if amount <= 0:
