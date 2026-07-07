@@ -19,7 +19,6 @@ from typing import Any
 from nest_plugins_reference.memory.blackboard import Blackboard
 from nest_plugins_reference.memory.typed_crdt import TypedCrdtMemory
 
-
 Update = tuple[str, bytes]
 
 
@@ -44,11 +43,13 @@ def make_set_updates() -> list[Update]:
     return [
         (
             f"agent_{i}",
-            encode({
-                "type": "set",
-                "writer": f"agent_{i}",
-                "value": f"fact_{i}",
-            }),
+            encode(
+                {
+                    "type": "set",
+                    "writer": f"agent_{i}",
+                    "value": f"fact_{i}",
+                }
+            ),
         )
         for i in range(1, 9)
     ]
@@ -58,11 +59,13 @@ def make_counter_updates() -> list[Update]:
     return [
         (
             f"agent_{i}",
-            encode({
-                "type": "counter",
-                "writer": f"agent_{i}",
-                "count": 1,
-            }),
+            encode(
+                {
+                    "type": "counter",
+                    "writer": f"agent_{i}",
+                    "count": 1,
+                }
+            ),
         )
         for i in range(1, 9)
     ]
@@ -83,11 +86,13 @@ def make_vote_updates() -> list[Update]:
     return [
         (
             f"agent_{i}",
-            encode({
-                "type": "vote",
-                "writer": f"agent_{i}",
-                "value": votes[i - 1],
-            }),
+            encode(
+                {
+                    "type": "vote",
+                    "writer": f"agent_{i}",
+                    "value": votes[i - 1],
+                }
+            ),
         )
         for i in range(1, 9)
     ]

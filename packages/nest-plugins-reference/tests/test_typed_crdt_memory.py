@@ -5,19 +5,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any, Protocol
 
 import pytest
-
 from nest_core.layers.memory import Memory
 from nest_plugins_reference.memory.blackboard import Blackboard
 from nest_plugins_reference.memory.typed_crdt import TypedCrdtMemory
 
 
-def encode(obj: dict) -> bytes:
+class ReadWriteMemory(Protocol):
+    async def read(self, key: str) -> bytes | None: ...
+
+    async def write(self, key: str, value: bytes) -> None: ...
+
+
+def encode(obj: dict[str, Any]) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-async def apply_updates(memory, key: str, updates: list[bytes]) -> bytes:
+async def apply_updates(memory: ReadWriteMemory, key: str, updates: list[bytes]) -> bytes:
     for update in updates:
         await memory.write(key, update)
 
@@ -68,8 +74,7 @@ def test_set_memory_converges_across_write_orders():
 def test_counter_memory_converges_and_avoids_duplicate_delivery():
     async def run_test():
         updates = [
-            encode({"type": "counter", "writer": f"agent_{i}", "count": 1})
-            for i in range(1, 9)
+            encode({"type": "counter", "writer": f"agent_{i}", "count": 1}) for i in range(1, 9)
         ]
 
         duplicate = encode({"type": "counter", "writer": "agent_1", "count": 1})
