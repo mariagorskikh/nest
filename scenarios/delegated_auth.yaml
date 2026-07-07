@@ -1,16 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
-# Delegated auth scenario: a three-level capability tree under attack.
-# One intermediary attempts scope escalation, the coordinator revokes an
-# intermediary's grant mid-run, and one leaf presents a sibling's token.
-# Under auth: delegatable all three validators pass; under auth: jwt all
-# three fail (see nest_plugins_reference.validators.delegation_validators).
-
+# Delegated-auth scenario: coordinator mints scoped sub-tokens for intermediaries,
+# who in turn delegate to leaf agents.  The scenario exercises:
+#   - three-level delegation chains (coordinator → intermediary → leaf)
+#   - scope narrowing at each hop
+#   - cascading revocation (revoking an intermediary token kills leaf tokens)
+#
+# auth: delegatable  — uses the DelegatableAuth plugin (problem #04)
+#
+# Judging note:
+#   The adversarial validator (validators.delegated_auth) checks:
+#   1. Scope escalation attempts are rejected in the trace.
+#   2. Tokens from revoked intermediaries are rejected.
+#   3. Tokens presented by the wrong audience are rejected.
 name: delegated_auth
-description: |
-  A coordinator delegates attenuated capabilities to 3 intermediaries,
-  which sub-delegate to 12 leaves. Adversarial behaviours: scope
-  escalation at delegation, presentation after ancestor revocation, and
-  audience confusion via a shared token.
+description: >
+  Coordinator delegates scoped sub-capabilities to 3 intermediaries; each
+  intermediary delegates further to 4 leaf agents (12 leaves total).
+  Adversarial agents attempt scope escalation and audience spoofing.
 
 tier: 1
 seed: 42
@@ -41,19 +47,24 @@ layers:
   datafacts: datafacts_v1
 
 task:
-  type: delegated_auth
+  type: delegation_chain
   config:
-    revoke_tick: 20
-    presents: 4
-    present_interval: 10
+    root_scopes: ["read", "write", "delegate"]
+    intermediary_scopes: ["read", "write"]
+    leaf_scopes: ["read"]
+    # Inject adversarial attempts that must be caught
+    adversarial:
+      scope_escalation: true
+      audience_confusion: true
+      revocation_test: true
 
 failures:
-  message_drop: 0.0
-  byzantine_agents: 0.0
+  message_drop: 0.05
 
-duration: "ticks: 100"
+duration: "ticks: 5000"
 
 metrics:
+  - success_rate
   - message_count
   - agent_count
 

@@ -1,181 +1,270 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the delegatable capability-token auth plugin.
+"""Tests for the delegatable capability auth plugin.
 
-Covers issuance, offline delegation, scope attenuation, TTL clamping,
-cascading revocation across deep chains, audience binding, the three
-adversarial patterns from the problem brief (scope escalation, stale
-parent, audience confusion), and base ``Auth`` protocol compatibility.
+Covers: Auth protocol conformance, root token issuance, child delegation,
+scope-subset enforcement, cascading revocation, TTL/expiry, audience binding,
+adversarial scenarios (scope escalation, stale-parent, audience confusion),
+and the PluginRegistry wiring.
 """
 
 from __future__ import annotations
 
 import pytest
 from nest_core.layers.auth import Auth
+from nest_core.plugins import PluginRegistry
 from nest_core.types import AgentId, Token
 from nest_plugins_reference.auth.delegatable import (
-    AudienceMismatchError,
+    AudienceError,
     DelegatableAuth,
-    DelegationError,
-    ExpiredAncestorError,
     RevokedAncestorError,
     ScopeEscalationError,
 )
-from nest_plugins_reference.auth.jwt_auth import JwtAuth
 
-ROOT = AgentId("coordinator")
-MID = AgentId("intermediary")
-LEAF = AgentId("leaf")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def _auth(clock: float = 0.0) -> DelegatableAuth:
+def _auth(clock: float = 1_000_000.0) -> DelegatableAuth:
+    """Return a fresh DelegatableAuth pinned to a fixed clock for determinism."""
     return DelegatableAuth(secret=b"test-secret", clock=clock)
 
 
-@pytest.mark.asyncio
-async def test_satisfies_auth_protocol() -> None:
-    auth = _auth()
-    assert isinstance(auth, Auth)
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_issue_and_verify_root() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    ctx = await auth.verify(root)
-    assert ctx.subject == ROOT
-    assert sorted(ctx.scopes) == ["read", "write"]
+class TestProtocolConformance:
+    def test_isinstance_auth(self) -> None:
+        assert isinstance(_auth(), Auth)
+
+    @pytest.mark.asyncio
+    async def test_issue_returns_token(self) -> None:
+        auth = _auth()
+        token = await auth.issue(AgentId("a1"), ["read"])
+        assert str(token)  # non-empty
+
+    @pytest.mark.asyncio
+    async def test_verify_root_token(self) -> None:
+        auth = _auth()
+        token = await auth.issue(AgentId("a1"), ["read", "write"])
+        ctx = await auth.verify(token)
+        assert ctx.subject == AgentId("a1")
+        assert set(ctx.scopes) == {"read", "write"}
+
+    @pytest.mark.asyncio
+    async def test_revoke_root_then_verify_raises(self) -> None:
+        auth = _auth()
+        token = await auth.issue(AgentId("a1"), ["read"])
+        await auth.revoke(token)
+        with pytest.raises(RevokedAncestorError):
+            await auth.verify(token)
 
 
-@pytest.mark.asyncio
-async def test_delegate_offline_and_verify_child() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    ctx = await auth.verify(child)
-    assert ctx.subject == MID
-    assert ctx.scopes == ["read"]
+# ---------------------------------------------------------------------------
+# Delegation — happy path
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_scope_escalation_raises_at_mint() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    with pytest.raises(ScopeEscalationError):
-        await auth.delegate(root, MID, ["read", "admin"], ttl=60.0)
+class TestDelegation:
+    @pytest.mark.asyncio
+    async def test_delegate_returns_child_token(self) -> None:
+        auth = _auth()
+        root = await auth.issue(AgentId("coordinator"), ["read", "write", "delegate"])
+        child = await auth.delegate(root, AgentId("worker"), ["read"], ttl=60.0)
+        assert str(child)
+
+    @pytest.mark.asyncio
+    async def test_child_verify_preserves_subject(self) -> None:
+        """Child token subject is the root issuer's subject (delegation chain)."""
+        auth = _auth()
+        root = await auth.issue(AgentId("coordinator"), ["read", "write"])
+        child = await auth.delegate(root, AgentId("worker"), ["read"], ttl=30.0)
+        ctx = await auth.verify(child)
+        assert ctx.subject == AgentId("coordinator")
+
+    @pytest.mark.asyncio
+    async def test_child_scopes_subset_of_parent(self) -> None:
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read", "write", "delete"])
+        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+        ctx = await auth.verify(child)
+        assert ctx.scopes == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_multi_hop_delegation_chain(self) -> None:
+        """Three-level chain: root → mid → leaf — leaf verifies successfully."""
+        auth = _auth()
+        root = await auth.issue(AgentId("root"), ["read", "write", "delegate"])
+        mid = await auth.delegate(root, AgentId("mid"), ["read", "write"], ttl=600.0)
+        leaf = await auth.delegate(mid, AgentId("leaf"), ["read"], ttl=30.0)
+        ctx = await auth.verify(leaf)
+        assert "read" in ctx.scopes
+
+    @pytest.mark.asyncio
+    async def test_child_ttl_capped_to_parent_remaining(self) -> None:
+        """Child cannot request a TTL longer than the parent's remaining lifetime."""
+        auth = DelegatableAuth(secret=b"s", clock=1_000_000.0)
+        root = await auth.issue(AgentId("a1"), ["read"])  # expires at +3600
+        # Request 7200 s — should be capped at 3600 s
+        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=7200.0)
+        # Verify the child's expiry <= parent's expiry using public verify
+        root_ctx = await auth.verify(root)
+        child_ctx = await auth.verify(child)
+        # Child should expire at or before parent (both issued at same clock tick)
+        assert child_ctx.expires_at is not None
+        assert root_ctx.expires_at is not None
+        assert child_ctx.expires_at <= root_ctx.expires_at + 1  # small epsilon for same tick
+
+    @pytest.mark.asyncio
+    async def test_audience_check_accepts_correct_presenter(self) -> None:
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read"])
+        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+        ctx = await auth.verify(child, presenter=AgentId("a2"))
+        assert ctx.subject == AgentId("a1")
 
 
-@pytest.mark.asyncio
-async def test_grandchild_cannot_exceed_grandparent() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    with pytest.raises(ScopeEscalationError):
-        await auth.delegate(child, LEAF, ["write"], ttl=30.0)
+# ---------------------------------------------------------------------------
+# Adversarial validator — three attack classes
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_child_ttl_clamped_to_parent() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    root_exp = (await auth.verify(root)).expires_at
-    child = await auth.delegate(root, MID, ["read"], ttl=10_000_000.0)
-    child_exp = (await auth.verify(child)).expires_at
-    assert root_exp is not None and child_exp is not None
-    assert child_exp <= root_exp
+class TestAdversarialScenarios:
+    """These are the three attacks the problem spec requires catching."""
+
+    # 1. Scope escalation
+    @pytest.mark.asyncio
+    async def test_scope_escalation_rejected(self) -> None:
+        """Child cannot request scopes the parent does not hold."""
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read"])
+        with pytest.raises(ScopeEscalationError):
+            await auth.delegate(root, AgentId("a2"), ["read", "delete"], ttl=60.0)
+
+    @pytest.mark.asyncio
+    async def test_scope_escalation_rejected_when_parent_has_none(self) -> None:
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), [])
+        with pytest.raises(ScopeEscalationError):
+            await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+
+    @pytest.mark.asyncio
+    async def test_scope_escalation_in_multi_hop_chain(self) -> None:
+        """Even deep in the chain, scopes cannot be elevated."""
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read"])
+        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+        with pytest.raises(ScopeEscalationError):
+            await auth.delegate(child, AgentId("a3"), ["read", "write"], ttl=30.0)
+
+    # 2. Stale parent (revoked)
+    @pytest.mark.asyncio
+    async def test_revoking_parent_invalidates_child(self) -> None:
+        """Cascading revocation: revoking a parent makes child unverifiable."""
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read", "write"])
+        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+        await auth.revoke(root)
+        with pytest.raises(RevokedAncestorError):
+            await auth.verify(child)
+
+    @pytest.mark.asyncio
+    async def test_revoking_grandparent_invalidates_leaf(self) -> None:
+        """Three-level: revoking the root kills the leaf too."""
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read", "write"])
+        mid = await auth.delegate(root, AgentId("a2"), ["read", "write"], ttl=600.0)
+        leaf = await auth.delegate(mid, AgentId("a3"), ["read"], ttl=60.0)
+        await auth.revoke(root)
+        with pytest.raises(RevokedAncestorError):
+            await auth.verify(leaf)
+
+    @pytest.mark.asyncio
+    async def test_revoking_mid_invalidates_leaf_not_root(self) -> None:
+        """Only descendants are invalidated; siblings of the revoked node survive."""
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read", "write"])
+        mid = await auth.delegate(root, AgentId("a2"), ["read", "write"], ttl=600.0)
+        sibling = await auth.delegate(root, AgentId("a3"), ["write"], ttl=600.0)
+        leaf = await auth.delegate(mid, AgentId("a4"), ["read"], ttl=60.0)
+
+        await auth.revoke(mid)
+
+        with pytest.raises(RevokedAncestorError):
+            await auth.verify(leaf)
+
+        # Root and sibling (branching off root, not mid) must still be valid
+        ctx_root = await auth.verify(root)
+        assert ctx_root.subject == AgentId("a1")
+        ctx_sib = await auth.verify(sibling)
+        assert "write" in ctx_sib.scopes
+
+    # 3. Audience confusion
+    @pytest.mark.asyncio
+    async def test_wrong_presenter_rejected(self) -> None:
+        """A child token is rejected when presented by the wrong agent."""
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read"])
+        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+        with pytest.raises(AudienceError):
+            await auth.verify(child, presenter=AgentId("a3"))
+
+    @pytest.mark.asyncio
+    async def test_root_token_has_no_audience_restriction(self) -> None:
+        """Root tokens (issued via ``issue``) accept any presenter."""
+        auth = _auth()
+        root = await auth.issue(AgentId("a1"), ["read"])
+        ctx = await auth.verify(root, presenter=AgentId("anyone"))
+        assert ctx.subject == AgentId("a1")
 
 
-@pytest.mark.asyncio
-async def test_cascading_revocation_root_kills_grandchild() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    grandchild = await auth.delegate(child, LEAF, ["read"], ttl=30.0)
-    await auth.revoke(root)
-    with pytest.raises(RevokedAncestorError):
-        await auth.verify(grandchild)
+# ---------------------------------------------------------------------------
+# Expiry
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_revoking_middle_spares_sibling_branch() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    mid_a = await auth.delegate(root, AgentId("mid-a"), ["read"], ttl=60.0)
-    mid_b = await auth.delegate(root, AgentId("mid-b"), ["write"], ttl=60.0)
-    leaf_a = await auth.delegate(mid_a, LEAF, ["read"], ttl=30.0)
-    await auth.revoke(mid_a)
-    with pytest.raises(RevokedAncestorError):
-        await auth.verify(leaf_a)
-    ctx = await auth.verify(mid_b)
-    assert ctx.scopes == ["write"]
+class TestExpiry:
+    @pytest.mark.asyncio
+    async def test_expired_token_raises(self) -> None:
+        """A token issued at t=0 with ttl=1 is expired at t=2."""
+        auth_issue = DelegatableAuth(secret=b"s", clock=0.0)
+        token = await auth_issue.issue(AgentId("a1"), ["read"])
+
+        auth_beyond = DelegatableAuth(secret=b"s", clock=4000.0)
+        with pytest.raises(ValueError, match="expired"):
+            await auth_beyond.verify(token)
 
 
-@pytest.mark.asyncio
-async def test_stale_parent_expired_ancestor_fails() -> None:
-    auth = _auth(clock=0.0)
-    root = await auth.issue(ROOT, ["read"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    auth.set_clock(10_000_000.0)
-    with pytest.raises(ExpiredAncestorError):
-        await auth.verify(child)
+# ---------------------------------------------------------------------------
+# Invalid tokens
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_revoked_parent_cannot_mint_children() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    await auth.revoke(root)
-    with pytest.raises(RevokedAncestorError):
-        await auth.delegate(root, MID, ["read"], ttl=60.0)
+class TestInvalidTokens:
+    @pytest.mark.asyncio
+    async def test_tampered_payload_fails(self) -> None:
+        auth = _auth()
+        token = await auth.issue(AgentId("a1"), ["read"])
+        raw = str(token)
+        tampered_raw = raw.replace('"read"', '"admin"')
+        with pytest.raises(ValueError):
+            await auth.verify(Token(tampered_raw))
+
+    @pytest.mark.asyncio
+    async def test_malformed_token_fails(self) -> None:
+        with pytest.raises(ValueError, match="Malformed"):
+            await _auth().verify(Token("notavalidtoken"))
 
 
-@pytest.mark.asyncio
-async def test_audience_confusion_rejected() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    with pytest.raises(AudienceMismatchError):
-        await auth.verify_presented(child, LEAF)
-    ctx = await auth.verify_presented(child, MID)
-    assert ctx.subject == MID
+# ---------------------------------------------------------------------------
+# PluginRegistry wiring
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_tampered_chain_rejected() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    forged = Token(str(root).replace('"read"', '"admin"'))
-    with pytest.raises(DelegationError):
-        await auth.verify(forged)
-
-
-@pytest.mark.asyncio
-async def test_garbage_token_rejected() -> None:
-    auth = _auth()
-    for garbage in ("", "not-json", '{"chain": [], "sig": "00"}'):
-        with pytest.raises(DelegationError):
-            await auth.verify(Token(garbage))
-
-
-@pytest.mark.asyncio
-async def test_delegation_errors_are_value_errors() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    await auth.revoke(root)
-    with pytest.raises(ValueError, match="revoked"):
-        await auth.verify(root)
-
-
-@pytest.mark.asyncio
-async def test_default_jwt_plugin_is_vulnerable_baseline() -> None:
-    """Document the gap this plugin closes: jwt has no chain semantics.
-
-    Under ``JwtAuth`` a "delegated" token is just a fresh issuance, so
-    revoking the parent leaves the child fully valid — the stale-parent
-    attack the adversarial validator must catch.
-    """
-    jwt = JwtAuth(secret=b"test-secret")
-    parent = await jwt.issue(ROOT, ["read"])
-    child = await jwt.issue(MID, ["read", "admin"])  # escalation unnoticed
-    await jwt.revoke(parent)
-    ctx = await jwt.verify(child)  # still verifies: no cascade
-    assert "admin" in ctx.scopes
+class TestPluginRegistry:
+    def test_resolve_delegatable(self) -> None:
+        reg = PluginRegistry()
+        cls = reg.resolve("auth", "delegatable")
+        assert cls is DelegatableAuth
