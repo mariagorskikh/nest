@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import secrets
 
 from nest_core.types import AgentId, AuthContext, Token
 
@@ -50,6 +51,12 @@ def _sign(key: bytes, payload: str) -> str:
     return hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
 
 
+def _derive_child_key(parent_key: str, child_nonce: str) -> str:
+    """Derive a domain-separated child key using HKDF-Expand-like logic."""
+    info = f"cap/v1/delegate/{child_nonce}"
+    return hmac.new(parent_key.encode(), info.encode(), hashlib.sha256).hexdigest()
+
+
 def _chain_hash(prev_hash: str, payload: str, sig: str) -> str:
     """Derive chain hash from previous hash, payload, and signature."""
     material = f"{prev_hash}:{payload}:{sig}"
@@ -87,18 +94,24 @@ class DelegatableAuth:
 
     async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
         now = self._now()
+        nonce = secrets.token_hex(16)
         payload = json.dumps(
             {
+                "depth": 0,
                 "sub": str(subject),
                 "aud": None,
                 "scopes": sorted(scopes),
                 "iat": now,
                 "exp": now + 3600.0,
+                "nonce": nonce,
+                "resource": None,
             },
             sort_keys=True,
             separators=(",", ":"),
         )
-        sig = _sign(self._secret, payload)
+        # Root key is just HMAC of secret + root domain
+        root_key = hmac.new(self._secret, b"cap/v1/token/root", hashlib.sha256).hexdigest()
+        sig = _sign(root_key.encode(), payload)
         raw = f"{payload}{_SEP}{sig}"
         return Token(raw)
 
@@ -108,6 +121,7 @@ class DelegatableAuth:
         audience: AgentId,
         scopes: list[str],
         ttl: float,
+        resource: str | None = None,
     ) -> Token:
         if ttl <= 0:
             raise ValueError("ttl must be positive")
@@ -136,30 +150,38 @@ class DelegatableAuth:
             raise ScopeEscalationError(
                 f"Scope escalation: {extra!r} not in parent scopes {parent_scopes!r}"
             )
-        if child_scopes == parent_scopes:
-            raise ScopeEscalationError(
-                "Delegated scopes must be a strict subset of the parent scopes"
-            )
+        # Allow exact matching scopes now that we have HKDF and depth tracking
+        # (Removed strict subset requirement to allow pure audience attenuation)
 
         parent_remaining = float(parent_data["exp"]) - self._now()
         if parent_remaining <= 0:
             raise ValueError("parent token has expired")
         actual_ttl = min(ttl, parent_remaining)
 
+        if parent_data.get("resource") is not None:
+            if resource is not None and resource != parent_data["resource"]:
+                raise ScopeEscalationError("Cannot broaden resource binding")
+            resource = parent_data["resource"]
+
         now = self._now()
+        child_nonce = secrets.token_hex(16)
         child_payload = json.dumps(
             {
+                "depth": parent_data.get("depth", 0) + 1,
                 "sub": parent_data["sub"],
                 "aud": str(audience),
                 "scopes": sorted(child_scopes),
                 "iat": now,
                 "exp": now + actual_ttl,
+                "nonce": child_nonce,
+                "resource": resource,
             },
             sort_keys=True,
             separators=(",", ":"),
         )
 
-        child_sig = _sign(parent_sig.encode(), child_payload)
+        child_key = _derive_child_key(parent_sig, child_nonce)
+        child_sig = _sign(child_key.encode(), child_payload)
         new_raw = _SEP.join(payloads + [child_payload, child_sig])
         return Token(new_raw)
 
@@ -173,7 +195,9 @@ class DelegatableAuth:
         payloads = parts[:-1]
         final_sig = parts[-1]
 
-        current_key = self._secret
+        root_key = hmac.new(self._secret, b"cap/v1/token/root", hashlib.sha256).hexdigest()
+        current_key = root_key
+        prev_sig = None
         prev_hash = ""
         last_data = None
 
@@ -187,16 +211,28 @@ class DelegatableAuth:
                 f"Revocation view stale: {visible_epoch} vs {self._epoch}"
             )
 
-        for payload_str in payloads:
+        actual_sig = ""
+        for expected_depth, payload_str in enumerate(payloads):
             try:
                 data = json.loads(payload_str)
             except json.JSONDecodeError:
                 raise ValueError("Malformed payload") from None
 
-            sig = _sign(
-                current_key if isinstance(current_key, bytes) else current_key.encode(), payload_str
-            )
-            current_key = sig
+            if data.get("depth", expected_depth) != expected_depth:
+                raise ValueError("Reordered caveats: chain depth mismatch")
+
+            if "nonce" not in data:
+                raise ValueError("Missing nonce in token payload")
+
+            if expected_depth == 0:
+                key_to_use = current_key
+            else:
+                assert prev_sig is not None
+                key_to_use = _derive_child_key(prev_sig, data["nonce"])
+
+            sig = _sign(key_to_use.encode(), payload_str)
+            actual_sig = sig
+            prev_sig = sig
 
             chain_hash = _chain_hash(prev_hash, payload_str, sig)
             prev_hash = chain_hash
@@ -204,7 +240,7 @@ class DelegatableAuth:
             if chain_hash in self._revoked:
                 raise RevokedAncestorError(f"Ancestor token revoked: {chain_hash[:8]}")
 
-            if data["exp"] < now:
+            if data["exp"] <= now:
                 raise ValueError(f"Token expired at {data['exp']:.0f}")
 
             if last_data is not None:
@@ -214,10 +250,15 @@ class DelegatableAuth:
                     raise ScopeEscalationError("Scope escalation detected in chain")
                 if data["exp"] > last_data["exp"]:
                     raise ValueError("Child expiry exceeds parent expiry")
+                if (
+                    last_data.get("resource") is not None
+                    and data.get("resource") != last_data["resource"]
+                ):
+                    raise ScopeEscalationError("Resource mismatch in chain")
 
             last_data = data
 
-        if current_key != final_sig:
+        if actual_sig != final_sig:
             raise ValueError("Invalid token signature")
 
         assert last_data is not None, "Payloads must not be empty"
@@ -245,14 +286,31 @@ class DelegatableAuth:
 
         payloads = parts[:-1]
 
-        current_key = self._secret
+        root_key = hmac.new(self._secret, b"cap/v1/token/root", hashlib.sha256).hexdigest()
+        current_key = root_key
+        prev_sig = None
         prev_hash = ""
 
-        for payload_str in payloads:
-            sig = _sign(
-                current_key if isinstance(current_key, bytes) else current_key.encode(), payload_str
-            )
-            current_key = sig
+        for expected_depth, payload_str in enumerate(payloads):
+            try:
+                data = json.loads(payload_str)
+            except json.JSONDecodeError:
+                raise ValueError("Malformed payload") from None
+            if data.get("depth", expected_depth) != expected_depth:
+                raise ValueError("Reordered caveats: chain depth mismatch")
+
+            if "nonce" not in data:
+                raise ValueError("Missing nonce in token payload")
+
+            if expected_depth == 0:
+                key_to_use = current_key
+            else:
+                assert prev_sig is not None
+                key_to_use = _derive_child_key(prev_sig, data["nonce"])
+
+            sig = _sign(key_to_use.encode(), payload_str)
+            prev_sig = sig
+
             chain_hash = _chain_hash(prev_hash, payload_str, sig)
             prev_hash = chain_hash
 
@@ -264,8 +322,27 @@ class DelegatableAuth:
         token: Token,
         presenter: AgentId,
         required_scope: str,
+        resource_id: str | None = None,
         visible_epoch: int | None = None,
     ) -> None:
         ctx = await self.verify(token, presenter=presenter, visible_epoch=visible_epoch)
         if required_scope not in ctx.scopes:
             raise ResourceGuardError(f"Token missing required scope: {required_scope}")
+
+        # Stricter resource binding check
+        # We need to peek into the last payload to check the resource binding
+        parts = str(token).split(_SEP)
+        last_payload = parts[-2]
+        data = json.loads(last_payload)
+        token_resource = data.get("resource")
+
+        if resource_id is not None:
+            if token_resource is not None and token_resource != resource_id:
+                raise ResourceGuardError(
+                    f"Resource mismatch: expected {resource_id}, token bound to {token_resource}"
+                )
+        elif token_resource is not None:
+            # Token is bound to a resource, but none was provided in verification request
+            raise ResourceGuardError(
+                "Token is resource-bound but no resource_id was provided to authorize()"
+            )

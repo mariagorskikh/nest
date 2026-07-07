@@ -318,3 +318,88 @@ class TestAdvancedFeatures:
         # Missing write, so this fails
         with pytest.raises(ResourceGuardError):
             await auth.authorize(root, presenter=AgentId("a1"), required_scope="write")
+
+
+# ---------------------------------------------------------------------------
+# Copilot Review Overkill Tests (Boundary TTL & Depth Invariants)
+# ---------------------------------------------------------------------------
+
+
+class TestBoundaryAndInvariants:
+    @pytest.mark.asyncio
+    async def test_boundary_ttl_exact_expiry_denied(self) -> None:
+        """now == expires_at => deny."""
+        auth = DelegatableAuth(secret=b"s", clock=100.0)
+        root = await auth.issue(AgentId("a1"), ["read"])
+
+        # Verify exactly at expiration time (100.0 + 3600.0 = 3700.0)
+        auth_exact = DelegatableAuth(secret=b"s", clock=3700.0)
+        with pytest.raises(ValueError, match="expired"):
+            await auth_exact.verify(root)
+
+    @pytest.mark.asyncio
+    async def test_boundary_ttl_minus_epsilon_allowed(self) -> None:
+        """now == expires_at - 1ms => allow."""
+        auth = DelegatableAuth(secret=b"s", clock=100.0)
+        root = await auth.issue(AgentId("a1"), ["read"])
+
+        auth_before = DelegatableAuth(secret=b"s", clock=3699.999)
+        ctx = await auth_before.verify(root)
+        assert ctx.subject == AgentId("a1")
+
+    @pytest.mark.asyncio
+    async def test_depth_tampering_rejected(self) -> None:
+        """Tampering the depth field at any level fails validation."""
+        auth = DelegatableAuth(secret=b"s", clock=100.0)
+        root = await auth.issue(AgentId("a1"), ["read"])
+        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+
+        raw = str(child)
+        parts = raw.split("|")
+        # Tamper the depth in the child payload (parts[1])
+        import json
+
+        payload_dict = json.loads(parts[1])
+        payload_dict["depth"] = 99  # Tamper
+        parts[1] = json.dumps(payload_dict, sort_keys=True, separators=(",", ":"))
+        tampered_child = Token("|".join(parts))
+
+        with pytest.raises(ValueError):
+            await auth.verify(tampered_child)
+
+    @pytest.mark.asyncio
+    async def test_strict_resource_binding_enforced(self) -> None:
+        """Resource identity must exactly match during authorize()."""
+        auth = DelegatableAuth(secret=b"s", clock=100.0)
+        root = await auth.issue(AgentId("a1"), ["read"])
+
+        # Delegate with strict resource binding
+        child = await auth.delegate(
+            root, AgentId("a2"), ["read"], ttl=60.0, resource="urn:data:climate"
+        )
+
+        # Verify works
+        await auth.verify(child)
+
+        # Authorize with correct resource works
+        await auth.authorize(child, AgentId("a2"), "read", resource_id="urn:data:climate")
+
+        # Authorize with incorrect resource fails
+        with pytest.raises(ResourceGuardError, match="Resource mismatch"):
+            await auth.authorize(child, AgentId("a2"), "read", resource_id="urn:data:other")
+
+        # Authorize missing resource fails
+        with pytest.raises(ResourceGuardError, match="Token is resource-bound"):
+            await auth.authorize(child, AgentId("a2"), "read")
+
+    @pytest.mark.asyncio
+    async def test_broadening_resource_binding_fails(self) -> None:
+        auth = DelegatableAuth(secret=b"s", clock=100.0)
+        root = await auth.issue(AgentId("a1"), ["read"])
+        child = await auth.delegate(
+            root, AgentId("a2"), ["read"], ttl=60.0, resource="urn:data:climate"
+        )
+
+        # Grandchild trying to broaden resource fails
+        with pytest.raises(ScopeEscalationError, match="Cannot broaden resource binding"):
+            await auth.delegate(child, AgentId("a3"), ["read"], ttl=30.0, resource="urn:data:other")
