@@ -81,6 +81,10 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.gossip_registry import gossip_registry_factory
 
         register_scenario("gossip_registry", gossip_registry_factory)
+    elif name == "discovery_resolver":
+        from nest_core.scenarios_builtin.discovery_resolver import discovery_resolver_factory
+
+        register_scenario("discovery_resolver", discovery_resolver_factory)
     elif name == "memory_concurrent_writers":
         from nest_core.scenarios_builtin.memory_concurrent_writers import (
             memory_concurrent_writers_factory,

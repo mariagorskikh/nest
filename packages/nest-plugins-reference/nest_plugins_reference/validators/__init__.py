@@ -30,6 +30,12 @@ from nest_plugins_reference.validators.privacy_validators import (
     check_stale_revocation_blocked,
     corrupt_proof,
 )
+from nest_plugins_reference.validators.resolver_validators import (
+    check_heartbeat_keeps_alive,
+    check_negative_cache_is_consistent,
+    check_stale_records_expire,
+    run_all_resolver_checks,
+)
 
 __all__ = [
     "ConvergenceFailureError",
@@ -38,8 +44,12 @@ __all__ = [
     "check_converged",
     "check_eavesdropper_blocked",
     "check_field_injection_rejected",
+    "check_heartbeat_keeps_alive",
+    "check_negative_cache_is_consistent",
     "check_no_partition_view_leak",
     "check_replay_rejected",
+    "check_stale_records_expire",
     "check_stale_revocation_blocked",
     "corrupt_proof",
+    "run_all_resolver_checks",
 ]

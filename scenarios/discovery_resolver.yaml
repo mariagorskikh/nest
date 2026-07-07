@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# Discovery scenario for the caching resolver registry.
+#
+# 13 agents:
+#   * resolver-0     drives the lookups
+#   * provider-0..11 register for discovery; 8 are stable (long TTL, heartbeating)
+#     and 4 are ephemeral (short TTL, no heartbeat -- a crash)
+#
+# After all register, the resolver advances the clock past the ephemeral TTL and
+# looks up. The 8 stable providers still resolve; the 4 crashed ones self-evict.
+# With the default in_memory registry all 12 would still resolve.
+#
+# RNG-free, so a given seed replays to a byte-identical trace.
+name: discovery_resolver
+description: "13-agent discovery scenario: crashed providers self-evict via TTL."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 13
+  brain: state-machine
+  roles:
+    - name: resolver
+      count: 1
+    - name: provider
+      count: 12
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: resolver
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: discovery_resolver
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/discovery_resolver.jsonl

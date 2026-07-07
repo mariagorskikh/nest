@@ -24,6 +24,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("identity", "ed25519_rotating"): (f"{_REF}.identity.ed25519_rotating:Ed25519RotatingIdentity"),
     ("registry", "in_memory"): f"{_REF}.registry.in_memory:InMemoryRegistry",
     ("registry", "gossip"): f"{_REF}.registry.gossip:GossipRegistry",
+    ("registry", "resolver"): f"{_REF}.registry.caching_resolver:CachingResolverRegistry",
     ("auth", "jwt"): f"{_REF}.auth.jwt_auth:JwtAuth",
     ("trust", "score_average"): f"{_REF}.trust.score_average:ScoreAverageTrust",
     ("trust", "agent_receipts"): f"{_REF}.trust.agent_receipts:AgentReceiptsTrust",
