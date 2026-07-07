@@ -329,7 +329,9 @@ class DelegatableAuth:
             msg = f"Scope escalation: {extra!r} not in parent scopes {parent_scopes!r}"
             raise ScopeEscalationError(msg)
         if child_scopes == parent_scopes:
-            raise ScopeEscalationError("Delegated scopes must be a strict subset of the parent scopes")
+            raise ScopeEscalationError(
+                "Delegated scopes must be a strict subset of the parent scopes"
+            )
 
         if ttl <= 0:
             raise ValueError("ttl must be positive")

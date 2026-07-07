@@ -6,7 +6,6 @@ Tests 3-hop delegation, cascading revocation, scope bounds, and audience checkin
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 from nest_core.scenario import ScenarioConfig
@@ -33,10 +32,7 @@ class CoordinatorAgent(StateMachineAgent):
         for i in range(self._num_intermediaries):
             intermediary_id = AgentId(f"intermediary-{i}")
             child_token = await auth.delegate(
-                self._root_token, 
-                intermediary_id, 
-                ["read", "write"], 
-                ttl=3600.0
+                self._root_token, intermediary_id, ["read", "write"], ttl=3600.0
             )
             await ctx.send(intermediary_id, f"token:{child_token}".encode())
 
@@ -54,13 +50,15 @@ class CoordinatorAgent(StateMachineAgent):
         if msg.startswith("verify:"):
             token_str = msg.split(":", 1)[1]
             from nest_core.types import Token
+
             auth = ctx.plugins.get("auth")
             if auth:
+                from nest_plugins_reference.auth.delegatable import (
+                    AudienceError,
+                    RevokedAncestorError,
+                )
+
                 try:
-                    from nest_plugins_reference.auth.delegatable import (
-                        AudienceError,
-                        RevokedAncestorError,
-                    )
                     await auth.verify(Token(token_str), presenter=sender)
                     await ctx.send(sender, b"verified")
                 except AudienceError:
@@ -83,6 +81,7 @@ class IntermediaryAgent(StateMachineAgent):
         if msg.startswith("token:"):
             token_str = msg.split(":", 1)[1]
             from nest_core.types import Token
+
             self._my_token = Token(token_str)
 
             auth = ctx.plugins.get("auth")
@@ -91,8 +90,9 @@ class IntermediaryAgent(StateMachineAgent):
 
             # Test 1: Scope Escalation (Adversarial)
             if self._id == AgentId("intermediary-0"):
+                from nest_plugins_reference.auth.delegatable import ScopeEscalationError
+
                 try:
-                    from nest_plugins_reference.auth.delegatable import ScopeEscalationError
                     await auth.delegate(self._my_token, AgentId("leaf-0"), ["admin"], ttl=60.0)
                 except ScopeEscalationError:
                     await ctx.send(self._id, b"adversarial:scope_escalation_rejected")
@@ -117,7 +117,7 @@ class LeafAgent(StateMachineAgent):
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
         msg = payload.decode("utf-8", errors="replace")
-        
+
         if msg.startswith("token:"):
             self._my_token = msg.split(":", 1)[1]
             # Verify immediately
@@ -133,7 +133,7 @@ class LeafAgent(StateMachineAgent):
             stolen_token = msg.split(":", 1)[1]
             # Try to present the stolen token as ourselves (which should trigger AudienceError)
             await ctx.send(AgentId("coordinator-0"), f"verify:{stolen_token}".encode())
-            
+
         elif msg == "verified":
             self._round += 1
             # Periodically re-verify to eventually hit the RevokedAncestorError

@@ -3739,8 +3739,16 @@ def validate_delegation_scope_escalation(
     for ev in events:
         msg = _message_body(ev)
         if msg == "adversarial:scope_escalation_rejected":
-            return [ValidationResult("delegation_scope_escalation", True, "Scope escalation correctly rejected")]
-    return [ValidationResult("delegation_scope_escalation", False, "Missing or successful scope escalation attempt")]
+            return [
+                ValidationResult(
+                    "delegation_scope_escalation", True, "Scope escalation correctly rejected"
+                )
+            ]
+    return [
+        ValidationResult(
+            "delegation_scope_escalation", False, "Missing or successful scope escalation attempt"
+        )
+    ]
 
 
 def validate_delegation_stale_parent(
@@ -3750,8 +3758,16 @@ def validate_delegation_stale_parent(
     for ev in events:
         msg = _message_body(ev)
         if msg == "adversarial:stale_parent_rejected":
-            return [ValidationResult("delegation_stale_parent", True, "Stale parent token correctly rejected")]
-    return [ValidationResult("delegation_stale_parent", False, "Missing or successful stale parent presentation")]
+            return [
+                ValidationResult(
+                    "delegation_stale_parent", True, "Stale parent token correctly rejected"
+                )
+            ]
+    return [
+        ValidationResult(
+            "delegation_stale_parent", False, "Missing or successful stale parent presentation"
+        )
+    ]
 
 
 def validate_delegation_audience(
@@ -3761,8 +3777,16 @@ def validate_delegation_audience(
     for ev in events:
         msg = _message_body(ev)
         if msg == "adversarial:audience_confusion_rejected":
-            return [ValidationResult("delegation_audience", True, "Audience spoofing correctly rejected")]
-    return [ValidationResult("delegation_audience", False, "Missing or successful audience spoofing attempt")]
+            return [
+                ValidationResult(
+                    "delegation_audience", True, "Audience spoofing correctly rejected"
+                )
+            ]
+    return [
+        ValidationResult(
+            "delegation_audience", False, "Missing or successful audience spoofing attempt"
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
