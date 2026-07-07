@@ -24,6 +24,8 @@ class CoordinatorAgent(StateMachineAgent):
         auth = ctx.plugins.get("auth")
         if not auth:
             return
+        if hasattr(auth, "_clock_override"):
+            auth._clock_override = ctx.time
 
         # Issue root token
         self._root_token = await auth.issue(self._id, ["read", "write", "delegate"])
@@ -31,10 +33,13 @@ class CoordinatorAgent(StateMachineAgent):
         # Delegate to intermediaries
         for i in range(self._num_intermediaries):
             intermediary_id = AgentId(f"intermediary-{i}")
-            child_token = await auth.delegate(
-                self._root_token, intermediary_id, ["read", "write"], ttl=3600.0
-            )
-            await ctx.send(intermediary_id, f"token:{child_token}".encode())
+            try:
+                child_token = await auth.delegate(
+                    self._root_token, intermediary_id, ["read", "write"], ttl=3600.0
+                )
+                await ctx.send(intermediary_id, f"token:{child_token}".encode())
+            except AttributeError:
+                pass
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
         msg = payload.decode("utf-8", errors="replace")
@@ -44,6 +49,8 @@ class CoordinatorAgent(StateMachineAgent):
         if self._round == 15 and self._root_token:
             auth = ctx.plugins.get("auth")
             if auth:
+                if hasattr(auth, "_clock_override"):
+                    auth._clock_override = ctx.time
                 await auth.revoke(self._root_token)
                 await ctx.send(self._id, b"root_revoked")
 
@@ -53,6 +60,8 @@ class CoordinatorAgent(StateMachineAgent):
 
             auth = ctx.plugins.get("auth")
             if auth:
+                if hasattr(auth, "_clock_override"):
+                    auth._clock_override = ctx.time
                 from nest_plugins_reference.auth.delegatable import (
                     AudienceError,
                     RevokedAncestorError,
@@ -76,6 +85,8 @@ class CoordinatorAgent(StateMachineAgent):
 
             auth = ctx.plugins.get("auth")
             if auth:
+                if hasattr(auth, "_clock_override"):
+                    auth._clock_override = ctx.time
                 from nest_plugins_reference.auth.delegatable import ResourceGuardError
 
                 try:
@@ -95,7 +106,8 @@ class CoordinatorAgent(StateMachineAgent):
                 from nest_core.types import Token
 
                 try:
-                    auth._stale_after = 2
+                    if hasattr(auth, "_clock_override"):
+                        auth._clock_override = ctx.time
                     auth.advance_epoch()
                     auth.advance_epoch()
                     auth.advance_epoch()
@@ -124,6 +136,8 @@ class IntermediaryAgent(StateMachineAgent):
             auth = ctx.plugins.get("auth")
             if not auth:
                 return
+            if hasattr(auth, "_clock_override"):
+                auth._clock_override = ctx.time
 
             # Test 1: Scope Escalation (Adversarial)
             if self._id == AgentId("intermediary-0"):
@@ -142,6 +156,8 @@ class IntermediaryAgent(StateMachineAgent):
                 try:
                     leaf_token = await auth.delegate(self._my_token, leaf_id, ["read"], ttl=3600.0)
                     await ctx.send(leaf_id, f"token:{leaf_token}".encode())
+                except AttributeError:
+                    pass
                 except Exception:
                     pass
 
@@ -192,7 +208,10 @@ def delegation_chain_factory(
 
     auth_cls = plugins.get("auth")
     if auth_cls and isinstance(auth_cls, type):
-        plugins["auth"] = auth_cls(secret=b"delegation-chain-secret")
+        try:
+            plugins["auth"] = auth_cls(secret=b"delegation-chain-secret", stale_after=2)
+        except TypeError:
+            plugins["auth"] = auth_cls(secret=b"delegation-chain-secret")
 
     # Roles: 1 coordinator, 3 intermediaries, 12 leaves
     coord_id = AgentId("coordinator-0")

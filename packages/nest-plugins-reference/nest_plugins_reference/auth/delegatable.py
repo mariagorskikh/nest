@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import secrets
 
 from nest_core.types import AgentId, AuthContext, Token
 
@@ -94,7 +93,12 @@ class DelegatableAuth:
 
     async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
         now = self._now()
-        nonce = secrets.token_hex(16)
+        # Deterministic nonce based on subject and issue time
+        nonce = hmac.new(
+            self._secret,
+            f"root-nonce-{subject}-{now}".encode(),
+            hashlib.sha256,
+        ).hexdigest()[:32]
         payload = json.dumps(
             {
                 "depth": 0,
@@ -164,7 +168,12 @@ class DelegatableAuth:
             resource = parent_data["resource"]
 
         now = self._now()
-        child_nonce = secrets.token_hex(16)
+        # Deterministic nonce based on parent signature, audience, and issue time
+        child_nonce = hmac.new(
+            self._secret,
+            f"child-nonce-{parent_sig}-{audience}-{now}".encode(),
+            hashlib.sha256,
+        ).hexdigest()[:32]
         child_payload = json.dumps(
             {
                 "depth": parent_data.get("depth", 0) + 1,
@@ -184,6 +193,9 @@ class DelegatableAuth:
         child_sig = _sign(child_key.encode(), child_payload)
         new_raw = _SEP.join(payloads + [child_payload, child_sig])
         return Token(new_raw)
+
+    async def verify_presented(self, token: Token, presenter: AgentId) -> AuthContext:
+        return await self.verify(token, presenter=presenter)
 
     async def verify(
         self, token: Token, *, presenter: AgentId | None = None, visible_epoch: int | None = None
@@ -258,7 +270,7 @@ class DelegatableAuth:
 
             last_data = data
 
-        if actual_sig != final_sig:
+        if not hmac.compare_digest(actual_sig, final_sig):
             raise ValueError("Invalid token signature")
 
         assert last_data is not None, "Payloads must not be empty"

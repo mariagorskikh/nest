@@ -221,6 +221,18 @@ class TestAdversarialScenarios:
         ctx = await auth.verify(root, presenter=AgentId("anyone"))
         assert ctx.subject == AgentId("a1")
 
+    # 4. Epoch fence
+    @pytest.mark.asyncio
+    async def test_epoch_fence_rejects_stale_views(self) -> None:
+        """The epoch fence rejects verification attempts with stale revocation views."""
+        auth = DelegatableAuth(secret=b"test-secret", clock=1_000_000.0, stale_after=2)
+        root = await auth.issue(AgentId("a1"), ["read"])
+        auth.advance_epoch()
+        auth.advance_epoch()
+        auth.advance_epoch()
+        with pytest.raises(RevocationViewStaleError):
+            await auth.verify(root, visible_epoch=0)
+
 
 # ---------------------------------------------------------------------------
 # Expiry

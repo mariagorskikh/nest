@@ -39,6 +39,8 @@ from nest_core.validators import (
     validate_marketplace_responses,
     validate_reputation_scoring,
     validate_reputation_warnings,
+    validate_rogue_trusted_agent_blocked,
+    validate_rogue_trusted_agent_reputation,
     validate_supply_chain_no_lost,
     validate_supply_chain_pipeline,
     validate_trace,
@@ -243,6 +245,20 @@ class TestAuctionWinnerHighest:
         results = validate_auction_winner_highest(events)
         assert results[0].passed is False
         assert "200" in results[0].detail
+
+    def test_fail_inflated_announced_amount(self) -> None:
+        # The auctioneer awards a low bidder (bidder-0 bid 50) but announces an
+        # amount (150) inflated past every real bid. Trusting the announced
+        # amount would let this pass; the winner's real bid (50) is lower than
+        # bidder-1's 100, so it must fail.
+        events = [
+            _send("bidder-0", "auctioneer-0", "bid:item-1:50"),
+            _send("bidder-1", "auctioneer-0", "bid:item-1:100"),
+            _send("auctioneer-0", "bidder-0", "won:item-1:150"),
+        ]
+        results = validate_auction_winner_highest(events)
+        assert results[0].passed is False
+        assert "bidder-1" in results[0].detail
 
     def test_pass_no_auctions(self) -> None:
         events = [{"ts": 0.0, "agent": "auctioneer-0", "kind": "start"}]
@@ -1349,6 +1365,92 @@ class TestEmpicPaymentsValidators:
         assert not results[0].passed
         assert "release 20 > rate 10" in results[0].detail
 
+    def test_pubsub_billing_caps_fails_over_rate_without_release_mode(self) -> None:
+        """Pubsub cap enforcement is based on stream state, not release self-report."""
+        events = [
+            _empic(
+                {
+                    "event_type": "empic_stream_opened",
+                    "payment_ref": "s1",
+                    "rate_per_tick": 10,
+                    "max_total": 40,
+                    "mode": "pubsub",
+                }
+            ),
+            _empic(
+                {
+                    "event_type": "empic_delivery_evaluated",
+                    "payment_ref": "s1",
+                    "delivery_id": "d1",
+                    "accepted": True,
+                }
+            ),
+            _empic(
+                {
+                    "event_type": "empic_escrow_released",
+                    "payment_ref": "s1",
+                    "delivery_id": "d1",
+                    "amount": 20,
+                }
+            ),
+        ]
+
+        results = validate_empic_pubsub_billing_caps(events)
+        assert len(results) == 1
+        assert not results[0].passed
+        assert "release 20 > rate 10" in results[0].detail
+
+    def test_pubsub_billing_caps_fails_over_total_without_release_mode(self) -> None:
+        """Omitting mode on release events cannot bypass the stream total cap."""
+        events = [
+            _empic(
+                {
+                    "event_type": "empic_stream_opened",
+                    "payment_ref": "s1",
+                    "rate_per_tick": 10,
+                    "max_total": 10,
+                    "mode": "pubsub",
+                }
+            ),
+            _empic(
+                {
+                    "event_type": "empic_delivery_evaluated",
+                    "payment_ref": "s1",
+                    "delivery_id": "d1",
+                    "accepted": True,
+                }
+            ),
+            _empic(
+                {
+                    "event_type": "empic_delivery_evaluated",
+                    "payment_ref": "s1",
+                    "delivery_id": "d2",
+                    "accepted": True,
+                }
+            ),
+            _empic(
+                {
+                    "event_type": "empic_escrow_released",
+                    "payment_ref": "s1",
+                    "delivery_id": "d1",
+                    "amount": 10,
+                }
+            ),
+            _empic(
+                {
+                    "event_type": "empic_escrow_released",
+                    "payment_ref": "s1",
+                    "delivery_id": "d2",
+                    "amount": 10,
+                }
+            ),
+        ]
+
+        results = validate_empic_pubsub_billing_caps(events)
+        assert len(results) == 1
+        assert not results[0].passed
+        assert "released 20 > max_total 10" in results[0].detail
+
     def test_pubsub_billing_caps_fails_without_accepted_evidence(self) -> None:
         """Accepted delivery count limits total pubsub payout."""
         events = [
@@ -1804,6 +1906,88 @@ class TestEmpicPaymentsValidators:
         assert not results[0].passed
 
 
+class TestRogueTrustedAgentValidators:
+    """Direct validator tests with synthetic broadcast trace lines."""
+
+    @staticmethod
+    def _bc(agent: str, msg: str) -> dict[str, Any]:
+        return {"kind": "broadcast", "agent": agent, "msg": msg}
+
+    def _gated(self) -> list[dict[str, Any]]:
+        """Trace under a permit gate: warm-up execs, then a blocked rogue."""
+        events: list[dict[str, Any]] = []
+        for i in range(5):
+            events.append(self._bc("veteran", f"permit:veteran:read:town/board:authorized:abc{i}"))
+            events.append(self._bc("veteran", "exec:veteran:read:town/board"))
+        events.append(self._bc("veteran", "rogue_attempt:veteran:spend:town/treasury"))
+        events.append(self._bc("veteran", "permit:veteran:spend:town/treasury:denied:dead0000"))
+        events.append(self._bc("veteran", "blocked:veteran:spend:town/treasury"))
+        return events
+
+    def _ungated(self) -> list[dict[str, Any]]:
+        """Trace with no gate: warm-up execs, then the rogue exec runs."""
+        events: list[dict[str, Any]] = []
+        for _ in range(5):
+            events.append(self._bc("veteran", "exec:veteran:read:town/board"))
+        events.append(self._bc("veteran", "rogue_attempt:veteran:spend:town/treasury"))
+        events.append(self._bc("veteran", "exec:veteran:spend:town/treasury"))
+        return events
+
+    def test_blocked_passes_under_gate(self) -> None:
+        results = validate_rogue_trusted_agent_blocked(self._gated())
+        assert results[0].passed, results[0].detail
+
+    def test_blocked_fails_when_rogue_executes(self) -> None:
+        results = validate_rogue_trusted_agent_blocked(self._ungated())
+        assert not results[0].passed
+        assert "executed" in results[0].detail
+
+    def test_blocked_fails_without_declaration(self) -> None:
+        results = validate_rogue_trusted_agent_blocked(
+            [self._bc("veteran", "exec:veteran:read:town/board")]
+        )
+        assert not results[0].passed
+        assert "no rogue_attempt" in results[0].detail
+
+    def test_blocked_fails_when_neither_run_nor_denied(self) -> None:
+        events = [self._bc("veteran", "rogue_attempt:veteran:spend:town/treasury")]
+        results = validate_rogue_trusted_agent_blocked(events)
+        assert not results[0].passed
+        assert "no signed denial" in results[0].detail
+
+    def test_reputation_passes_under_gate(self) -> None:
+        results = validate_rogue_trusted_agent_reputation(self._gated())
+        assert results[0].passed, results[0].detail
+
+    def test_reputation_passes_under_ungated(self) -> None:
+        # The corroborating invariant holds on both layers (no rogue block needed).
+        results = validate_rogue_trusted_agent_reputation(self._ungated())
+        assert results[0].passed, results[0].detail
+
+    def test_reputation_fails_without_prior_actions(self) -> None:
+        events = [
+            self._bc("veteran", "rogue_attempt:veteran:spend:town/treasury"),
+            self._bc("veteran", "permit:veteran:spend:town/treasury:denied:dead0000"),
+            self._bc("veteran", "blocked:veteran:spend:town/treasury"),
+        ]
+        results = validate_rogue_trusted_agent_reputation(events)
+        assert not results[0].passed
+        assert "in-policy action" in results[0].detail
+
+    def test_reputation_fails_on_spurious_denial(self) -> None:
+        events = self._gated()
+        # A benign in-policy action wrongly refused.
+        spurious = self._bc("resident-0", "permit:resident-0:read:town/events:denied:0badf00d")
+        events.insert(0, spurious)
+        results = validate_rogue_trusted_agent_reputation(events)
+        assert not results[0].passed
+        assert "spuriously denied" in results[0].detail
+
+    def test_no_crash_on_empty(self) -> None:
+        assert not validate_rogue_trusted_agent_blocked([])[0].passed
+        assert not validate_rogue_trusted_agent_reputation([])[0].passed
+
+
 class TestValidatorRegistry:
     def test_all_scenario_types_registered(self) -> None:
         expected = {
@@ -1814,16 +1998,22 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "identity_rotation",
+            "attested_peering",
+            "delegated_auth",
             "memory_concurrent_writers",
             "streaming_payments",
             "empic_payments",
             "comms_versioning",
+            "comms_downgrade",
             "receipt_reputation",
             "multi_attribute_market",
             "provenance_supply_chain",
             "bft_hotstuff",
             "escrow_marketplace",
-            "delegation_chain",
+            "failure_detection",
+            "parc_migration",
+            "rogue_trusted_agent",
+            "sybil_bond",
         }
         assert set(VALIDATORS.keys()) == expected
 
