@@ -287,12 +287,16 @@ class MacaroonAuth:
             prev = cav
         return caveats
 
-    async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
+    # -- sync cores: the real logic, usable outside an event loop (e.g. a
+    #    scenario factory building a delegation tree). The async methods below
+    #    satisfy the Auth protocol by delegating to these.
+
+    def issue_sync(self, subject: AgentId, scopes: list[str]) -> Token:
         """Issue a fresh root token for a subject with the given scopes.
 
         Example::
 
-            root = await auth.issue(AgentId("a1"), ["read", "write"])
+            root = auth.issue_sync(AgentId("a1"), ["read", "write"])
         """
         now = self._now()
         exp = now + self._default_ttl
@@ -301,7 +305,7 @@ class MacaroonAuth:
         caveat = Caveat(tid, str(subject), str(subject), tuple(scopes), now, exp, None)
         return self._encode([caveat])
 
-    async def delegate(
+    def delegate_sync(
         self,
         parent_token: Token,
         audience: AgentId,
@@ -312,7 +316,7 @@ class MacaroonAuth:
 
         Example::
 
-            child = await auth.delegate(root, AgentId("b"), ["read"], ttl=60)
+            child = auth.delegate_sync(root, AgentId("b"), ["read"], ttl=60)
         """
         caveats = self._check_chain(parent_token)
         parent = caveats[-1]
@@ -336,13 +340,12 @@ class MacaroonAuth:
         )
         return self._encode([*caveats, child])
 
-    async def verify(self, token: Token) -> AuthContext:
+    def verify_sync(self, token: Token) -> AuthContext:
         """Verify a token end to end and return the leaf's auth context.
 
         Example::
 
-            ctx = await auth.verify(child)
-            assert ctx.subject == AgentId("b")
+            ctx = auth.verify_sync(child)
         """
         caveats = self._check_chain(token)
         leaf = caveats[-1]
@@ -353,15 +356,14 @@ class MacaroonAuth:
             expires_at=leaf.expires_at,
         )
 
-    async def verify_for(self, token: Token, presenter: AgentId) -> AuthContext:
+    def verify_for_sync(self, token: Token, presenter: AgentId) -> AuthContext:
         """Verify a token and confirm the presenter is its declared audience.
 
         Example::
 
-            ctx = await auth.verify_for(child, AgentId("b"))
+            ctx = auth.verify_for_sync(child, AgentId("b"))
         """
-        caveats = self._check_chain(token)
-        leaf = caveats[-1]
+        leaf = self._check_chain(token)[-1]
         if leaf.audience != str(presenter):
             msg = f"Token audience {leaf.audience!r} was presented by {str(presenter)!r}"
             raise AudienceMismatchError(msg)
@@ -372,12 +374,62 @@ class MacaroonAuth:
             expires_at=leaf.expires_at,
         )
 
-    async def revoke(self, token: Token) -> None:
+    def revoke_sync(self, token: Token) -> None:
         """Revoke a token by its leaf id, which also invalidates its descendants.
+
+        Example::
+
+            auth.revoke_sync(root)
+        """
+        self._revoked.add(self._decode(token)[-1].tid)
+
+    async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
+        """Async wrapper over :meth:`issue_sync` for the Auth protocol.
+
+        Example::
+
+            root = await auth.issue(AgentId("a1"), ["read", "write"])
+        """
+        return self.issue_sync(subject, scopes)
+
+    async def delegate(
+        self,
+        parent_token: Token,
+        audience: AgentId,
+        scopes_subset: list[str],
+        ttl: float,
+    ) -> Token:
+        """Async wrapper over :meth:`delegate_sync`.
+
+        Example::
+
+            child = await auth.delegate(root, AgentId("b"), ["read"], ttl=60)
+        """
+        return self.delegate_sync(parent_token, audience, scopes_subset, ttl)
+
+    async def verify(self, token: Token) -> AuthContext:
+        """Async wrapper over :meth:`verify_sync` for the Auth protocol.
+
+        Example::
+
+            ctx = await auth.verify(child)
+        """
+        return self.verify_sync(token)
+
+    async def verify_for(self, token: Token, presenter: AgentId) -> AuthContext:
+        """Async wrapper over :meth:`verify_for_sync`.
+
+        Example::
+
+            ctx = await auth.verify_for(child, AgentId("b"))
+        """
+        return self.verify_for_sync(token, presenter)
+
+    async def revoke(self, token: Token) -> None:
+        """Async wrapper over :meth:`revoke_sync` for the Auth protocol.
 
         Example::
 
             await auth.revoke(root)
         """
-        caveats = self._decode(token)
-        self._revoked.add(caveats[-1].tid)
+        self.revoke_sync(token)
