@@ -42,6 +42,29 @@ Source: [`nest_plugins_reference/auth/delegatable.py`](../../packages/nest-plugi
 Validators: [`nest_plugins_reference/validators/delegation_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/delegation_validators.py).
 Scenario: [`scenarios/delegated_auth.yaml`](../../scenarios/delegated_auth.yaml).
 
+## Strict holder-derived variant: `delegatable_strict`
+
+`delegatable_strict` coexists with the baseline `delegatable` plugin while
+making three additional choices load-bearing: every child must remove at
+least one parent scope, child-signing keys are derived from the parent token's
+signature and hash rather than the issuer secret, and the public-API validator
+crafts a direct parent-signature key-confusion forgery.
+
+The base protocol's `verify(token)` call authenticates a valid child as a
+bearer token. Call `verify_for(token, presenter)` when the caller must also
+enforce that the presenter matches the child's audience. `AuthContext.subject`
+therefore identifies the holder/audience; the token's `sub` claim retains the
+original delegator.
+
+The validator records the exception type for every rejected attack so a typed
+security rejection remains distinguishable from an unrelated plugin crash.
+The deterministic `strict_delegated_auth` scenario preserves the requested
+1 coordinator, 3 intermediary, and 12 leaf topology.
+
+Source: [`nest_plugins_reference/auth/strict_delegatable.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/strict_delegatable.py).
+Validator: [`nest_plugins_reference/validators/strict_delegation_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/strict_delegation_validators.py).
+Scenario: [`scenarios/strict_delegated_auth.yaml`](../../scenarios/strict_delegated_auth.yaml).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

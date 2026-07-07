@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated auth scenario: one coordinator delegates read-only capabilities
+# through intermediaries to leaf agents, while validators assert that stale
+# parents and audience confusion fail closed.
+name: strict_delegated_auth
+description: "Coordinator delegates strict child capabilities to 3 intermediaries and 12 leaves."
+
+tier: 1
+seed: 4242
+
+agents:
+  count: 16
+  brain: state-machine
+  roles:
+    - name: coordinator
+      count: 1
+    - name: intermediary
+      count: 3
+    - name: leaf
+      count: 12
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: delegatable_strict
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: strict_delegated_auth
+  config:
+    delegation_tree: coordinator-3x4-leaves
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 3000"
+
+metrics:
+  - agent_count
+  - message_count
+  - delivery_rate
+
+output:
+  trace: ./traces/strict_delegated_auth.jsonl

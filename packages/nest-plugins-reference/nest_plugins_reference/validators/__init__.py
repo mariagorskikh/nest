@@ -36,6 +36,10 @@ from nest_plugins_reference.validators.privacy_validators import (
     check_stale_revocation_blocked,
     corrupt_proof,
 )
+from nest_plugins_reference.validators.strict_delegation_validators import (
+    check_strict_delegated_auth_attack_suite,
+    materialize_strict_delegation_report,
+)
 from nest_plugins_reference.validators.trust_gate_validators import (
     check_denial_receipt_auditable,
     check_gate_tamper_rejected,
@@ -61,7 +65,9 @@ __all__ = [
     "check_partial_redaction_enforced",
     "check_replay_rejected",
     "check_stale_revocation_blocked",
+    "check_strict_delegated_auth_attack_suite",
     "corrupt_proof",
     "extract_delegation_audits",
     "forge_tier_upgrade",
+    "materialize_strict_delegation_report",
 ]
