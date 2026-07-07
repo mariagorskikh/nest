@@ -162,20 +162,23 @@ def reputation_factory(
                 malicious_count = role.count
 
     observer_id = AgentId("observer-0")
-    all_traders: list[AgentId] = []
-    for i in range(honest_count):
-        all_traders.append(AgentId(f"honest-{i}"))
-    for i in range(malicious_count):
-        all_traders.append(AgentId(f"malicious-{i}"))
+    honest_ids = [AgentId(f"honest-{i}") for i in range(honest_count)]
+    malicious_ids = [AgentId(f"malicious-{i}") for i in range(malicious_count)]
+    all_traders: list[AgentId] = [*honest_ids, *malicious_ids]
 
-    for i in range(honest_count):
-        aid = AgentId(f"honest-{i}")
+    for aid in honest_ids:
         peers = [p for p in all_traders if p != aid]
         agents[aid] = HonestAgent(aid, peers=peers, observer=observer_id, rounds=rounds)
 
-    for i in range(malicious_count):
-        aid = AgentId(f"malicious-{i}")
-        peers = [p for p in all_traders if p != aid]
+    for aid in malicious_ids:
+        # Malicious agents only *initiate* trades with honest peers. A cheat is
+        # emitted in reply to a received trade, so restricting who a malicious
+        # agent trades with guarantees every cheat is witnessed — and reported —
+        # by an honest agent. Without this, a malicious→malicious cheat is never
+        # reported (the peer stays silent) and the reputation layer cannot see
+        # it, which trips ``validate_reputation_scoring``. Fall back to all
+        # traders only in the degenerate all-malicious config (no honest peers).
+        peers = honest_ids or [p for p in all_traders if p != aid]
         agents[aid] = MaliciousAgent(aid, peers=peers, observer=observer_id, rounds=rounds)
 
     agents[observer_id] = ObserverAgent(observer_id)

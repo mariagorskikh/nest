@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from nest_core.builtin_scenarios import builtin_path
 from nest_core.plugins import PluginRegistry
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
@@ -242,3 +243,37 @@ class TestMarketplaceScenario:
 
         assert traces[0] == traces[1]
         assert len(traces[0]) > 0
+
+
+class TestBuiltinScenarioValidators:
+    """Every deterministic built-in scenario must satisfy its own validators.
+
+    A shipped scenario whose trace fails the property checks it is meant to
+    demonstrate is a bug. This is the regression guard for the reputation
+    scenario, which failed ``reputation_scoring`` on its default seed (42)
+    because a cheat delivered to another malicious agent was — correctly —
+    never reported, yet the validator demanded a report for every cheat.
+    """
+
+    # Built-in scenarios that run deterministically and have validators.
+    _SCENARIOS = ("marketplace", "auction", "voting", "consensus", "supply_chain", "reputation")
+    # A spread of seeds, including 42 (the shipped default that regressed).
+    _SEEDS = (0, 1, 42, 100, 2024)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scenario", _SCENARIOS)
+    async def test_validators_pass_across_seeds(self, scenario: str, tmp_path: Path) -> None:
+        for seed in self._SEEDS:
+            config = ScenarioConfig.from_yaml(builtin_path(scenario))
+            config.seed = seed
+            config.output.trace = str(tmp_path / f"{scenario}-{seed}.jsonl")
+            config.output.report = None
+
+            await ScenarioRunner(config).run()
+
+            results = validate_trace(Path(config.output.trace), scenario)
+            assert results, f"{scenario}: no validators ran"
+            failed = [r for r in results if not r.passed]
+            assert not failed, f"{scenario} seed={seed}: " + "; ".join(
+                f"{r.name} ({r.detail})" for r in failed
+            )
