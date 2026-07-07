@@ -122,8 +122,10 @@ pythonpath = ["."]
 markers = [
     "live: end-to-end tests that hit live external services (skipped by default)",
 ]
-[project.entry-points."nest.plugins.memory"]
-decaying = "my_decaying_memory:DecayingMemory"
+
+
+[project.entry-points."nest.plugins.privacy"]
+trust_gated = "my_privacy_layer:TrustGatedPrivacy"
 
 [tool.setuptools]
 packages = ["nest_core"]
