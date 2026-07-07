@@ -106,7 +106,7 @@ class TestDelegation:
     async def test_child_ttl_capped_to_parent_remaining(self) -> None:
         """Child cannot request a TTL longer than the parent's remaining lifetime."""
         auth = DelegatableAuth(secret=b"s", clock=1_000_000.0)
-        root = await auth.issue(AgentId("a1"), ["read"])  # expires at +3600
+        root = await auth.issue(AgentId("a1"), ["read", "write"])  # expires at +3600
         # Request 7200 s — should be capped at 3600 s
         child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=7200.0)
         # Verify the child's expiry <= parent's expiry using public verify
@@ -120,7 +120,7 @@ class TestDelegation:
     @pytest.mark.asyncio
     async def test_audience_check_accepts_correct_presenter(self) -> None:
         auth = _auth()
-        root = await auth.issue(AgentId("a1"), ["read"])
+        root = await auth.issue(AgentId("a1"), ["read", "write"])
         child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
         ctx = await auth.verify(child, presenter=AgentId("a2"))
         assert ctx.subject == AgentId("a1")
@@ -154,10 +154,10 @@ class TestAdversarialScenarios:
     async def test_scope_escalation_in_multi_hop_chain(self) -> None:
         """Even deep in the chain, scopes cannot be elevated."""
         auth = _auth()
-        root = await auth.issue(AgentId("a1"), ["read"])
-        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+        root = await auth.issue(AgentId("a1"), ["read", "write", "delete"])
+        child = await auth.delegate(root, AgentId("a2"), ["read", "write"], ttl=60.0)
         with pytest.raises(ScopeEscalationError):
-            await auth.delegate(child, AgentId("a3"), ["read", "write"], ttl=30.0)
+            await auth.delegate(child, AgentId("a3"), ["read", "delete"], ttl=30.0)
 
     # 2. Stale parent (revoked)
     @pytest.mark.asyncio
@@ -174,7 +174,7 @@ class TestAdversarialScenarios:
     async def test_revoking_grandparent_invalidates_leaf(self) -> None:
         """Three-level: revoking the root kills the leaf too."""
         auth = _auth()
-        root = await auth.issue(AgentId("a1"), ["read", "write"])
+        root = await auth.issue(AgentId("a1"), ["read", "write", "delete"])
         mid = await auth.delegate(root, AgentId("a2"), ["read", "write"], ttl=600.0)
         leaf = await auth.delegate(mid, AgentId("a3"), ["read"], ttl=60.0)
         await auth.revoke(root)
@@ -185,7 +185,7 @@ class TestAdversarialScenarios:
     async def test_revoking_mid_invalidates_leaf_not_root(self) -> None:
         """Only descendants are invalidated; siblings of the revoked node survive."""
         auth = _auth()
-        root = await auth.issue(AgentId("a1"), ["read", "write"])
+        root = await auth.issue(AgentId("a1"), ["read", "write", "delete"])
         mid = await auth.delegate(root, AgentId("a2"), ["read", "write"], ttl=600.0)
         sibling = await auth.delegate(root, AgentId("a3"), ["write"], ttl=600.0)
         leaf = await auth.delegate(mid, AgentId("a4"), ["read"], ttl=60.0)
@@ -206,7 +206,7 @@ class TestAdversarialScenarios:
     async def test_wrong_presenter_rejected(self) -> None:
         """A child token is rejected when presented by the wrong agent."""
         auth = _auth()
-        root = await auth.issue(AgentId("a1"), ["read"])
+        root = await auth.issue(AgentId("a1"), ["read", "write"])
         child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
         with pytest.raises(AudienceError):
             await auth.verify(child, presenter=AgentId("a3"))

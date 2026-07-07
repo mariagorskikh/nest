@@ -328,9 +328,15 @@ class DelegatableAuth:
         if extra:
             msg = f"Scope escalation: {extra!r} not in parent scopes {parent_scopes!r}"
             raise ScopeEscalationError(msg)
+        if child_scopes == parent_scopes:
+            raise ScopeEscalationError("Delegated scopes must be a strict subset of the parent scopes")
 
+        if ttl <= 0:
+            raise ValueError("ttl must be positive")
         # Cap TTL to parent's remaining lifetime
         parent_remaining: float = float(parent_data["exp"]) - self._now()
+        if parent_remaining <= 0:
+            raise ValueError("parent token has expired")
         actual_ttl: float = min(ttl, parent_remaining)
 
         token = self._build_token(
