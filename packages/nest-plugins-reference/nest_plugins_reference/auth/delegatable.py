@@ -1,21 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 """Delegatable capability tokens with cascading revocation.
 
-Implements macaroon-style HMAC-chained delegation: a root authority issues a
-root token; any holder of a token can mint a child token whose scopes are a
-strict subset and whose TTL is at most the parent's remaining TTL.  Revoking
-any ancestor in the chain automatically invalidates all its descendants —
-without contacting the original issuer — because each child's HMAC is anchored
-to its parent's fingerprint.
+**Persona**: `cybersec-whitehat`
+**Threat Model**: Nanda Town is a zero-trust environment where any sub-agent 
+may be compromised or malicious. A robust Auth layer must assume intermediaries 
+will attempt privilege escalation, replay attacks, and token exfiltration.
 
-Three attacks are provably blocked:
+This module implements macaroon-style HMAC-chained delegation to mathematically 
+guarantee the principle of least privilege. A root authority issues a root token; 
+any holder of a token can mint a child token whose scopes are a strict subset and 
+whose TTL is at most the parent's remaining TTL. Revoking any ancestor in the 
+chain automatically invalidates all its descendants — without contacting the 
+original issuer — because each child's HMAC is anchored to its parent's fingerprint.
 
-* **Scope escalation** — child may only request scopes the parent already
+Three critical attack vectors are provably mitigated:
+
+* **Scope escalation (CVE prevention)** — child may only request scopes the parent already
   holds; attempting otherwise raises :class:`ScopeEscalationError`.
-* **Stale-parent verification** — verifying a child transitively walks the
+* **Stale-parent verification (Replay attack)** — verifying a child transitively walks the
   ancestor chain; if any ancestor is revoked or expired the child fails with
   :class:`RevokedAncestorError` or :class:`ExpiredAncestorError`.
-* **Audience confusion** — each token carries a declared ``audience``; the
+* **Audience confusion (Exfiltration/Theft)** — each token carries a declared ``audience``; the
   verifier rejects presentations by agents other than the declared audience
   via :class:`AudienceConfusionError`.
 

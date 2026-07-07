@@ -372,3 +372,65 @@ class TestFailsAgainstJwt:
         assert isinstance(auth._revoked, set)
         # No parent_id tracking in JwtAuth
         assert not hasattr(auth, "_records")
+
+
+# ---------------------------------------------------------------------------
+# Property-Based Testing (Hypothesis)
+# ---------------------------------------------------------------------------
+
+from hypothesis import given, strategies as st
+import asyncio
+
+class TestPropertyBasedInvariants:
+    """Rigorous property-based tests for delegation invariants."""
+    
+    @given(
+        root_scopes=st.sets(st.sampled_from(["read", "write", "exec", "admin"]), min_size=1),
+        child_scopes=st.sets(st.sampled_from(["read", "write", "exec", "admin"]), min_size=1)
+    )
+    def test_delegation_scope_invariant(self, root_scopes: set[str], child_scopes: set[str]) -> None:
+        """Property: Delegation succeeds IF AND ONLY IF child scopes are a subset of parent scopes."""
+        async def run_test() -> None:
+            auth = make_auth()
+            root_list = list(root_scopes)
+            child_list = list(child_scopes)
+            
+            root_token = await auth.issue(COORD, root_list)
+            
+            is_subset = child_scopes.issubset(root_scopes)
+            
+            if is_subset:
+                child = await auth.delegate(root_token, INTERM, child_list, ttl=60.0)
+                ctx = await auth.verify(child, presenter=INTERM)
+                assert set(ctx.scopes) == child_scopes
+            else:
+                with pytest.raises(ScopeEscalationError):
+                    await auth.delegate(root_token, INTERM, child_list, ttl=60.0)
+                    
+        asyncio.run(run_test())
+
+    @given(
+        ttl1=st.floats(min_value=1.0, max_value=3600.0, allow_nan=False, allow_infinity=False),
+        ttl2=st.floats(min_value=1.0, max_value=3600.0, allow_nan=False, allow_infinity=False)
+    )
+    def test_ttl_invariant(self, ttl1: float, ttl2: float) -> None:
+        """Property: A child's absolute expiry time never exceeds its parent's absolute expiry time."""
+        async def run_test() -> None:
+            auth = make_auth(t=100.0)
+            root_token = await auth.issue(COORD, ["read"])
+            
+            # Parent delegates to child with ttl1
+            child1 = await auth.delegate(root_token, INTERM, ["read"], ttl=ttl1)
+            
+            # Child delegates to leaf with ttl2
+            child2 = await auth.delegate(child1, LEAF, ["read"], ttl=ttl2)
+            
+            root_rec = auth.get_record(root_token)
+            c1_rec = auth.get_record(child1)
+            c2_rec = auth.get_record(child2)
+            
+            assert root_rec is not None and c1_rec is not None and c2_rec is not None
+            assert c2_rec.expires_at <= c1_rec.expires_at <= root_rec.expires_at
+            
+        asyncio.run(run_test())
+
