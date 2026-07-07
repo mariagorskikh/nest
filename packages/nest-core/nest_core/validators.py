@@ -3794,6 +3794,26 @@ def validate_delegation_audience(
 # ---------------------------------------------------------------------------
 
 
+def validate_delegation_confused_deputy(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    for ev in events:
+        msg = _message_body(ev)
+        if msg == "adversarial:confused_deputy_blocked":
+            return [ValidationResult("delegation_confused_deputy", True, "Confused deputy blocked")]
+    return [ValidationResult("delegation_confused_deputy", False, "Missing confused deputy block")]
+
+
+def validate_delegation_epoch_fence(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    for ev in events:
+        msg = _message_body(ev)
+        if msg == "adversarial:epoch_fence_fail_closed":
+            return [ValidationResult("delegation_epoch_fence", True, "Epoch fence fail closed")]
+    return [ValidationResult("delegation_epoch_fence", False, "Missing epoch fence block")]
+
+
 VALIDATORS: dict[str, list[Any]] = {
     "comms_versioning": [
         validate_comms_reject_unknown_major,
@@ -3885,5 +3905,7 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_delegation_scope_escalation,
         validate_delegation_stale_parent,
         validate_delegation_audience,
+        validate_delegation_confused_deputy,
+        validate_delegation_epoch_fence,
     ],
 }

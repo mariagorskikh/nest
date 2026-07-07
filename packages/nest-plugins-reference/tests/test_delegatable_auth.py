@@ -16,6 +16,8 @@ from nest_core.types import AgentId, Token
 from nest_plugins_reference.auth.delegatable import (
     AudienceError,
     DelegatableAuth,
+    ResourceGuardError,
+    RevocationViewStaleError,
     RevokedAncestorError,
     ScopeEscalationError,
 )
@@ -268,3 +270,51 @@ class TestPluginRegistry:
         reg = PluginRegistry()
         cls = reg.resolve("auth", "delegatable")
         assert cls is DelegatableAuth
+
+
+# ---------------------------------------------------------------------------
+# Operation Overkill Tests
+# ---------------------------------------------------------------------------
+
+
+class TestAdvancedFeatures:
+    @pytest.mark.asyncio
+    async def test_offline_attenuation(self) -> None:
+        """Test that delegation doesn't require root secret."""
+        auth = DelegatableAuth(secret=b"test-secret", clock=1_000_000.0)
+        root = await auth.issue(AgentId("a1"), ["read", "write"])
+
+        # we can delegate even if auth had a different secret (offline!)
+        auth_offline = DelegatableAuth(secret=b"wrong-secret", clock=1_000_000.0)
+        child = await auth_offline.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+
+        # But we must verify with the original
+        ctx = await auth.verify(child)
+        assert ctx.scopes == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_epoch_fence_stale_view_rejected(self) -> None:
+        """Test that a verifier with a stale epoch fails closed."""
+        auth = DelegatableAuth(secret=b"test-secret", clock=1_000_000.0, stale_after=2)
+        root = await auth.issue(AgentId("a1"), ["read", "write"])
+
+        # Advance global epoch beyond stale_after
+        for _ in range(5):
+            auth.advance_epoch()
+
+        # Verify with an old visible_epoch
+        with pytest.raises(RevocationViewStaleError):
+            await auth.verify(root, visible_epoch=0)
+
+    @pytest.mark.asyncio
+    async def test_confused_deputy_resource_guard(self) -> None:
+        """Test the authorize() resource guard."""
+        auth = DelegatableAuth(secret=b"test-secret", clock=1_000_000.0)
+        root = await auth.issue(AgentId("a1"), ["read"])
+
+        # Has read, so this works
+        await auth.authorize(root, presenter=AgentId("a1"), required_scope="read")
+
+        # Missing write, so this fails
+        with pytest.raises(ResourceGuardError):
+            await auth.authorize(root, presenter=AgentId("a1"), required_scope="write")

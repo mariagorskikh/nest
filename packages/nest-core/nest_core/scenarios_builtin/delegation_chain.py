@@ -68,6 +68,43 @@ class CoordinatorAgent(StateMachineAgent):
                 except Exception:
                     pass
 
+        elif msg.startswith("authorize:"):
+            parts = msg.split(":", 2)
+            req_scope = parts[1]
+            token_str = parts[2]
+            from nest_core.types import Token
+
+            auth = ctx.plugins.get("auth")
+            if auth:
+                from nest_plugins_reference.auth.delegatable import ResourceGuardError
+
+                try:
+                    await auth.authorize(
+                        Token(token_str), presenter=sender, required_scope=req_scope
+                    )
+                except ResourceGuardError:
+                    await ctx.send(self._id, b"adversarial:confused_deputy_blocked")
+                except Exception:
+                    pass
+
+        if self._round == 20 and self._root_token:
+            auth = ctx.plugins.get("auth")
+            if auth:
+                from nest_plugins_reference.auth.delegatable import RevocationViewStaleError
+
+                from nest_core.types import Token
+
+                try:
+                    auth._stale_after = 2
+                    auth.advance_epoch()
+                    auth.advance_epoch()
+                    auth.advance_epoch()
+                    await auth.verify(self._root_token, visible_epoch=0)
+                except RevocationViewStaleError:
+                    await ctx.send(self._id, b"adversarial:epoch_fence_fail_closed")
+                except Exception:
+                    pass
+
 
 class IntermediaryAgent(StateMachineAgent):
     def __init__(self, agent_id: AgentId, leaf_start: int, leaf_end: int) -> None:
@@ -128,6 +165,12 @@ class LeafAgent(StateMachineAgent):
             if self._id == AgentId("leaf-0"):
                 for _ in range(5):
                     await ctx.send(AgentId("leaf-1"), f"steal:{self._my_token}".encode())
+
+            # Test 3: Confused Deputy
+            if self._id == AgentId("leaf-2"):
+                await ctx.send(
+                    AgentId("coordinator-0"), f"authorize:write:{self._my_token}".encode()
+                )
 
         elif msg.startswith("steal:"):
             stolen_token = msg.split(":", 1)[1]
