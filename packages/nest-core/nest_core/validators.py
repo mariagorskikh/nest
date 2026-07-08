@@ -5099,7 +5099,163 @@ def validate_sybil_bond_attempts_rejected(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Policy-guard validators
+# ---------------------------------------------------------------------------
+
+
+def _policy_decisions(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Return policy decisions keyed by scenario case id."""
+    decisions: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            raw_obj: object = json.loads(_message_body(ev))
+            if not isinstance(raw_obj, dict):
+                continue
+            obj = cast("dict[str, object]", raw_obj)
+            if obj.get("policy") != "decision":
+                continue
+            case_id = str(obj.get("case", ""))
+            raw_decision = obj.get("decision")
+            if case_id and isinstance(raw_decision, dict):
+                decisions[case_id] = cast("dict[str, Any]", raw_decision)
+    return decisions
+
+
+def _policy_effect(decisions: dict[str, dict[str, Any]], case_id: str) -> str | None:
+    """Return the recorded effect for *case_id*, if present."""
+    decision = decisions.get(case_id)
+    if decision is None:
+        return None
+    effect = decision.get("effect")
+    return str(effect) if effect is not None else None
+
+
+def validate_policy_safe_read_permitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Declared low-risk public reads are permitted."""
+    decisions = _policy_decisions(events)
+    effect = _policy_effect(decisions, "safe_public_read")
+    if effect != "permit":
+        return [
+            ValidationResult(
+                "policy_safe_read_permitted",
+                False,
+                f"safe_public_read expected permit, got {effect or 'missing'}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "policy_safe_read_permitted",
+            True,
+            "declared public catalog read was permitted",
+        )
+    ]
+
+
+def validate_policy_blocks_sensitive_public_export(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sensitive data must not be published to public resources."""
+    decisions = _policy_decisions(events)
+    effect = _policy_effect(decisions, "sensitive_public_export")
+    if effect != "deny":
+        return [
+            ValidationResult(
+                "policy_blocks_sensitive_public_export",
+                False,
+                f"sensitive_public_export expected deny, got {effect or 'missing'}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "policy_blocks_sensitive_public_export",
+            True,
+            "sensitive public export was denied",
+        )
+    ]
+
+
+def validate_policy_requires_approval_for_high_value_payment(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """High-value payments require approval instead of autonomous execution."""
+    decisions = _policy_decisions(events)
+    effect = _policy_effect(decisions, "high_value_payment")
+    if effect != "approval_required":
+        return [
+            ValidationResult(
+                "policy_requires_approval_for_high_value_payment",
+                False,
+                f"high_value_payment expected approval_required, got {effect or 'missing'}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "policy_requires_approval_for_high_value_payment",
+            True,
+            "high-value payment required approval",
+        )
+    ]
+
+
+def validate_policy_requires_approval_for_unknown_amount_payment(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Payments with omitted amounts require approval instead of using zero."""
+    decisions = _policy_decisions(events)
+    effect = _policy_effect(decisions, "unknown_amount_payment")
+    if effect != "approval_required":
+        return [
+            ValidationResult(
+                "policy_requires_approval_for_unknown_amount_payment",
+                False,
+                f"unknown_amount_payment expected approval_required, got {effect or 'missing'}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "policy_requires_approval_for_unknown_amount_payment",
+            True,
+            "payment with unknown amount required approval",
+        )
+    ]
+
+
+def validate_policy_denies_unknown_admin_action(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Undeclared authority-changing actions are denied by default."""
+    decisions = _policy_decisions(events)
+    effect = _policy_effect(decisions, "unknown_admin_action")
+    if effect != "deny":
+        return [
+            ValidationResult(
+                "policy_denies_unknown_admin_action",
+                False,
+                f"unknown_admin_action expected deny, got {effect or 'missing'}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "policy_denies_unknown_admin_action",
+            True,
+            "undeclared admin action was denied",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "policy_guard": [
+        validate_policy_safe_read_permitted,
+        validate_policy_blocks_sensitive_public_export,
+        validate_policy_requires_approval_for_high_value_payment,
+        validate_policy_requires_approval_for_unknown_amount_payment,
+        validate_policy_denies_unknown_admin_action,
+    ],
     "sybil_bond": [
         validate_sybil_bond_no_free_trust,
         validate_sybil_bond_honest_trusted,

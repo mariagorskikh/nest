@@ -193,3 +193,7 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("capability_spoofing", capability_spoofing_factory)
+    elif name == "policy_guard":
+        from nest_core.scenarios_builtin.policy_guard import policy_guard_factory
+
+        register_scenario("policy_guard", policy_guard_factory)

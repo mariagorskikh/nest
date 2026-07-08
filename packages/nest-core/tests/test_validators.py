@@ -2071,6 +2071,7 @@ class TestValidatorRegistry:
             "parc_migration",
             "rogue_trusted_agent",
             "sybil_bond",
+            "policy_guard",
         }
         assert set(VALIDATORS.keys()) == expected
 

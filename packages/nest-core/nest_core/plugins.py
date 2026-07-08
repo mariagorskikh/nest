@@ -60,6 +60,8 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("failure_detector", "phi_accrual"): (
         f"{_REF}.failure_detection.phi_accrual:PhiAccrualFailureDetector"
     ),
+    ("policy", "strict_rules"): f"{_REF}.policy.strict:StrictPolicy",
+    ("policy", "allow_all"): f"{_REF}.policy.allow_all:AllowAllPolicy",
 }
 
 
@@ -97,6 +99,7 @@ class PluginRegistry:
             "privacy",
             "datafacts",
             "failure_detector",
+            "policy",
         ]:
             group = f"nest.plugins.{layer}"
             eps = importlib.metadata.entry_points(group=group)
