@@ -4,9 +4,11 @@
 
 name: streaming_payments
 description: |
-  Five buyers open streams to five sellers over 100 rounds with 5% message drop.
-  All three validators must pass: conservation, no-drain-after-close,
-  and no-overbill-on-partition.
+  Five buyers each attempt 100 metered work units against their seller,
+  spread over rolling streams (open -> per-unit ack -> per-unit debit ->
+  close), with 5% message drop and mid-stream cancellation on every third
+  stream. All three validators must pass: conservation,
+  no-drain-after-close, and no-overbill-on-partition.
 
 tier: 1
 seed: 42

@@ -1239,45 +1239,139 @@ def validate_memory_convergence(
 # ---------------------------------------------------------------------------
 
 
+def _parse_stream_fields(msg: str) -> tuple[str, dict[str, str]] | None:
+    """Parse a ``stream:<kind>:k=v:...`` payload into (kind, fields).
+
+    Returns None for payloads that are not stream events. Grammar matches
+    the emitter in
+    :mod:`nest_core.scenarios_builtin.streaming_payments`.
+    """
+    if not msg.startswith("stream:"):
+        return None
+    rest = msg[len("stream:") :]
+    kind, _, body = rest.partition(":")
+    fields: dict[str, str] = {}
+    for part in body.split(":"):
+        key, sep, value = part.partition("=")
+        if sep:
+            fields[key] = value
+    return kind, fields
+
+
+def _collect_stream_events(
+    events: list[dict[str, Any]],
+) -> tuple[
+    dict[str, dict[str, str]],
+    list[tuple[int, str, dict[str, str]]],
+    dict[str, int],
+    dict[tuple[str, str, str], int],
+]:
+    """Extract the streaming lifecycle from a raw trace.
+
+    Returns ``(opened, debits, first_close_index, delivered_acks)``:
+    ``opened`` maps ref -> opened fields; ``debits`` is
+    ``(event_index, payer_agent, fields)`` per debit broadcast;
+    ``first_close_index`` maps ref -> index of its first close broadcast;
+    ``delivered_acks`` maps ``(receiver_agent, ref, unit)`` to the index of
+    the first actually-delivered ack (``receive`` events only — dropped
+    acks never enter this map).
+    """
+    opened: dict[str, dict[str, str]] = {}
+    debits: list[tuple[int, str, dict[str, str]]] = []
+    first_close_index: dict[str, int] = {}
+    delivered_acks: dict[tuple[str, str, str], int] = {}
+
+    for index, ev in enumerate(events):
+        kind = ev.get("kind")
+        msg = _message_body(ev)
+        if kind == "broadcast":
+            parsed = _parse_stream_fields(msg)
+            if parsed is None:
+                continue
+            stream_kind, fields = parsed
+            ref = fields.get("ref", "")
+            if not ref:
+                continue
+            if stream_kind == "opened":
+                opened.setdefault(ref, fields)
+            elif stream_kind == "debit":
+                debits.append((index, str(ev.get("agent", "")), fields))
+            elif stream_kind == "closed":
+                first_close_index.setdefault(ref, index)
+        elif kind == "receive":
+            parsed = _parse_stream_fields(msg)
+            if parsed is None:
+                continue
+            stream_kind, fields = parsed
+            if stream_kind == "ack":
+                ref = fields.get("ref", "")
+                unit = fields.get("unit", "")
+                if ref and unit:
+                    delivered_acks.setdefault((str(ev.get("agent", "")), ref, unit), index)
+
+    return opened, debits, first_close_index, delivered_acks
+
+
 def validate_streaming_conservation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Conservation invariant: total debited == total credited at every tick.
+    """Conservation invariant: every settled stream equals the sum of its debits.
 
-    Scans the trace for payment events and verifies that cumulative funds
-    debited from payers equals cumulative funds credited to payees.
+    For each closed stream, the settled total broadcast at close must equal
+    the sum of its per-unit debit amounts, and no stream may ever bill past
+    its declared ``max_total`` — money is neither created, destroyed, nor
+    conjured past the cap. A trace with no ``stream:opened`` events fails:
+    the plugin under test never ran a streaming lifecycle at all (e.g. a
+    one-shot plugin quietly pre-paying instead).
     """
-    cumulative_debited: dict[str, int] = defaultdict(int)
-    cumulative_credited: dict[str, int] = defaultdict(int)
+    opened, debits, first_close_index, _ = _collect_stream_events(events)
 
-    for ev in events:
-        if ev.get("kind") not in ("payment_debited", "payment_credited"):
+    if not opened:
+        return [
+            ValidationResult(
+                "streaming_conservation",
+                False,
+                "no streaming lifecycle observed (no stream:opened events in trace)",
+            )
+        ]
+
+    billed: dict[str, int] = defaultdict(int)
+    violations: list[str] = []
+    for _, _, fields in debits:
+        ref = fields.get("ref", "")
+        billed[ref] += int(fields.get("amount", "0"))
+        if ref not in opened:
+            violations.append(f"stream {ref}: debit without a stream:opened event")
+
+    for ref, fields in opened.items():
+        max_total = int(fields.get("max", "0"))
+        if billed[ref] > max_total:
+            violations.append(f"stream {ref}: billed {billed[ref]} past max_total {max_total}")
+
+    closed_totals: dict[str, int] = {}
+    for index, ev in enumerate(events):
+        if ev.get("kind") != "broadcast":
             continue
+        parsed = _parse_stream_fields(_message_body(ev))
+        if parsed is None or parsed[0] != "closed":
+            continue
+        ref = parsed[1].get("ref", "")
+        if ref and first_close_index.get(ref) == index:
+            closed_totals[ref] = int(parsed[1].get("total", "0"))
 
-        agent = ev.get("agent", "")
-        amount = ev.get("amount", 0)
+    for ref, total in closed_totals.items():
+        if billed[ref] != total:
+            violations.append(f"stream {ref}: settled total {total} != sum of debits {billed[ref]}")
 
-        if ev.get("kind") == "payment_debited":
-            cumulative_debited[agent] += amount
-        elif ev.get("kind") == "payment_credited":
-            cumulative_credited[agent] += amount
-
-    # Check conservation: sum of all debited == sum of all credited
-    total_debited = sum(cumulative_debited.values())
-    total_credited = sum(cumulative_credited.values())
-
-    if total_debited != total_credited:
-        detail = (
-            f"conservation violation: total debited={total_debited} "
-            f"!= total credited={total_credited}"
-        )
-        return [ValidationResult("streaming_conservation", False, detail)]
+    if violations:
+        return [ValidationResult("streaming_conservation", False, "; ".join(violations))]
 
     return [
         ValidationResult(
             "streaming_conservation",
             True,
-            f"conservation verified: {total_debited} total flow",
+            f"{len(opened)} streams, {sum(billed.values())} total flow, "
+            f"{len(closed_totals)} settled receipts all equal their debit sums",
         )
     ]
 
@@ -1285,40 +1379,37 @@ def validate_streaming_conservation(
 def validate_streaming_no_drain_after_close(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Attack: closed streams must not drain after closure.
+    """Attack: closed streams must not drain afterwards, and no unit twice.
 
-    Tracks open_stream -> close_stream for each ref, verifies no
-    payment_debited events occur after close for that stream ref.
+    Uses trace order (the trace is append-only): any ``stream:debit`` for a
+    ref that appears after that ref's first ``stream:closed`` broadcast is a
+    drain-after-close. Billing the same work unit twice on one stream is the
+    same theft through a different door, so it is checked here too. A trace
+    with no closed streams fails — mid-stream cancellation never happened,
+    so the property this validator guards was never exercised.
     """
-    open_times: dict[str, int] = {}  # PaymentRef -> tick
-    close_times: dict[str, int] = {}  # PaymentRef -> tick
-    stream_debits: dict[str, list[int]] = defaultdict(lambda: [])  # PaymentRef -> [ticks]
+    _, debits, first_close_index, _ = _collect_stream_events(events)
 
-    for ev in events:
-        tick = ev.get("tick", 0)
+    if not first_close_index:
+        return [
+            ValidationResult(
+                "streaming_no_drain_after_close",
+                False,
+                "no stream:closed events observed — close/cancel path never exercised",
+            )
+        ]
 
-        if ev.get("event_type") == "stream_opened":
-            ref = ev.get("stream_ref", "")
-            if ref:
-                open_times[ref] = tick
-
-        elif ev.get("event_type") == "stream_closed":
-            ref = ev.get("stream_ref", "")
-            if ref:
-                close_times[ref] = tick
-
-        elif ev.get("kind") == "payment_debited":
-            ref = ev.get("stream_ref", "")
-            if ref:
-                assert isinstance(stream_debits[ref], list)
-                stream_debits[ref].append(tick)
-
-    # Check: no debit after close
     violations: list[str] = []
-    for ref, close_tick in close_times.items():
-        debits_after = [t for t in stream_debits.get(ref, []) if t > close_tick]
-        if debits_after:
-            violations.append(f"stream {ref} debited after close at {close_tick}: {debits_after}")
+    seen_units: set[tuple[str, str]] = set()
+    for index, _, fields in debits:
+        ref = fields.get("ref", "")
+        unit = fields.get("unit", "")
+        close_index = first_close_index.get(ref)
+        if close_index is not None and index > close_index:
+            violations.append(f"stream {ref}: debit for unit {unit} after the stream closed")
+        if (ref, unit) in seen_units:
+            violations.append(f"stream {ref}: unit {unit} billed twice")
+        seen_units.add((ref, unit))
 
     if violations:
         return [ValidationResult("streaming_no_drain_after_close", False, "; ".join(violations))]
@@ -1327,7 +1418,7 @@ def validate_streaming_no_drain_after_close(
         ValidationResult(
             "streaming_no_drain_after_close",
             True,
-            f"verified {len(close_times)} streams, no drain-after-close",
+            f"verified {len(first_close_index)} closed streams, no drain-after-close",
         )
     ]
 
@@ -1335,56 +1426,37 @@ def validate_streaming_no_drain_after_close(
 def validate_streaming_no_overbill_on_partition(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Attack: payer must not keep billing when partitioned from payee.
+    """Attack: no billing for work the payee never delivered.
 
-    When the simulator drops messages between a payer and payee (network
-    partition), any ``payment_debited`` after that point is billing for
-    service the payee cannot deliver — an over-bill on partition.
-
-    Tracks (payer, payee) pairs from ``stream_opened`` events, then scans
-    for ``dropped`` events between those pairs.  Any debit that lands at or
-    after a drop-tick between the same payer and payee is a violation.
+    Every ``stream:debit`` must cite a work unit whose ack the payer
+    actually *received* earlier in the trace. When the network partitions
+    (or the failure injector drops the ack), no ack is delivered — so a
+    conforming payer bills nothing, and any debit without a delivered ack
+    is an over-bill. This subsumes the partition case: partitioned payers
+    receive no acks at all, so *any* debit they emit fails here. A trace
+    with no ``stream:opened`` events fails outright.
     """
-    # stream_ref -> (payer, payee)
-    stream_parties: dict[str, tuple[str, str]] = {}
-    # (payer, payee) -> first tick where drop was observed
-    partition_start: dict[tuple[str, str], int] = {}
+    opened, debits, _, delivered_acks = _collect_stream_events(events)
+
+    if not opened:
+        return [
+            ValidationResult(
+                "streaming_no_overbill_on_partition",
+                False,
+                "no streaming lifecycle observed (no stream:opened events in trace)",
+            )
+        ]
+
     violations: list[str] = []
-
-    for ev in events:
-        tick = ev.get("tick", 0)
-
-        if ev.get("event_type") == "stream_opened":
-            ref = ev.get("stream_ref", "")
-            payer = ev.get("agent", "")
-            payee = ev.get("to", "")
-            if ref and payer and payee:
-                stream_parties[ref] = (payer, payee)
-
-        elif ev.get("kind") == "dropped":
-            sender = ev.get("from", "")
-            receiver = ev.get("agent", "")
-            # Record the earliest tick a partition was observed either way
-            if sender and receiver:
-                key = (sender, receiver)
-                if key not in partition_start or tick < partition_start[key]:
-                    partition_start[key] = tick
-                # Reverse direction too — partition is bidirectional
-                rev_key = (receiver, sender)
-                if rev_key not in partition_start or tick < partition_start[rev_key]:
-                    partition_start[rev_key] = tick
-
-        elif ev.get("kind") == "payment_debited":
-            ref = ev.get("stream_ref", "")
-            if ref not in stream_parties:
-                continue
-            payer, payee = stream_parties[ref]
-            drop_tick = partition_start.get((payer, payee))
-            if drop_tick is not None and tick >= drop_tick:
-                violations.append(
-                    f"stream {ref}: payer={payer} debited at tick {tick} "
-                    f"but partitioned from payee={payee} since tick {drop_tick}"
-                )
+    for debit_index, payer_agent, fields in debits:
+        ref = fields.get("ref", "")
+        unit = fields.get("unit", "")
+        ack_index = delivered_acks.get((payer_agent, ref, unit))
+        if ack_index is None or ack_index > debit_index:
+            violations.append(
+                f"stream {ref}: {payer_agent} billed unit {unit} "
+                f"without a previously delivered ack (over-bill under drop/partition)"
+            )
 
     if violations:
         return [
@@ -1398,8 +1470,8 @@ def validate_streaming_no_overbill_on_partition(
         ValidationResult(
             "streaming_no_overbill_on_partition",
             True,
-            f"verified {len(stream_parties)} streams across "
-            f"{len(partition_start)} partition edges, no over-bill",
+            f"verified {len(debits)} debits across {len(opened)} streams, "
+            f"every billed unit backed by a delivered ack",
         )
     ]
 

@@ -123,3 +123,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("escrow_marketplace", escrow_marketplace_factory)
+    elif name == "streaming_payments":
+        from nest_core.scenarios_builtin.streaming_payments import (
+            streaming_payments_factory,
+        )
+
+        register_scenario("streaming_payments", streaming_payments_factory)

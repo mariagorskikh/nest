@@ -23,7 +23,21 @@ Source: [`nest_plugins_reference/payments/prepaid_credits.py`](../../packages/ne
 
 ## Additional reference plugins
 
-`streaming` — bilateral per-tick streams with mid-stream cancellation.
+`streaming` — bilateral per-tick streams with mid-stream cancellation
+and **delivery-gated billing**: the payer records each delivered work
+unit (`record_delivery`) and only then drains one tick (`tick_stream`),
+so dropped or partitioned payees are never billed for work they could
+not deliver — the per-request metering shape of x402-style HTTP
+payments. `open_stream`/`close_stream` bound the flow by `max_total`;
+closing settles exactly what was billed and the remainder is never
+spent. One-shot `pay()` is a stream that drains everything in one tick.
+The `streaming_payments` scenario (and its `_partition` variant)
+exercises it under 5% message drop and a full buyer/seller partition;
+three adversarial validators check conservation, drain-after-close, and
+over-bill-on-partition, and all three fail loudly under a plugin that
+quietly pre-pays instead of streaming.
+
+Source: [`nest_plugins_reference/payments/streaming.py`](../../packages/nest-plugins-reference/nest_plugins_reference/payments/streaming.py).
 
 `empic_escrow` — EMPIC-shaped escrow for service providers and
 consumers. Pull mode locks one request payment until accepted data is

@@ -6,9 +6,11 @@
 name: streaming_payments_partition
 description: |
   Five buyers stream payments to five sellers under a network partition that
-  isolates buyers from sellers. Any payment_debited after the partition must
-  be caught by the over-bill validator. All three validators run: conservation,
-  no-drain-after-close, no-overbill-on-partition.
+  isolates buyers from sellers. No ack can cross the partition, so
+  delivery-gated billing must drain exactly nothing; any stream:debit without
+  a previously delivered ack is caught by the over-bill validator. All three
+  validators run: conservation, no-drain-after-close,
+  no-overbill-on-partition.
 
 tier: 1
 seed: 42
