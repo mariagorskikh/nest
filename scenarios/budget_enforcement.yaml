@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# Budget enforcement: one shared household restaurant budget (1000) drawn down by
+# four independent spending sources on four different rails — a human card, a
+# meal-planner agent, a travel agent, and a lunch-app subscription. Their spends
+# total 1050, so the last source is refused on the shared cap even though it spent
+# little itself. Under `payments: budget_limited` (shared budget) both validators
+# pass; under `payments: prepaid_credits` (per-rail balances, no shared budget)
+# the combined overspend goes through and both validators fail.
+
+name: budget_enforcement
+description: |
+  One household authorizes a single $1000/month restaurant budget. Four
+  independent sources spend against it — human-card (340), meal-planner (280),
+  travel-agent (250), lunch-app (180). Combined they exceed 1000, so the last to
+  spend is refused because of spend the others made on rails it cannot see. Both
+  budget validators (never_exceeds_cap, refuses_overspend) must pass under a
+  shared budget_limited wallet — the cross-source enforcement no per-rail wallet
+  can do.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 8
+  brain: state-machine
+  roles:
+    - name: source
+      count: 4
+    - name: merchant
+      count: 4
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: budget_limited
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: budget_enforcement
+  config:
+    cap: 1000
+
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+
+duration: "ticks: 200"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/budget_enforcement.jsonl

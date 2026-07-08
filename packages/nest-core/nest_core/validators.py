@@ -5150,6 +5150,152 @@ def validate_attested_sybil_quarantined(
 
 
 # ---------------------------------------------------------------------------
+# Budget-enforcement validators
+# ---------------------------------------------------------------------------
+
+
+def _parse_budget_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Parse ``budget:<kind>:k=v:...`` broadcast lines into field dicts.
+
+    Only ``send`` / ``broadcast`` events whose body starts with ``budget:`` are
+    considered, in trace order. Each returned dict has a ``kind`` key plus the
+    parsed ``k=v`` fields.
+
+    Example::
+
+        parsed = _parse_budget_events(events)
+    """
+    parsed: list[dict[str, str]] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        body = _message_body(ev)
+        if not body.startswith("budget:"):
+            continue
+        parts = body.split(":")
+        # parts[0] == "budget", parts[1] == kind, remainder == k=v tokens
+        if len(parts) < 2:
+            continue
+        fields: dict[str, str] = {"kind": parts[1]}
+        for token in parts[2:]:
+            key, sep, value = token.partition("=")
+            if sep:
+                fields[key] = value
+        parsed.append(fields)
+    return parsed
+
+
+def _budget_pool_caps(parsed: list[dict[str, str]]) -> dict[str, int]:
+    """Map each budget pool id to its declared cap from ``budget:cap`` lines.
+
+    Example::
+
+        caps = _budget_pool_caps(_parse_budget_events(events))
+    """
+    caps: dict[str, int] = {}
+    for ev in parsed:
+        if ev["kind"] == "cap":
+            try:
+                caps[ev.get("pool", "")] = int(ev.get("cap", ""))
+            except ValueError:
+                continue
+    return caps
+
+
+def validate_budget_never_exceeds_cap(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A pool's combined confirmed spend across all sources may not exceed its cap.
+
+    Reads each pool's cap from its ``budget:cap`` line, then walks the
+    ``budget:paid`` lines in trace order accumulating spend **across every source**
+    in the pool. Fails if a pool's running total exceeds its cap — the overspend a
+    budget-less baseline (``prepaid_credits``), which watches no shared total, lets
+    through.
+    """
+    parsed = _parse_budget_events(events)
+    caps = _budget_pool_caps(parsed)
+
+    running: dict[str, int] = {}
+    violations: list[str] = []
+    paid_count = 0
+    for ev in parsed:
+        if ev["kind"] != "paid":
+            continue
+        paid_count += 1
+        pool = ev.get("pool", "")
+        try:
+            amount = int(ev.get("amount", ""))
+        except ValueError:
+            violations.append(f"pool={pool!r}: non-integer paid amount={ev.get('amount', '')!r}")
+            continue
+        running[pool] = running.get(pool, 0) + amount
+        cap = caps.get(pool)
+        if cap is not None and running[pool] > cap:
+            violations.append(f"pool={pool!r}: combined spend {running[pool]} exceeds cap {cap}")
+
+    if violations:
+        return [ValidationResult("budget_never_exceeds_cap", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "budget_never_exceeds_cap",
+            True,
+            f"{paid_count} payments across {len(caps)} pool(s) all within the shared cap",
+        )
+    ]
+
+
+def validate_budget_refuses_overspend(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """At least one over-cap purchase must be refused, and none silently allowed.
+
+    Walks the pool's events in trace order, accumulating confirmed spend across
+    sources. Requires a ``budget:refused`` whose amount, added to the spend
+    already confirmed for that pool, would have exceeded the cap — proof the
+    shared budget was actually exercised and enforced across sources. A budget-less
+    baseline emits no refusals, so this fails there, catching the overspend a
+    shared ledger is meant to prevent.
+    """
+    parsed = _parse_budget_events(events)
+    caps = _budget_pool_caps(parsed)
+
+    running: dict[str, int] = {}
+    genuine_refusals = 0
+    for ev in parsed:
+        pool = ev.get("pool", "")
+        if ev["kind"] == "paid":
+            try:
+                running[pool] = running.get(pool, 0) + int(ev.get("amount", ""))
+            except ValueError:
+                continue
+        elif ev["kind"] == "refused":
+            cap = caps.get(pool)
+            try:
+                amount = int(ev.get("amount", ""))
+            except ValueError:
+                continue
+            if cap is not None and running.get(pool, 0) + amount > cap:
+                genuine_refusals += 1
+
+    if genuine_refusals == 0:
+        return [
+            ValidationResult(
+                "budget_refuses_overspend",
+                False,
+                "no over-cap purchase was refused — shared budget not enforced",
+            )
+        ]
+    return [
+        ValidationResult(
+            "budget_refuses_overspend",
+            True,
+            f"{genuine_refusals} over-cap purchase(s) refused on the shared budget",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -5409,5 +5555,9 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "budget_enforcement": [
+        validate_budget_never_exceeds_cap,
+        validate_budget_refuses_overspend,
     ],
 }

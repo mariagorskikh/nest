@@ -197,3 +197,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("capability_spoofing", capability_spoofing_factory)
+    elif name == "budget_enforcement":
+        from nest_core.scenarios_builtin.budget_enforcement import (
+            budget_enforcement_factory,
+        )
+
+        register_scenario("budget_enforcement", budget_enforcement_factory)
