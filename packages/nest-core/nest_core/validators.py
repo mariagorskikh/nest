@@ -1234,6 +1234,149 @@ def validate_memory_convergence(
     return results
 
 
+def _mv_sibling_payloads(body: str) -> frozenset[str] | None:
+    """Extract the set of base64 sibling payloads from an MV-Register final record.
+
+    Returns ``None`` if the record is not a well-formed ``mv_register`` state.
+    Keyed on the payload strings alone (not the version vectors) because the
+    property under test is *which values survived*, not their causal tags.
+
+    Example::
+
+        _mv_sibling_payloads('{"crdt":"mv_register","values":[{"payload":"YQ=="}]}')
+    """
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    data = cast("dict[str, Any]", parsed)
+    if data.get("crdt") != "mv_register":
+        return None
+    raw = data.get("values")
+    if not isinstance(raw, list):
+        return None
+    payloads: set[str] = set()
+    for entry in cast("list[Any]", raw):
+        if not isinstance(entry, dict):
+            return None
+        payload = cast("dict[str, Any]", entry).get("payload")
+        if not isinstance(payload, str):
+            return None
+        payloads.add(payload)
+    return frozenset(payloads)
+
+
+def validate_mv_sibling_preservation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: every replica keeps every concurrent write as a sibling.
+
+    The ``mv_register_siblings`` scenario has each of ``N`` agents write one
+    distinct value to the same key -- concurrently, before any gossip -- and
+    then broadcast its terminal register as a ``final:<json>`` record on stop.
+    A correct MV-Register converges every replica to the *same set* of ``N``
+    sibling values; a last-writer-wins register would instead collapse each
+    replica to a single winner. This validator asserts both halves of the
+    MV-Register property that ``lww_register`` cannot satisfy:
+
+    * **convergence** -- all replicas hold an identical sibling set, and
+    * **no concurrent loss** -- that set contains all ``N`` written values, so
+      nothing was silently dropped (the set size equals the replica count).
+
+    A last-writer-wins register drives both checks to fail: every replica holds
+    a size-1 set, and (absent a tie-break agreement) those singletons need not
+    even match.
+    """
+    finals: dict[str, frozenset[str]] = {}
+    duplicates: set[str] = set()
+    malformed: list[str] = []
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("final:"):
+            continue
+        agent = str(ev.get("agent", ""))
+        payloads = _mv_sibling_payloads(msg[len("final:") :])
+        if payloads is None:
+            malformed.append(agent)
+            continue
+        if agent in finals:
+            duplicates.add(agent)
+        finals[agent] = payloads
+
+    results: list[ValidationResult] = []
+    if malformed:
+        results.append(
+            ValidationResult(
+                "mv_sibling_wellformed",
+                False,
+                f"{len(malformed)} malformed final record(s): {sorted(set(malformed))}",
+            )
+        )
+    if not finals:
+        results.append(
+            ValidationResult(
+                "mv_sibling_preservation",
+                False,
+                "no final replica states found in trace",
+            )
+        )
+        return results
+
+    replica_count = len(finals)
+    distinct_sets = set(finals.values())
+    if len(distinct_sets) == 1:
+        results.append(
+            ValidationResult(
+                "mv_sibling_convergence",
+                True,
+                f"all {replica_count} replicas hold an identical sibling set",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "mv_sibling_convergence",
+                False,
+                f"{replica_count} replicas hold {len(distinct_sets)} distinct sibling sets",
+            )
+        )
+
+    short = sorted(a for a, s in finals.items() if len(s) < replica_count)
+    if short:
+        results.append(
+            ValidationResult(
+                "mv_sibling_preservation",
+                False,
+                f"{len(short)} replica(s) lost concurrent writes "
+                f"(fewer than {replica_count} siblings): {short}",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "mv_sibling_preservation",
+                True,
+                f"every replica kept all {replica_count} concurrent writes as siblings",
+            )
+        )
+
+    if duplicates:
+        results.append(
+            ValidationResult(
+                "mv_sibling_one_final_per_agent",
+                False,
+                f"agents emitted multiple final records: {sorted(duplicates)}",
+            )
+        )
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Streaming payments validators
 # ---------------------------------------------------------------------------
@@ -4081,6 +4224,10 @@ VALIDATORS: dict[str, list[Any]] = {
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
+        validate_memory_liveness,
+    ],
+    "mv_register_siblings": [
+        validate_mv_sibling_preservation,
         validate_memory_liveness,
     ],
     "streaming_payments": [

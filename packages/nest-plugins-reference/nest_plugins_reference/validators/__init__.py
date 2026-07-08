@@ -23,6 +23,10 @@ from nest_plugins_reference.validators.gossip_validators import (
     check_converged,
     check_no_partition_view_leak,
 )
+from nest_plugins_reference.validators.mv_register_validators import (
+    ConcurrentWriteLossError,
+    validate_mv_no_concurrent_loss,
+)
 from nest_plugins_reference.validators.privacy_validators import (
     check_eavesdropper_blocked,
     check_field_injection_rejected,
@@ -32,6 +36,7 @@ from nest_plugins_reference.validators.privacy_validators import (
 )
 
 __all__ = [
+    "ConcurrentWriteLossError",
     "ConvergenceFailureError",
     "PartitionLeakError",
     "ValidatorReport",
@@ -42,4 +47,5 @@ __all__ = [
     "check_replay_rejected",
     "check_stale_revocation_blocked",
     "corrupt_proof",
+    "validate_mv_no_concurrent_loss",
 ]

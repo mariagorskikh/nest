@@ -1815,6 +1815,7 @@ class TestValidatorRegistry:
             "reputation",
             "identity_rotation",
             "memory_concurrent_writers",
+            "mv_register_siblings",
             "streaming_payments",
             "empic_payments",
             "comms_versioning",
