@@ -19,12 +19,22 @@ const inputClass =
 const labelClass =
   "block font-mono text-[10px] uppercase tracking-[0.18em] text-ink-400 mb-2";
 
+const CHECKLIST = [
+  "Build a service and host it online so it stays reachable — Railway, Vercel, Render, or Fly, your choice.",
+  "Test your endpoints in a browser or with curl to make sure they work.",
+  "Write a SKILL.md: your service's name, what it does, its web address, the endpoints, and the steps to use them.",
+  "Paste it below — a hosted link, a GitHub repo, or the text — plus your live endpoint links.",
+];
+
 export function SubmitForm() {
   const [state, formAction, pending] = useActionState(
     submitSkill,
     initialSubmitState,
   );
   const [sourceType, setSourceType] = useState<SourceType>("url");
+  const [checked, setChecked] = useState<boolean[]>(() =>
+    CHECKLIST.map(() => false),
+  );
   const formRef = useRef<HTMLFormElement>(null);
 
   // Clear the fields after a successful save.
@@ -32,11 +42,36 @@ export function SubmitForm() {
     if (state.ok) {
       formRef.current?.reset();
       setSourceType("url");
+      setChecked(CHECKLIST.map(() => false));
     }
   }, [state.ok]);
 
   return (
     <form ref={formRef} action={formAction} className="space-y-7">
+      {/* Readiness checklist */}
+      <div className="rounded-2xl border border-cream-400/70 bg-cream-100/70 p-5">
+        <p className={labelClass}>Before you submit — the steps</p>
+        <ul className="space-y-3">
+          {CHECKLIST.map((item, i) => (
+            <li key={i}>
+              <label className="flex cursor-pointer items-start gap-3 text-[0.92rem] leading-[1.5] text-ink-600">
+                <input
+                  type="checkbox"
+                  checked={checked[i]}
+                  onChange={() =>
+                    setChecked((prev) => prev.map((v, j) => (j === i ? !v : v)))
+                  }
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-rust"
+                />
+                <span className={checked[i] ? "text-ink-300 line-through" : ""}>
+                  {item}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </div>
+
       {/* Name + author */}
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
@@ -62,6 +97,40 @@ export function SubmitForm() {
             className={inputClass}
           />
         </div>
+      </div>
+
+      {/* Email (private) */}
+      <div>
+        <label htmlFor="email" className={labelClass}>
+          Email
+        </label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          placeholder="you@example.com"
+          className={inputClass}
+        />
+        <p className="mt-2 text-[0.82rem] text-ink-400">
+          Private — only the Nanda Town team sees it. Never shown on the site or
+          in the public API.
+        </p>
+      </div>
+
+      {/* GitHub username (private) */}
+      <div>
+        <label htmlFor="github_username" className={labelClass}>
+          GitHub username
+        </label>
+        <input
+          id="github_username"
+          name="github_username"
+          placeholder="octocat"
+          className={inputClass}
+        />
+        <p className="mt-2 text-[0.82rem] text-ink-400">
+          So we can find your hackathon PR. Just the handle — not the full URL.
+        </p>
       </div>
 
       {/* Description */}
