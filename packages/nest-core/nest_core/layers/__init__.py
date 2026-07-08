@@ -16,6 +16,7 @@ from nest_core.layers.memory import Memory
 from nest_core.layers.negotiation import Negotiation
 from nest_core.layers.payments import Payments
 from nest_core.layers.privacy import Privacy
+from nest_core.layers.rate_limiter import RateLimiter
 from nest_core.layers.registry import Registry
 from nest_core.layers.transport import Transport
 from nest_core.layers.trust import Trust
@@ -31,6 +32,7 @@ __all__ = [
     "Negotiation",
     "Payments",
     "Privacy",
+    "RateLimiter",
     "Registry",
     "Transport",
     "Trust",

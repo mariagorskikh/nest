@@ -49,6 +49,8 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("failure_detector", "phi_accrual"): (
         f"{_REF}.failure_detection.phi_accrual:PhiAccrualFailureDetector"
     ),
+    ("rate_limit", "token_bucket"): (f"{_REF}.rate_limit.token_bucket:TokenBucketRateLimiter"),
+    ("rate_limit", "leaky_bucket"): (f"{_REF}.rate_limit.leaky_bucket:LeakyBucketRateLimiter"),
 }
 
 
