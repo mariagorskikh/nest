@@ -91,6 +91,10 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.comms_versioning import comms_versioning_factory
 
         register_scenario("comms_versioning", comms_versioning_factory)
+    elif name == "delegated_auth":
+        from nest_core.scenarios_builtin.delegated_auth import delegated_auth_factory
+
+        register_scenario("delegated_auth", delegated_auth_factory)
     elif name == "receipt_reputation":
         from nest_core.scenarios_builtin.receipt_reputation import (
             receipt_reputation_factory,

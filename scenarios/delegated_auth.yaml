@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegatable auth capability tokens with cascading revocation scenario.
+#
+# A coordinator delegates scoped capability tokens to intermediaries, which
+# in turn delegate to leaf agents. The trace records attempts by leaf agents
+# to invoke services, including scope escalation, stale parent tokens, and
+# audience confusion attacks.
+#
+# Verify::
+#
+#     nest run scenarios/delegated_auth.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/delegated_auth.jsonl'), 'delegated_auth')]"
+name: delegated_auth
+description: "Coordinator delegates to intermediaries which delegate to leaves; checks cascading revocation, scope escalation, and audience confusion."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 16
+  brain: state-machine
+  roles:
+    - name: coordinator
+      count: 1
+    - name: intermediary
+      count: 3
+    - name: leaf
+      count: 12
+
+layers:
+  auth: delegatable
+
+task:
+  type: delegated_auth
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/delegated_auth.jsonl

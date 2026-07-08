@@ -1667,6 +1667,183 @@ def validate_comms_no_silent_drop(
     ]
 
 
+def validate_auth_no_scope_escalation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    interactions = _collect_auth_interactions(events)
+    violations: list[str] = []
+    checked = 0
+    for inter in interactions:
+        token = inter["token"]
+        if _has_scope_escalation(token):
+            checked += 1
+            if inter["status"] == "accepted":
+                violations.append(f"{inter['jti']}: escalated token was accepted")
+    if violations:
+        return [ValidationResult("auth_no_scope_escalation", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "auth_no_scope_escalation",
+            True,
+            f"checked {checked} potentially escalated tokens",
+        )
+    ]
+
+
+def validate_auth_no_stale_parent(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    revoked = _collect_revocations(events)
+    interactions = _collect_auth_interactions(events)
+    violations: list[str] = []
+    checked = 0
+    for inter in interactions:
+        token = inter["token"]
+        if _has_stale_parent(token, inter["ts"], revoked):
+            checked += 1
+            if inter["status"] == "accepted":
+                violations.append(f"{inter['jti']}: stale/expired parent token was accepted")
+    if violations:
+        return [ValidationResult("auth_no_stale_parent", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "auth_no_stale_parent",
+            True,
+            f"checked {checked} potentially stale tokens",
+        )
+    ]
+
+
+def validate_auth_no_audience_confusion(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    interactions = _collect_auth_interactions(events)
+    violations: list[str] = []
+    checked = 0
+    for inter in interactions:
+        token = inter["token"]
+        if _has_audience_confusion(token, inter["presenter"]):
+            checked += 1
+            if inter["status"] == "accepted":
+                violations.append(f"{inter['jti']}: token with audience confusion was accepted")
+    if violations:
+        return [ValidationResult("auth_no_audience_confusion", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "auth_no_audience_confusion",
+            True,
+            f"checked {checked} potentially confused tokens",
+        )
+    ]
+
+
+def _parse_token_scopes(token_str: str) -> list[list[str]] | None:
+    parts = token_str.split("|")
+    if len(parts) % 2 != 0 or len(parts) < 2:
+        return None
+    scopes_list: list[list[str]] = []
+    for i in range(len(parts) // 2):
+        try:
+            data = json.loads(parts[2 * i])
+            scopes_list.append(data.get("scopes", []))
+        except Exception:
+            return None
+    return scopes_list
+
+
+def _has_scope_escalation(token_str: str) -> bool:
+    scopes_list = _parse_token_scopes(token_str)
+    if scopes_list is None:
+        return False
+    for i in range(1, len(scopes_list)):
+        parent_scopes = set(scopes_list[i - 1])
+        child_scopes = set(scopes_list[i])
+        if not child_scopes.issubset(parent_scopes):
+            return True
+    return False
+
+
+def _has_stale_parent(token_str: str, call_ts: float, revoked_jtis: dict[str, float]) -> bool:
+    parts = token_str.split("|")
+    if len(parts) % 2 != 0 or len(parts) < 2:
+        return False
+    for i in range(len(parts) // 2):
+        try:
+            data = json.loads(parts[2 * i])
+            # Check expiration
+            if data.get("exp", 0.0) < call_ts:
+                return True
+            # Check revocation
+            jti = data.get("jti")
+            if jti in revoked_jtis and revoked_jtis[jti] <= call_ts:
+                return True
+        except Exception:
+            return False
+    return False
+
+
+def _has_audience_confusion(token_str: str, presenter: str) -> bool:
+    parts = token_str.split("|")
+    if len(parts) % 2 != 0 or len(parts) < 2:
+        return False
+    try:
+        last_payload = json.loads(parts[-2])
+        expected = last_payload["aud"] if "aud" in last_payload else last_payload["sub"]
+        return str(presenter) != str(expected)
+    except Exception:
+        return False
+
+
+def _collect_revocations(events: list[dict[str, Any]]) -> dict[str, float]:
+    revoked: dict[str, float] = {}
+    for ev in events:
+        msg = _message_body(ev)
+        if (ev.get("kind") in ("send", "broadcast", "receive")) and msg.startswith("revoke_event:"):
+            jti = msg.partition(":")[2]
+            revoked[jti] = float(ev.get("ts", 0.0))
+    return revoked
+
+
+def _collect_auth_interactions(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    calls: dict[tuple[str, str], dict[str, Any]] = {}
+    acks: dict[tuple[str, str], str] = {}
+    for ev in events:
+        msg = _message_body(ev)
+        kind = ev.get("kind")
+        if kind == "receive" and msg.startswith("call:"):
+            parts = msg.split(":", 3)
+            if len(parts) == 4:
+                jti = parts[1]
+                presenter = ev.get("from", "")
+                calls[(jti, presenter)] = {
+                    "ts": float(ev.get("ts", 0.0)),
+                    "action": parts[2],
+                    "token": parts[3],
+                }
+        elif kind == "send" and msg.startswith("ack_call:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                jti = parts[1]
+                status = parts[2]
+                presenter = ev.get("to", "")
+                acks[(jti, presenter)] = status
+    interactions: list[dict[str, Any]] = []
+    for (jti, presenter), call in calls.items():
+        interactions.append(
+            {
+                "jti": jti,
+                "presenter": presenter,
+                "ts": call["ts"],
+                "action": call["action"],
+                "token": call["token"],
+                "status": acks.get((jti, presenter), "no_ack"),
+            }
+        )
+    return interactions
+
+
 # ---------------------------------------------------------------------------
 # Receipt-reputation (collusion-ring) validators
 # ---------------------------------------------------------------------------
@@ -2776,6 +2953,11 @@ def validate_bft_no_stuck_view(
 
 
 VALIDATORS: dict[str, list[Any]] = {
+    "delegated_auth": [
+        validate_auth_no_scope_escalation,
+        validate_auth_no_stale_parent,
+        validate_auth_no_audience_confusion,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,
