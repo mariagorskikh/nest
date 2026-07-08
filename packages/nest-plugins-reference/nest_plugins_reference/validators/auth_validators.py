@@ -36,6 +36,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from nest_core.types import AgentId
+
 from nest_plugins_reference.validators.gossip_validators import ValidatorReport
 
 if TYPE_CHECKING:

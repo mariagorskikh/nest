@@ -1,16 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-# Delegated auth scenario: a three-level capability tree under attack.
-# One intermediary attempts scope escalation, the coordinator revokes an
-# intermediary's grant mid-run, and one leaf presents a sibling's token.
-# Under auth: delegatable all three validators pass; under auth: jwt all
-# three fail (see nest_plugins_reference.validators.delegation_validators).
+# Delegated auth scenario: coordinator mints root tokens for intermediaries,
+# who delegate scoped-down tokens to leaf agents. Tests cascading revocation
+# and audience enforcement across the delegation tree.
 
 name: delegated_auth
 description: |
-  A coordinator delegates attenuated capabilities to 3 intermediaries,
-  which sub-delegate to 12 leaves. Adversarial behaviours: scope
-  escalation at delegation, presentation after ancestor revocation, and
-  audience confusion via a shared token.
+  1 coordinator, 3 intermediaries, and 12 leaf agents in a delegation tree.
+  The coordinator issues root tokens to intermediaries, who delegate
+  subset-scoped tokens to leaf agents. Mid-scenario, one intermediary is
+  revoked, and the validator confirms its leaf agents lose access while
+  other subtrees remain intact.
 
 tier: 1
 seed: 42
@@ -21,10 +20,16 @@ agents:
   roles:
     - name: coordinator
       count: 1
+      config:
+        initial_balance: 10000
     - name: intermediary
       count: 3
+      config:
+        initial_balance: 1000
     - name: leaf
       count: 12
+      config:
+        initial_balance: 100
 
 layers:
   transport: in_memory
@@ -43,15 +48,15 @@ layers:
 task:
   type: delegated_auth
   config:
-    revoke_tick: 20
-    presents: 4
-    present_interval: 10
+    rounds: 5
+    delegation_depth: 2
+    revoke_at_round: 3
 
 failures:
   message_drop: 0.0
   byzantine_agents: 0.0
 
-duration: "ticks: 100"
+duration: "ticks: 10000"
 
 metrics:
   - message_count
