@@ -32,6 +32,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("auth", "delegatable"): f"{_REF}.auth.delegatable:DelegatableAuth",
     ("auth", "mesh_revocable"): f"{_REF}.auth.mesh_revocable:MeshRevocableAuth",
     ("trust", "score_average"): f"{_REF}.trust.score_average:ScoreAverageTrust",
+    ("trust", "weighted"): f"{_REF}.trust.weighted:WeightedTrust",
     ("trust", "agent_receipts"): f"{_REF}.trust.agent_receipts:AgentReceiptsTrust",
     ("trust", "parc"): f"{_REF}.trust.parc:ParcTrust",
     ("trust", "aae_permit_gate"): f"{_REF}.trust.aae_permit_gate:AAEPermitGate",
