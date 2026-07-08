@@ -80,6 +80,80 @@ for r in validate_trace(Path('traces/memory_concurrent_writers.jsonl'), 'memory_
 
 The trace is byte-identical under seeds 42, 7, and 1337.
 
+## CRDT plugin: `or_set`
+
+`or_set` -- a state-based **observed-remove set CvRDT** (Shapiro, Preguica,
+Baquero & Zawirski 2011, §3.3.5). Where `lww_register` gives each key a single
+last-writer-wins *value*, `or_set` gives each key a *set* with principled add
+**and** remove: exactly what a claim/release marketplace needs. Every `add`
+mints a unique `(node_id, counter)` tag; every `remove` tombstones only the tags
+the remover has *observed*; an element is present iff it has an add-tag that is
+not tombstoned. Merge is the pairwise union of the add and tombstone sets
+(commutative, associative, idempotent), and concurrent `add`||`remove` resolves
+**add-wins**.
+
+Source: [`nest_plugins_reference/memory/or_set.py`](../../packages/nest-plugins-reference/nest_plugins_reference/memory/or_set.py).
+
+`read` returns the present-element list as canonical JSON (sorted,
+byte-deterministic); `write` takes a structured op `{"op": "add"|"remove",
+"element": <json>}`, with a plain-bytes fallback treated as an add. The per-key
+state stays grep-able in a trace::
+
+    {"crdt": "or_set", "adds": {"\"slot-1\"": [["agent-0", 1]]}, "removed": [["agent-1", 4]]}
+
+```python
+a = OrSetMemory("a")
+b = OrSetMemory("b")
+await a.write("held", b'{"op": "add", "element": "slot-1"}')
+await b.write("held", b'{"op": "add", "element": "slot-2"}')
+await b.merge("held", a.export("held"))   # gossip a -> b
+await a.merge("held", b.export("held"))   # gossip b -> a
+assert await a.read("held") == await b.read("held")   # converged, any order
+```
+
+### Why an OR-Set: a Byzantine-liveness gap `lww_register` has
+
+`lww_register.merge` adopts the higher Lamport clock
+(`lww_register.py:305`, `self._clock = max(self._clock, incoming.lamport)`), so
+a Byzantine replica that exports a register forged with `lamport = 2**60`
+silently suppresses every honest write with a smaller clock. An OR-Set has no
+global clock to forge: a Byzantine replica can inflate its own tag counters, but
+that only mints Byzantine-owned tags for Byzantine-owned elements -- it cannot
+tombstone an add-tag it never observed, so it cannot suppress an honest claim.
+
+`nest_core.validators` ships three checks for `or_set`:
+
+- `validate_memory_honest_write_liveness(make_replica, forge=..., honest_op=...,
+  is_visible=...)` -- a Byzantine replica forges state, an honest replica writes
+  before observing it, both gossip to convergence. It **fails** `lww_register`
+  (forged clock wins) and `blackboard` (later clobber), and **passes** `or_set`.
+- `validate_crdt_add_wins_convergence(make_replica, add_op=..., remove_op=...,
+  present=...)` -- concurrent `add`||`remove` on one element must converge
+  byte-identically *and* resolve add-wins. **Fails** `blackboard`, **passes**
+  `or_set`.
+- `validate_orset_claims_convergence` / `validate_orset_claims_honest_liveness`
+  -- registered for the `memory_orset_claims` scenario; confirm every replica's
+  final state is identical and every honest claim survived the attack.
+
+### Demo scenario
+
+`scenarios/memory_orset_claims.yaml` -- 10 honest replicas claim/release slot
+ids in one shared OR-Set under 10% message drop while **one Byzantine replica**
+injects forged, inflated-counter state throughout the run:
+
+```bash
+nest run scenarios/memory_orset_claims.yaml
+python -c "
+from pathlib import Path
+from nest_core.validators import validate_trace
+for r in validate_trace(Path('traces/memory_orset_claims.jsonl'), 'memory_orset_claims'):
+    print(('PASS' if r.passed else 'FAIL'), r.name, '-', r.detail)
+"
+```
+
+Every replica converges and all ten honest claims survive; the trace is
+byte-identical under seeds 42, 7, and 1337.
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

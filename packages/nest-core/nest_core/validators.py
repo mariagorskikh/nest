@@ -1234,6 +1234,411 @@ def validate_memory_convergence(
     return results
 
 
+async def validate_memory_honest_write_liveness(
+    make_replica: Callable[[str], Any],
+    *,
+    forge: Callable[[Any], bytes],
+    honest_op: bytes,
+    is_visible: Callable[[bytes | None], bool],
+    key: str = "slot",
+    replica_count: int = 3,
+) -> list[ValidationResult]:
+    """Adversarial *liveness* check: does an honest write survive a Byzantine replica?
+
+    Network-fault convergence checks (``validate_crdt_convergence``) assume every
+    replica is honest and only the *network* misbehaves. This check drops that
+    assumption. It models a single Byzantine replica that exports an
+    adversarially forged state, an honest replica that makes a legitimate write
+    it has *not yet* reconciled against the forgery, and then gossips both to
+    convergence. The property under test is **honest-write liveness**: a write
+    an honest replica committed before observing the attack must remain visible
+    on every honest replica afterwards. A plugin that resolves merges by
+    adopting an attacker-controlled logical clock (``lww_register``, whose
+    ``merge`` at ``lww_register.py:305`` blindly takes ``max(clock, incoming)``)
+    silently suppresses the honest write; a last-writer blackboard loses it to
+    the later clobber; a true observed-remove set keeps it, because a Byzantine
+    replica cannot tombstone an add-tag it never observed.
+
+    The forgery is plugin-specific, so it is injected via ``forge`` (given the
+    Byzantine replica, return the bytes it exports/gossips). Visibility is also
+    plugin-specific -- a register reads back a single value, a set reads back a
+    member list -- so it is injected via ``is_visible``. The *schedule* and the
+    *assertion* are fixed and identical for every plugin, which is what makes
+    this a fair, reusable discriminator.
+
+    Args:
+        make_replica: factory ``node_id -> plugin instance``.
+        forge: given the Byzantine replica, return the forged state it exports
+            (a forged CvRDT export for a CRDT plugin, or a raw adversarial value
+            for a non-CRDT plugin such as ``blackboard``).
+        honest_op: the write an honest replica commits before seeing the forgery.
+        is_visible: predicate on a replica's ``read`` result -- ``True`` iff the
+            honest write is still observable.
+        key: the shared key under attack.
+        replica_count: total replicas; ``node-0`` is Byzantine, the rest honest.
+
+    Example::
+
+        from nest_plugins_reference.memory.or_set import OrSetMemory
+        results = await validate_memory_honest_write_liveness(
+            OrSetMemory,
+            forge=lambda byz: byz.export("slot") or b"",
+            honest_op=b'{"op": "add", "element": "honest-claim"}',
+            is_visible=lambda v: v is not None and "honest-claim" in json.loads(v),
+        )
+        assert all(r.passed for r in results)
+    """
+    replicas = [make_replica(f"node-{i}") for i in range(replica_count)]
+    has_crdt = all(hasattr(r, "export") and hasattr(r, "merge") for r in replicas)
+    byz, honest = replicas[0], replicas[1:]
+
+    # T0: the Byzantine replica forges an adversarial state.
+    forged = forge(byz)
+
+    # T1: an honest replica makes a legitimate write BEFORE it has merged the
+    # forged state, so the write carries an ordinary (small) logical clock.
+    writer = honest[0]
+    await writer.write(key, honest_op)
+    honest_state = writer.export(key) if has_crdt else honest_op
+
+    # Gossip to convergence: every honest replica observes BOTH the forged state
+    # and the honest write. For a CvRDT, delivery order is irrelevant; for a
+    # non-CRDT store the later delivery clobbers, so we deliver the honest write
+    # first and the Byzantine value last -- the realistic propagation-window
+    # threat where the attack arrives after the honest write.
+    for r in honest:
+        if has_crdt:
+            await r.merge(key, forged)
+            await r.merge(key, honest_state)
+        else:
+            await r.write(key, honest_op)
+            await r.write(key, forged)
+
+    finals = [await r.read(key) for r in honest]
+    survived = all(is_visible(v) for v in finals)
+    if survived:
+        return [
+            ValidationResult(
+                "memory_honest_write_liveness",
+                True,
+                f"honest write stayed visible on all {len(honest)} honest replicas "
+                "after merging the Byzantine forgery",
+            )
+        ]
+    lost = sum(1 for v in finals if not is_visible(v))
+    return [
+        ValidationResult(
+            "memory_honest_write_liveness",
+            False,
+            f"Byzantine forgery suppressed the honest write on {lost}/{len(honest)} "
+            "honest replica(s)",
+        )
+    ]
+
+
+async def validate_crdt_add_wins_convergence(
+    make_replica: Callable[[str], Any],
+    *,
+    add_op: Callable[[str], bytes],
+    remove_op: Callable[[str], bytes],
+    present: Callable[[bytes | None], set[str]],
+    element: str = "slot-7",
+    key: str = "claims",
+    replica_count: int = 6,
+) -> list[ValidationResult]:
+    """Discriminating check: concurrent add||remove converges *and* resolves add-wins.
+
+    This is the memory-CRDT problem's mandatory set-semantics validator. It
+    drives ``replica_count`` replicas through a genuinely concurrent add/remove
+    interleaving on the *same* element: ``node-0`` adds and the add is observed
+    everywhere; then, concurrently, the odd replicas remove the element
+    (tombstoning the tag they observed) while the even replicas mint a *fresh*
+    add of the same element (a tag the removers never saw). After full
+    anti-entropy every replica must (1) read byte-identical state and (2) show
+    the element **present** -- the add-wins resolution an observed-remove set
+    guarantees. A blackboard has no set to converge and no notion of "present
+    after concurrent add/remove", so it fails; the same ops applied to an OR-Set
+    pass.
+
+    Args:
+        make_replica: factory ``node_id -> plugin instance``.
+        add_op: ``element -> write payload`` that adds the element.
+        remove_op: ``element -> write payload`` that removes the element.
+        present: ``read result -> set of present element keys`` adapter.
+        element: the element raced between add and remove.
+        key: the shared key.
+        replica_count: replica count (>= 3 for a meaningful interleaving).
+
+    Example::
+
+        from nest_plugins_reference.memory.or_set import OrSetMemory
+        results = await validate_crdt_add_wins_convergence(
+            OrSetMemory,
+            add_op=lambda e: json.dumps({"op": "add", "element": e}).encode(),
+            remove_op=lambda e: json.dumps({"op": "remove", "element": e}).encode(),
+            present=lambda v: set(json.loads(v)) if v else set(),
+        )
+        assert all(r.passed for r in results)
+    """
+    replicas = [make_replica(f"node-{i}") for i in range(replica_count)]
+    has_crdt = all(hasattr(r, "export") and hasattr(r, "merge") for r in replicas)
+
+    # Phase 1: node-0 adds the element; everyone observes that add.
+    await replicas[0].write(key, add_op(element))
+    base = replicas[0].export(key) if has_crdt else None
+    for r in replicas[1:]:
+        if has_crdt and base is not None:
+            await r.merge(key, base)
+        elif not has_crdt:
+            await r.write(key, add_op(element))
+
+    # Phase 2: concurrent divergence. Odd replicas remove (tombstoning the tag
+    # they observed); even replicas re-add (minting a fresh, unobserved tag).
+    for i, r in enumerate(replicas):
+        if i == 0:
+            continue
+        if i % 2 == 1:
+            await r.write(key, remove_op(element))
+        else:
+            await r.write(key, add_op(element))
+
+    # Phase 3: full anti-entropy in a fixed order (irrelevant for a CvRDT,
+    # decisive for a last-writer store).
+    states = [r.export(key) if has_crdt else None for r in replicas]
+    for i, r in enumerate(replicas):
+        for j in range(replica_count):
+            if i == j:
+                continue
+            if has_crdt:
+                st = states[j]
+                if st is not None:
+                    await r.merge(key, st)
+            else:
+                op = remove_op(element) if (j != 0 and j % 2 == 1) else add_op(element)
+                await r.write(key, op)
+
+    reads = [await r.read(key) for r in replicas]
+    canonical = {(v if v is not None else b"") for v in reads}
+    converged = len(canonical) == 1
+    add_wins = all(element in present(v) for v in reads)
+
+    results: list[ValidationResult] = []
+    if converged:
+        results.append(
+            ValidationResult(
+                "crdt_add_wins_converged",
+                True,
+                f"{replica_count} replicas converged to byte-identical state",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "crdt_add_wins_converged",
+                False,
+                f"replicas diverged into {len(canonical)} distinct state(s)",
+            )
+        )
+    if add_wins:
+        results.append(
+            ValidationResult(
+                "crdt_add_wins_resolution",
+                True,
+                f"concurrent add||remove of {element!r} resolved add-wins on all replicas",
+            )
+        )
+    else:
+        losers = sum(1 for v in reads if element not in present(v))
+        results.append(
+            ValidationResult(
+                "crdt_add_wins_resolution",
+                False,
+                f"{element!r} not present on {losers}/{replica_count} replicas "
+                "after concurrent add||remove (add-wins violated)",
+            )
+        )
+    return results
+
+
+def _orset_present_elements(state_json: str) -> set[str]:
+    """Return the present element keys of a serialized ``or_set`` state.
+
+    Parses the public ``{"adds": {ek: [[node, ctr], ...]}, "removed": [...]}``
+    JSON (no plugin import needed) and returns the element keys that carry at
+    least one add-tag absent from the tombstone set.
+    """
+    obj = json.loads(state_json)
+    if not isinstance(obj, dict):
+        return set()
+    data = cast("dict[str, Any]", obj)
+    adds_raw = data.get("adds", {})
+    removed_raw = data.get("removed", [])
+    if not isinstance(adds_raw, dict) or not isinstance(removed_raw, list):
+        return set()
+    removed = _tag_pairs(cast("list[Any]", removed_raw))
+    present: set[str] = set()
+    for element_key, tags in cast("dict[str, Any]", adds_raw).items():
+        if not isinstance(tags, list):
+            continue
+        if _tag_pairs(cast("list[Any]", tags)) - removed:
+            present.add(str(element_key))
+    return present
+
+
+def _tag_pairs(raw: list[Any]) -> set[tuple[Any, ...]]:
+    """Coerce a serialized ``[[node, counter], ...]`` list into a set of tuples."""
+    return {tuple(cast("list[Any]", t)) for t in raw if isinstance(t, list)}
+
+
+def validate_orset_claims_convergence(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: every OR-Set replica converged to byte-identical state.
+
+    The ``memory_orset_claims`` scenario has each replica broadcast its terminal
+    OR-Set export as a ``final:<json>`` record on stop. This validator confirms
+    every replica emitted exactly one such record and that all of them decode to
+    byte-identical state -- strong eventual consistency, held even though one
+    replica was injecting forged, inflated-counter adds throughout the run.
+    """
+    finals: dict[str, str] = {}
+    duplicates: set[str] = set()
+    malformed: list[str] = []
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("final:"):
+            continue
+        agent = str(ev.get("agent", ""))
+        body = msg[len("final:") :]
+        try:
+            parsed = json.loads(body)
+            canonical = json.dumps(parsed, sort_keys=True)
+        except (ValueError, TypeError):
+            malformed.append(agent)
+            continue
+        if agent in finals:
+            duplicates.add(agent)
+        finals[agent] = canonical
+
+    results: list[ValidationResult] = []
+    if malformed:
+        results.append(
+            ValidationResult(
+                "orset_claims_wellformed",
+                False,
+                f"{len(malformed)} malformed final record(s): {sorted(set(malformed))}",
+            )
+        )
+    if not finals:
+        results.append(
+            ValidationResult(
+                "orset_claims_convergence",
+                False,
+                "no final replica states found in trace",
+            )
+        )
+        return results
+
+    distinct = set(finals.values())
+    results.append(
+        ValidationResult(
+            "orset_claims_convergence",
+            len(distinct) == 1,
+            f"all {len(finals)} replicas converged to identical state"
+            if len(distinct) == 1
+            else f"{len(finals)} replicas hold {len(distinct)} distinct final states",
+        )
+    )
+    if duplicates:
+        results.append(
+            ValidationResult(
+                "orset_claims_one_final_per_agent",
+                False,
+                f"agents emitted multiple final records: {sorted(duplicates)}",
+            )
+        )
+    return results
+
+
+def validate_orset_claims_honest_liveness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: honest claims survived the Byzantine inflation attack.
+
+    Decodes the converged OR-Set state and asserts at least one honest claim
+    (an element keyed ``slot-*``) is still present. This is the trace-level
+    analogue of :func:`validate_memory_honest_write_liveness`: it proves the
+    Byzantine replica's inflated-counter forgery did not suppress the honest
+    claim/release traffic. It also confirms the attacker actually ran (its
+    forged marker element is present), so a silently no-op'd Byzantine agent
+    cannot make the check pass by doing nothing.
+    """
+    finals: list[str] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith("final:"):
+            finals.append(msg[len("final:") :])
+    if not finals:
+        return [
+            ValidationResult(
+                "orset_claims_honest_liveness",
+                False,
+                "no final replica states found in trace",
+            )
+        ]
+
+    try:
+        present = _orset_present_elements(finals[0])
+    except (ValueError, TypeError):
+        return [
+            ValidationResult(
+                "orset_claims_honest_liveness",
+                False,
+                "converged final state was not decodable OR-Set JSON",
+            )
+        ]
+
+    honest_claims: set[str] = set()
+    attacker_present = False
+    for element_key in present:
+        try:
+            value = json.loads(element_key)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(value, str) and value.startswith("slot-"):
+            honest_claims.add(value)
+        if isinstance(value, str) and value.startswith("BYZANTINE"):
+            attacker_present = True
+
+    results: list[ValidationResult] = []
+    results.append(
+        ValidationResult(
+            "orset_claims_honest_liveness",
+            bool(honest_claims),
+            f"{len(honest_claims)} honest claim(s) survived the Byzantine attack: "
+            f"{sorted(honest_claims)}"
+            if honest_claims
+            else "no honest claim survived -- the attack suppressed honest writes",
+        )
+    )
+    results.append(
+        ValidationResult(
+            "orset_claims_attacker_ran",
+            attacker_present,
+            "Byzantine forged element observed in converged state (attack actually ran)"
+            if attacker_present
+            else "no Byzantine element found -- attacker silently no-op'd, "
+            "so liveness was never tested",
+        )
+    )
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Streaming payments validators
 # ---------------------------------------------------------------------------
@@ -4081,6 +4486,11 @@ VALIDATORS: dict[str, list[Any]] = {
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
+        validate_memory_liveness,
+    ],
+    "memory_orset_claims": [
+        validate_orset_claims_convergence,
+        validate_orset_claims_honest_liveness,
         validate_memory_liveness,
     ],
     "streaming_payments": [

@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# OR-Set claim/release marketplace: 10 honest replicas concurrently claim (add)
+# and release (remove) slot ids in one shared observed-remove set, gossiping to
+# convergence under 10% message loss, while ONE Byzantine replica injects a
+# forged, inflated-counter state (the OR-Set analogue of the lww_register
+# lamport=2**60 clock-forgery attack). Every replica still converges to
+# byte-identical state and every honest claim survives -- the memory_orset_claims
+# validators (convergence + honest-liveness + attacker-actually-ran) all pass.
+name: memory_orset_claims
+description: |
+  10 honest claimants plus 1 Byzantine forger share one OR-Set key under 10%
+  message drop. Honest replicas claim/release slot ids concurrently; the
+  Byzantine replica injects inflated-counter forged adds and fabricated honest
+  tombstones throughout the run. Add-wins convergence holds and no honest claim
+  is suppressed. Deterministic under seeds 42, 7, 1337.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 11
+  brain: state-machine
+  roles:
+    - name: claimant
+      count: 10
+    - name: byzantine
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: or_set
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: memory_orset_claims
+  config:
+    claimants: 10
+    rounds: 30
+
+failures:
+  message_drop: 0.1
+
+duration: "ticks: 100000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/memory_orset_claims.jsonl
