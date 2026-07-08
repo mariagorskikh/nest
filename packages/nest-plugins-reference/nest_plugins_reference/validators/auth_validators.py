@@ -99,12 +99,24 @@ async def check_stale_parent_invalidates_child(auth: DelegatableAuth) -> Validat
     from nest_plugins_reference.auth.delegatable import RevokedAncestorError
 
     root = await auth.issue(AgentId("admin"), ["read", "write"])
-    child = await auth.delegate(
-        root,
-        audience=AgentId("worker"),
-        scopes=["read"],
-        ttl=100,
-    )
+    try:
+        child = await auth.delegate(
+            root,
+            audience=AgentId("worker"),
+            scopes=["read"],
+            ttl=100,
+        )
+    except AttributeError:
+        return ValidatorReport(
+            passed=False,
+            detail="plugin does not support delegate() — stale-parent attack undefended",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ValidatorReport(
+            passed=False,
+            detail=f"delegate() raised unexpected exception: {exc}",
+        )
+
     # Child should verify before revocation
     try:
         await auth.verify(child, presenter=AgentId("worker"))
@@ -154,12 +166,24 @@ async def check_audience_enforced(auth: DelegatableAuth) -> ValidatorReport:
     from nest_plugins_reference.auth.delegatable import AudienceMismatchError
 
     root = await auth.issue(AgentId("admin"), ["read"])
-    child = await auth.delegate(
-        root,
-        audience=AgentId("worker"),
-        scopes=["read"],
-        ttl=100,
-    )
+    try:
+        child = await auth.delegate(
+            root,
+            audience=AgentId("worker"),
+            scopes=["read"],
+            ttl=100,
+        )
+    except AttributeError:
+        return ValidatorReport(
+            passed=False,
+            detail="plugin does not support delegate() — audience confusion undefended",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ValidatorReport(
+            passed=False,
+            detail=f"delegate() raised unexpected exception: {exc}",
+        )
+
     try:
         await auth.verify(child, presenter=AgentId("eve"))
         return ValidatorReport(

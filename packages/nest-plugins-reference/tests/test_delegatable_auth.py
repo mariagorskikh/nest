@@ -21,6 +21,7 @@ from nest_plugins_reference.auth.delegatable import (
     RevokedAncestorError,
     ScopeEscalationError,
 )
+from nest_plugins_reference.auth.jwt_auth import JwtAuth
 from nest_plugins_reference.validators.auth_validators import (
     check_audience_enforced,
     check_no_scope_escalation,
@@ -276,6 +277,95 @@ class TestAdversarial:
                 scopes=["read"],
                 ttl=10000,
             )
+
+
+class TestValidatorsFailAgainstJwt:
+    """Adversarial validators MUST fail against the reference ``jwt_auth`` plugin.
+
+    Each test demonstrates that the reference plugin cannot prevent the attack
+    that ``DelegatableAuth`` prevents.  The same validators pass against
+    ``DelegatableAuth`` (tested in :class:`TestAdversarial`).
+    """
+
+    @pytest.fixture
+    def jwt(self) -> JwtAuth:
+        return JwtAuth(secret=b"test-secret")
+
+    @pytest.mark.asyncio
+    async def test_scope_escalation_validator_fails_jwt(self, jwt: JwtAuth) -> None:
+        """check_no_scope_escalation returns passed=False for jwt_auth."""
+        report = await check_no_scope_escalation(jwt)  # type: ignore[arg-type]
+        assert not report.passed, report.detail
+
+    @pytest.mark.asyncio
+    async def test_stale_parent_validator_fails_jwt(self, jwt: JwtAuth) -> None:
+        """check_stale_parent_invalidates_child returns passed=False for jwt_auth."""
+        report = await check_stale_parent_invalidates_child(jwt)  # type: ignore[arg-type]
+        assert not report.passed, report.detail
+
+    @pytest.mark.asyncio
+    async def test_audience_validator_fails_jwt(self, jwt: JwtAuth) -> None:
+        """check_audience_enforced returns passed=False for jwt_auth."""
+        report = await check_audience_enforced(jwt)  # type: ignore[arg-type]
+        assert not report.passed, report.detail
+
+    @pytest.mark.asyncio
+    async def test_jwt_no_scope_enforcement(self, jwt: JwtAuth) -> None:
+        """jwt_auth has no delegate() — once a token is issued any holder
+        can use all its scopes; there is no mechanism to issue a *restricted*
+        child token."""
+        token = await jwt.issue(AgentId("admin"), ["read", "write"])
+        ctx = await jwt.verify(token)
+        # Holder can use any scope, no delegation concept exists
+        assert set(ctx.scopes) == {"read", "write"}
+
+    @pytest.mark.asyncio
+    async def test_jwt_allows_stale_parent(self, jwt: JwtAuth) -> None:
+        """jwt_auth: revoking one token does not affect any other token.
+
+        Because there is no parent-child chain, revoking an "issuer" token has
+        no effect on tokens issued independently.
+        """
+        # Use explicit clock so tokens are distinct
+        jwt._clock = 0.0
+        token_a = await jwt.issue(AgentId("admin"), ["read"])
+        jwt._clock = 1.0
+        token_b = await jwt.issue(AgentId("admin"), ["read"])
+        await jwt.revoke(token_a)
+        # token_b still verifies — no parent-child link
+        ctx = await jwt.verify(token_b)
+        assert ctx.subject == AgentId("admin")
+
+    @pytest.mark.asyncio
+    async def test_jwt_no_audience_enforcement(self, jwt: JwtAuth) -> None:
+        """jwt_auth: no audience claim — any presenter passes verification."""
+        token = await jwt.issue(AgentId("alice"), ["read"])
+        # No presenter parameter exists in jwt_auth.verify
+        ctx = await jwt.verify(token)
+        assert ctx.subject == AgentId("alice")
+
+    @pytest.mark.asyncio
+    async def test_delegatable_stale_parent_blocked(self) -> None:
+        """DelegatableAuth: revoking parent cascades to child."""
+        auth = DelegatableAuth(secret=b"test-secret")
+        root = await auth.issue(AgentId("admin"), ["read"])
+        child = await auth.delegate(
+            root, audience=AgentId("worker"), scopes=["read"], ttl=100,
+        )
+        await auth.revoke(root)
+        with pytest.raises(RevokedAncestorError):
+            await auth.verify(child, presenter=AgentId("worker"))
+
+    @pytest.mark.asyncio
+    async def test_delegatable_audience_enforced(self) -> None:
+        """DelegatableAuth: presenter must match token audience."""
+        auth = DelegatableAuth(secret=b"test-secret")
+        root = await auth.issue(AgentId("admin"), ["read"])
+        child = await auth.delegate(
+            root, audience=AgentId("worker"), scopes=["read"], ttl=100,
+        )
+        with pytest.raises(AudienceMismatchError):
+            await auth.verify(child, presenter=AgentId("eve"))
 
 
 class TestDeterminism:
