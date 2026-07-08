@@ -1,0 +1,14 @@
+.venv
+venv
+node_modules
+__pycache__
+*.pyc
+.git
+.github
+.next
+.pytest_cache
+.ruff_cache
+apps/nest-dashboard/node_modules
+apps/nest-dashboard/.next
+traces/
+*.jsonl
