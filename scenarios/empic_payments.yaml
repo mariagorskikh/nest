@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# EMPIC-style weather payments: pull escrow plus pubsub metered delivery.
+
+name: empic_payments
+description: |
+  Consumers and providers trade weather data with EMPIC-shaped escrow.
+  Pull requests release only after acceptable data. Pubsub releases one
+  tick of payment for each accepted delivery and refunds unused escrow.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: provider
+      count: 5
+      config:
+        initial_balance: 1000
+    - name: consumer
+      count: 5
+      config:
+        initial_balance: 1000
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: empic_escrow
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: empic_payments
+  config:
+    max_age_ticks: 3
+    acceptance_policy:
+      required_fields:
+        - temperature_c
+        - temperature_f
+        - windspeed_kmh
+        - timestamp
+        - tick
+      numeric_ranges:
+        temperature_c:
+          min: -50
+          max: 60
+        temperature_f:
+          min: -58
+          max: 140
+        windspeed_kmh:
+          min: 0
+          max: 300
+      bind_service_id: true
+      bind_provider_id: true
+      bind_request_params: true
+      max_age_ticks: 3
+      max_spend: 100
+
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+
+duration: "ticks: 2000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/empic_payments.jsonl

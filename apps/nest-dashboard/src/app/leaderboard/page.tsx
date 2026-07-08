@@ -84,11 +84,6 @@ export default function LeaderboardPage() {
       {/* Header */}
       <section className="paper-texture border-b border-cream-400/70">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-16">
-          <div className="flex items-center gap-3 mb-10 animate-fade-in">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-rust" />
-            <span className="eyebrow">Tier 1 reference benchmarks</span>
-          </div>
-
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.6rem,6vw,5rem)] leading-[1.02] tracking-tight text-ink-900">
               Reproducible<br />
@@ -299,14 +294,7 @@ export default function LeaderboardPage() {
                 </h2>
               </div>
               <div>
-                <p className="text-[1rem] leading-[1.65] text-ink-500">
-                  Rankings come from Tier 1 reference runs. Re-run with the same
-                  seed and you get the same numbers. Tier 1 uses virtual
-                  tick-based time with no transport failures, so delivery rates
-                  are expected to be near 100%.
-                </p>
-
-                <div className="mt-8 grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2">
+                <div className="grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2">
                   {[
                     {
                       label: 'Delivery rate',
