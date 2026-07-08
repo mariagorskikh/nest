@@ -19,7 +19,7 @@ import asyncio
 
 import pytest
 from nest_core.types import AgentId
-from nest_plugins_reference.identity.chainaim.ed25519_prerotation import (
+from nest_plugins_reference.identity.ed25519_prerotation import (
     ALGORITHM,
     Ed25519PreRotatingIdentity,
     KeyId,

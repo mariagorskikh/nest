@@ -78,7 +78,7 @@ def _try_load_builtin(name: str) -> None:
 
         register_scenario("identity_rotation", identity_rotation_factory)
     elif name == "identity_prerotation":
-        from nest_core.scenarios_builtin.chainaim.identity_prerotation import (
+        from nest_core.scenarios_builtin.identity_prerotation import (
             identity_prerotation_factory,
         )
 

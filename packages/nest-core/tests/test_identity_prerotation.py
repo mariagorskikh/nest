@@ -17,12 +17,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from nest_core.chainaim import validate_identity_prerotation
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
 from nest_core.types import AgentId
-from nest_core.validators import validate_trace
-from nest_plugins_reference.identity.chainaim.ed25519_prerotation import (
+from nest_core.validators import validate_identity_prerotation, validate_trace
+from nest_plugins_reference.identity.ed25519_prerotation import (
     Ed25519PreRotatingIdentity,
 )
 
@@ -217,7 +216,7 @@ class TestAttackDirection:
 # End-to-end scenario tests (runner + trace + registry-dispatched validators)
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).parent.parent.parent.parent.parent
+_REPO_ROOT = Path(__file__).parent.parent.parent.parent
 _OUR_YAML = _REPO_ROOT / "scenarios" / "identity_prerotation.yaml"
 _MERGED_YAML = _REPO_ROOT / "scenarios" / "identity_rotation.yaml"
 

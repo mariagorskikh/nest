@@ -43,7 +43,7 @@ hybrid_x25519 = "nest_plugins_reference.privacy.hybrid_x25519:HybridX25519Privac
 cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
 
 [project.entry-points."nest.plugins.identity"]
-ed25519_prerotation = "nest_plugins_reference.identity.chainaim.ed25519_prerotation:Ed25519PreRotatingIdentity"
+ed25519_prerotation = "nest_plugins_reference.identity.ed25519_prerotation:Ed25519PreRotatingIdentity"
 
 [build-system]
 requires = ["hatchling"]

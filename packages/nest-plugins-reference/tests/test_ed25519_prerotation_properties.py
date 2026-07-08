@@ -35,7 +35,7 @@ import hashlib
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from nest_core.types import AgentId
-from nest_plugins_reference.identity.chainaim.ed25519_prerotation import (
+from nest_plugins_reference.identity.ed25519_prerotation import (
     Ed25519PreRotatingIdentity,
 )
 

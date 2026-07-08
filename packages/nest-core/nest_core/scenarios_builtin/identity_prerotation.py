@@ -310,7 +310,7 @@ class ByzantineSigner(StateMachineAgent):
     async def _emit_attacks(self, ctx: AgentContext, ident: Any) -> None:
         """Post-rotation forgery with the stale key, then a backdated signature."""
         if self._old_key_id and hasattr(ident, "sign_with"):
-            from nest_plugins_reference.identity.chainaim.ed25519_prerotation import KeyId
+            from nest_plugins_reference.identity.ed25519_prerotation import KeyId
 
             forged = ident.sign_with(
                 f"forged:{self._id}:{self._round}".encode(), KeyId(self._old_key_id)

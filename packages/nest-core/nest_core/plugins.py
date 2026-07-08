@@ -23,7 +23,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("identity", "did_key"): f"{_REF}.identity.did_key:DidKeyIdentity",
     ("identity", "ed25519_rotating"): (f"{_REF}.identity.ed25519_rotating:Ed25519RotatingIdentity"),
     ("identity", "ed25519_prerotation"): (
-        f"{_REF}.identity.chainaim.ed25519_prerotation:Ed25519PreRotatingIdentity"
+        f"{_REF}.identity.ed25519_prerotation:Ed25519PreRotatingIdentity"
     ),
     ("registry", "in_memory"): f"{_REF}.registry.in_memory:InMemoryRegistry",
     ("registry", "gossip"): f"{_REF}.registry.gossip:GossipRegistry",
