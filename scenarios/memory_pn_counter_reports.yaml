@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# PN-Counter scenario: calculator-project evidence survives lossy gossip and
+# irrelevant copypasta-like noise contributes only its explicit signed penalty.
+name: memory_pn_counter_reports
+description: "8 agents aggregate signed calculator-project evidence with PN-Counter memory."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 8
+  brain: state-machine
+  roles:
+    - name: reporter
+      count: 8
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: pn_counter
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: memory_pn_counter_reports
+  config:
+    rounds: 20
+    key: calculator:ready_score
+    # Positive entries are implementation/test evidence for a simple calculator.
+    # Negative entries model irrelevant copypasta/noise and failing checks.
+    deltas: [2, 2, 1, -1, 3, -2, 1, 1]
+
+failures:
+  message_drop: 0.1
+
+duration: "ticks: 100000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/memory_pn_counter_reports.jsonl

@@ -39,6 +39,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("negotiation", "pareto"): f"{_REF}.negotiation.pareto:ParetoNegotiation",
     ("memory", "blackboard"): f"{_REF}.memory.blackboard:Blackboard",
     ("memory", "lww_register"): f"{_REF}.memory.lww_register:LwwRegisterMemory",
+    ("memory", "pn_counter"): f"{_REF}.memory.pn_counter:PnCounterMemory",
     ("privacy", "noop"): f"{_REF}.privacy.noop:NoopPrivacy",
     ("privacy", "hybrid_x25519"): f"{_REF}.privacy.hybrid_x25519:HybridX25519Privacy",
     ("datafacts", "datafacts_v1"): f"{_REF}.datafacts.datafacts_v1:DataFactsV1",

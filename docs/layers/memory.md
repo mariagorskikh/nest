@@ -87,3 +87,71 @@ entry point group `nest.plugins.memory`.
 
 Good fits to test here: CRDTs (LWW-Register, OR-Set), tuple spaces,
 eventually-consistent stores, snapshot isolation.
+
+## CRDT plugin: `pn_counter`
+
+`pn_counter` -- a state-based **PN-Counter CvRDT** for signed evidence
+aggregation. Where `lww_register` picks one winning payload, `pn_counter`
+preserves every observed positive and negative delta exactly once. This is the
+right memory shape for vote deltas, reputation reports, calculator-project
+readiness scores, or any workflow where concurrent updates should accumulate
+instead of clobbering one another.
+
+The mathematical state is two grow-only maps:
+
+```text
+positive: node -> non-negative integer
+negative: node -> non-negative integer
+value = sum(positive) - sum(negative)
+merge = pointwise max on both maps
+```
+
+The merge is commutative, associative, and idempotent. In the language of
+structured memory, convergence is not enough: the invariant is that every
+signed evidence contribution survives gossip exactly once.
+
+```python
+a = PnCounterMemory("builder")
+b = PnCounterMemory("tester")
+await a.write("calculator:ready_score", b'{"op":"inc","amount":2}')
+await b.write("calculator:ready_score", b'{"op":"dec","amount":1}')
+await a.merge("calculator:ready_score", b.export("calculator:ready_score"))
+await b.merge("calculator:ready_score", a.export("calculator:ready_score"))
+assert await a.read("calculator:ready_score") == b"1"
+```
+
+### Demo scenario
+
+`scenarios/memory_pn_counter_reports.yaml` -- 8 agents aggregate signed
+calculator-project evidence while one noisy stream contributes an explicit
+negative signal for irrelevant copypasta-like contamination. The validator
+checks both convergence and preservation of the signed total:
+
+```bash
+nest run scenarios/memory_pn_counter_reports.yaml
+python -c "
+from pathlib import Path
+from nest_core.validators import validate_trace
+for r in validate_trace(Path('traces/memory_pn_counter_reports.jsonl'), 'memory_pn_counter_reports'):
+    print(('PASS' if r.passed else 'FAIL'), r.name, '-', r.detail)
+"
+```
+
+`scenarios/memory_basis_fusion_calculator.yaml` -- a coordinator acts like a
+small typed memory brain. Reports can fuse into the `calculator` node only if
+they restrict onto one of its declared basis dimensions: `add`, `subtract`,
+`multiply`, or `divide`. A large copypasta payload has no legal overlap, and an
+otherwise well-formed `"horoscope"` report is outside the node's basis, so both
+are ignored instead of being stored as meaningful evidence. The coordinator
+ships only after all required basis dimensions fuse and the PN-Counter score
+reaches the action threshold:
+
+```bash
+nest run scenarios/memory_basis_fusion_calculator.yaml
+python -c "
+from pathlib import Path
+from nest_core.validators import validate_trace
+for r in validate_trace(Path('traces/memory_basis_fusion_calculator.jsonl'), 'memory_basis_fusion_calculator'):
+    print(('PASS' if r.passed else 'FAIL'), r.name, '-', r.detail)
+"
+```

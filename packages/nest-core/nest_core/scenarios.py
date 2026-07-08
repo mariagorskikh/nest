@@ -87,6 +87,18 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("memory_concurrent_writers", memory_concurrent_writers_factory)
+    elif name == "memory_pn_counter_reports":
+        from nest_core.scenarios_builtin.memory_pn_counter_reports import (
+            memory_pn_counter_reports_factory,
+        )
+
+        register_scenario("memory_pn_counter_reports", memory_pn_counter_reports_factory)
+    elif name == "memory_basis_fusion_calculator":
+        from nest_core.scenarios_builtin.memory_basis_fusion_calculator import (
+            memory_basis_fusion_calculator_factory,
+        )
+
+        register_scenario("memory_basis_fusion_calculator", memory_basis_fusion_calculator_factory)
     elif name == "comms_versioning":
         from nest_core.scenarios_builtin.comms_versioning import comms_versioning_factory
 

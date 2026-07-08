@@ -1234,6 +1234,216 @@ def validate_memory_convergence(
     return results
 
 
+def validate_pn_counter_delta_preservation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: converged PN-Counter total equals all signed deltas.
+
+    The ``memory_pn_counter_reports`` scenario records every intended evidence
+    update as ``pn_delta|<key>|<delta>`` and every terminal replica state as
+    ``final:<json>``. This validator checks the mathematical invariant that
+    convergence preserves the aggregate signed evidence, not merely one winning
+    payload.
+
+    Example::
+
+        results = validate_pn_counter_delta_preservation(events)
+    """
+    deltas: dict[str, int] = defaultdict(int)
+    finals: dict[str, dict[str, int]] = defaultdict(dict)
+    malformed: list[str] = []
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        msg = str(ev.get("msg", ""))
+        if msg.startswith("pn_delta|"):
+            parts = msg.split("|", 2)
+            if len(parts) != 3:
+                malformed.append(agent)
+                continue
+            key, raw_delta = parts[1], parts[2]
+            try:
+                deltas[key] += int(raw_delta)
+            except ValueError:
+                malformed.append(agent)
+        elif msg.startswith("final:"):
+            body = msg[len("final:") :]
+            try:
+                parsed_obj = json.loads(body)
+            except (TypeError, ValueError):
+                malformed.append(agent)
+                continue
+            if not isinstance(parsed_obj, dict):
+                malformed.append(agent)
+                continue
+            parsed = cast("dict[str, Any]", parsed_obj)
+            if parsed.get("crdt") != "pn_counter":
+                continue
+            positive_obj = parsed.get("positive", {})
+            negative_obj = parsed.get("negative", {})
+            if not isinstance(positive_obj, dict) or not isinstance(negative_obj, dict):
+                malformed.append(agent)
+                continue
+            positive = cast("dict[str, Any]", positive_obj)
+            negative = cast("dict[str, Any]", negative_obj)
+            try:
+                pos_total = sum(int(v) for v in positive.values())
+                neg_total = sum(int(v) for v in negative.values())
+                finals[agent]["value"] = pos_total - neg_total
+            except (TypeError, ValueError):
+                malformed.append(agent)
+
+    results: list[ValidationResult] = []
+    if malformed:
+        results.append(
+            ValidationResult(
+                "pn_counter_wellformed",
+                False,
+                f"{len(malformed)} malformed delta/final record(s): {sorted(set(malformed))}",
+            )
+        )
+
+    if not deltas:
+        results.append(
+            ValidationResult(
+                "pn_counter_delta_preservation",
+                False,
+                "no pn_delta records found in trace",
+            )
+        )
+        return results
+    if not finals:
+        results.append(
+            ValidationResult(
+                "pn_counter_delta_preservation",
+                False,
+                "no PN-Counter final states found in trace",
+            )
+        )
+        return results
+
+    expected = sum(deltas.values())
+    observed = {state["value"] for state in finals.values() if "value" in state}
+    if observed == {expected}:
+        results.append(
+            ValidationResult(
+                "pn_counter_delta_preservation",
+                True,
+                f"all {len(finals)} replicas converged to signed total {expected}",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "pn_counter_delta_preservation",
+                False,
+                f"expected signed total {expected}, observed {sorted(observed)}",
+            )
+        )
+    return results
+
+
+def validate_basis_fusion_calculator_action(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Validate basis-restricted calculator fusion and resulting action.
+
+    Reports should fuse only through declared calculator basis dimensions. The
+    copypasta/no-overlap report may saturate context, but it must remain ignored
+    and must not prevent the coordinator from shipping after the required basis
+    has fused.
+
+    Example::
+
+        results = validate_basis_fusion_calculator_action(events)
+    """
+    required = {"add", "subtract", "multiply", "divide"}
+    accepted: set[str] = set()
+    ignored_reasons: set[str] = set()
+    decisions: list[str] = []
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith("fusion_accept|"):
+            parts = msg.split("|")
+            if len(parts) >= 3 and parts[1] == "calculator":
+                accepted.add(parts[2])
+        elif msg.startswith("fusion_ignore|"):
+            parts = msg.split("|")
+            if len(parts) >= 3:
+                ignored_reasons.add(parts[2])
+        elif msg.startswith("decision|calculator|"):
+            decisions.append(msg)
+
+    results: list[ValidationResult] = []
+    missing = required - accepted
+    if missing:
+        results.append(
+            ValidationResult(
+                "basis_fusion_required_basis",
+                False,
+                f"calculator basis did not fully fuse; missing {sorted(missing)}",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "basis_fusion_required_basis",
+                True,
+                f"calculator fused required basis {sorted(required)}",
+            )
+        )
+
+    saturation_reasons = {"no-overlap", "not-json", "not-object"}
+    if ignored_reasons & saturation_reasons and "outside-basis" in ignored_reasons:
+        results.append(
+            ValidationResult(
+                "basis_fusion_ignores_context_saturation",
+                True,
+                "context saturation and off-basis reports were ignored",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "basis_fusion_ignores_context_saturation",
+                False,
+                "expected one context-saturation ignore and one outside-basis ignore, "
+                f"saw {sorted(ignored_reasons)}",
+            )
+        )
+
+    ship_decisions = [d for d in decisions if "|ship|" in d]
+    ignored_counts: list[int] = []
+    for decision in ship_decisions:
+        for field in decision.split("|"):
+            if field.startswith("ignored="):
+                with contextlib.suppress(ValueError):
+                    ignored_counts.append(int(field.removeprefix("ignored=")))
+    if len(ship_decisions) == 1 and ignored_counts and ignored_counts[0] >= 2:
+        results.append(
+            ValidationResult(
+                "basis_fusion_action",
+                True,
+                ship_decisions[0],
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "basis_fusion_action",
+                False,
+                "expected exactly one ship decision after ignoring saturation/off-basis "
+                f"reports, saw {ship_decisions}",
+            )
+        )
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Streaming payments validators
 # ---------------------------------------------------------------------------
@@ -4082,6 +4292,15 @@ VALIDATORS: dict[str, list[Any]] = {
     "memory_concurrent_writers": [
         validate_memory_convergence,
         validate_memory_liveness,
+    ],
+    "memory_pn_counter_reports": [
+        validate_memory_convergence,
+        validate_pn_counter_delta_preservation,
+        validate_memory_liveness,
+    ],
+    "memory_basis_fusion_calculator": [
+        validate_basis_fusion_calculator_action,
+        validate_pn_counter_delta_preservation,
     ],
     "streaming_payments": [
         validate_streaming_conservation,
