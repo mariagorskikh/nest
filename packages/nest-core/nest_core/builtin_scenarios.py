@@ -3,7 +3,8 @@
 
 These helpers expose the bundled reference scenarios (``marketplace``,
 ``auction``, ``voting``, ``consensus``, ``supply_chain``, ``reputation``,
-``shell_marketplace``) so users can run them without cloning the repo:
+``shell_marketplace``, ``delegated_auth``) so users
+can run them without cloning the repo:
 
     nest run marketplace
     nest scenarios list

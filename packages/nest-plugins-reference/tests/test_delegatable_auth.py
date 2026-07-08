@@ -1,181 +1,387 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the delegatable capability-token auth plugin.
-
-Covers issuance, offline delegation, scope attenuation, TTL clamping,
-cascading revocation across deep chains, audience binding, the three
-adversarial patterns from the problem brief (scope escalation, stale
-parent, audience confusion), and base ``Auth`` protocol compatibility.
-"""
+"""Tests for delegatable Auth tokens with cascading revocation."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+from typing import Any, cast
+
 import pytest
 from nest_core.layers.auth import Auth
+from nest_core.plugins import PluginRegistry
 from nest_core.types import AgentId, Token
+from nest_plugins_reference.auth import delegatable as delegatable_module
 from nest_plugins_reference.auth.delegatable import (
     AudienceMismatchError,
     DelegatableAuth,
     DelegationError,
     ExpiredAncestorError,
+    MalformedTokenError,
     RevokedAncestorError,
     ScopeEscalationError,
+    TtlEscalationError,
+    scope_covers,
 )
-from nest_plugins_reference.auth.jwt_auth import JwtAuth
-
-ROOT = AgentId("coordinator")
-MID = AgentId("intermediary")
-LEAF = AgentId("leaf")
 
 
-def _auth(clock: float = 0.0) -> DelegatableAuth:
-    return DelegatableAuth(secret=b"test-secret", clock=clock)
+def _canonical(value: dict[str, Any]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+
+
+def _decode(token: Token) -> dict[str, Any]:
+    encoded = str(token).split(".", 1)[1]
+    padded = encoded + "=" * (-len(encoded) % 4)
+    data: Any = json.loads(base64.urlsafe_b64decode(padded.encode()))
+    assert isinstance(data, dict)
+    return cast("dict[str, Any]", data)
+
+
+def _encode(data: dict[str, Any]) -> Token:
+    raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+    encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return Token(f"ndcap1.{encoded}")
+
+
+def _segment_id(segment: dict[str, Any]) -> str:
+    claims = cast("dict[str, Any]", segment["claims"])
+    payload = _canonical(claims) + b"." + str(segment["sig"]).encode()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _append_forged_child(parent: Token, claims: dict[str, Any]) -> Token:
+    data = _decode(parent)
+    chain = data["chain"]
+    assert isinstance(chain, list)
+    chain_values = cast("list[Any]", chain)
+    parent_segment_obj = chain_values[-1]
+    assert isinstance(parent_segment_obj, dict)
+    parent_segment = cast("dict[str, Any]", parent_segment_obj)
+    parent_claims = cast("dict[str, Any]", parent_segment["claims"])
+    claims["pid"] = _segment_id(parent_segment)
+    claims["depth"] = int(parent_claims["depth"]) + 1
+    key = bytes.fromhex(str(parent_segment["sig"]))
+    child = {"claims": claims, "sig": hmac.new(key, _canonical(claims), hashlib.sha256).hexdigest()}
+    return _encode({"chain": [*chain, child]})
 
 
 @pytest.mark.asyncio
 async def test_satisfies_auth_protocol() -> None:
-    auth = _auth()
-    assert isinstance(auth, Auth)
+    assert isinstance(DelegatableAuth(clock=0.0), Auth)
 
 
 @pytest.mark.asyncio
-async def test_issue_and_verify_root() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    ctx = await auth.verify(root)
-    assert ctx.subject == ROOT
-    assert sorted(ctx.scopes) == ["read", "write"]
+async def test_default_clock_uses_current_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = 100.0
+    monkeypatch.setattr(delegatable_module.time, "time", lambda: now)
+    auth = DelegatableAuth()
+    root = await auth.issue(AgentId("coordinator-0"), ["scribe:*"])
+
+    await auth.verify(root)
+    now = 3701.0
+
+    with pytest.raises(ExpiredAncestorError):
+        await auth.verify(root)
 
 
 @pytest.mark.asyncio
-async def test_delegate_offline_and_verify_child() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    ctx = await auth.verify(child)
-    assert ctx.subject == MID
-    assert ctx.scopes == ["read"]
+async def test_delegates_strictly_narrower_scopes() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    root = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*", "scribe:verify"])
+
+    child = await auth.delegate(
+        root,
+        audience=AgentId("leaf-0"),
+        scopes_subset=["efs.write:/agents/leaf-0/*", "scribe:verify"],
+        ttl=10.0,
+    )
+    ctx = await auth.verify_for(child, AgentId("leaf-0"))
+
+    assert ctx.subject == AgentId("leaf-0")
+    assert ctx.scopes == ["efs.write:/agents/leaf-0/*", "scribe:verify"]
+    assert ctx.expires_at == 10.0
 
 
 @pytest.mark.asyncio
-async def test_scope_escalation_raises_at_mint() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
+async def test_rejects_scope_escalation() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/a/*"])
+
     with pytest.raises(ScopeEscalationError):
-        await auth.delegate(root, MID, ["read", "admin"], ttl=60.0)
+        await auth.delegate(
+            parent,
+            audience=AgentId("leaf-0"),
+            scopes_subset=["efs.write:/agents/b/*"],
+            ttl=10.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_scope",
+    [
+        "efs.write:/agents/../private/*",
+        "efs.write:/agents/./leaf-0/*",
+        "efs.write:/agents//leaf-0/*",
+        "efs.write:",
+        "efs.write:/",
+        "efs.write:agents/leaf-0/*",
+        "efs.write:/agents/leaf-0/*/report.json",
+        "efs.write:/agents/leaf-0*",
+        "efs.write:/agents/%2e%2e/private/*",
+    ],
+)
+@pytest.mark.asyncio
+async def test_delegation_rejects_malformed_efs_scope_paths(bad_scope: str) -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*"])
+
+    with pytest.raises(ScopeEscalationError, match="Malformed efs.write scope path"):
+        await auth.delegate(
+            parent,
+            audience=AgentId("leaf-0"),
+            scopes_subset=[bad_scope],
+            ttl=10.0,
+        )
 
 
 @pytest.mark.asyncio
-async def test_grandchild_cannot_exceed_grandparent() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
+async def test_verify_rejects_manually_forged_scope_escalation() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/a/*"])
+    forged = _append_forged_child(
+        parent,
+        {
+            "aud": "attacker-0",
+            "exp": 10.0,
+            "iat": 0.0,
+            "scp": ["efs.write:/private/*"],
+            "sub": "attacker-0",
+        },
+    )
+
     with pytest.raises(ScopeEscalationError):
-        await auth.delegate(child, LEAF, ["write"], ttl=30.0)
+        await auth.verify(forged)
+
+
+@pytest.mark.parametrize(
+    "bad_scope",
+    [
+        "efs.write:/agents/../private/*",
+        "efs.write:/agents//leaf-0/*",
+        "efs.write:/",
+    ],
+)
+@pytest.mark.asyncio
+async def test_verify_rejects_forged_malformed_efs_scope_paths(bad_scope: str) -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*"])
+    forged = _append_forged_child(
+        parent,
+        {
+            "aud": "leaf-0",
+            "exp": 10.0,
+            "iat": 0.0,
+            "scp": [bad_scope],
+            "sub": "leaf-0",
+        },
+    )
+
+    with pytest.raises(ScopeEscalationError, match="Malformed efs.write scope path"):
+        await auth.verify(forged)
 
 
 @pytest.mark.asyncio
-async def test_child_ttl_clamped_to_parent() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    root_exp = (await auth.verify(root)).expires_at
-    child = await auth.delegate(root, MID, ["read"], ttl=10_000_000.0)
-    child_exp = (await auth.verify(child)).expires_at
-    assert root_exp is not None and child_exp is not None
-    assert child_exp <= root_exp
+async def test_verify_rejects_manually_forged_ttl_escalation() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*"])
+    forged = _append_forged_child(
+        parent,
+        {
+            "aud": "leaf-0",
+            "exp": 7200.0,
+            "iat": 0.0,
+            "scp": ["efs.write:/agents/leaf-0/*"],
+            "sub": "leaf-0",
+        },
+    )
+
+    with pytest.raises(TtlEscalationError):
+        await auth.verify(forged)
 
 
 @pytest.mark.asyncio
-async def test_cascading_revocation_root_kills_grandchild() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    grandchild = await auth.delegate(child, LEAF, ["read"], ttl=30.0)
-    await auth.revoke(root)
-    with pytest.raises(RevokedAncestorError):
-        await auth.verify(grandchild)
+async def test_verify_rejects_non_finite_timing_claims() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*"])
+    forged = _append_forged_child(
+        parent,
+        {
+            "aud": "leaf-0",
+            "exp": float("nan"),
+            "iat": 0.0,
+            "scp": ["efs.write:/agents/leaf-0/*"],
+            "sub": "leaf-0",
+        },
+    )
+
+    with pytest.raises(MalformedTokenError):
+        await auth.verify(forged)
 
 
 @pytest.mark.asyncio
-async def test_revoking_middle_spares_sibling_branch() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read", "write"])
-    mid_a = await auth.delegate(root, AgentId("mid-a"), ["read"], ttl=60.0)
-    mid_b = await auth.delegate(root, AgentId("mid-b"), ["write"], ttl=60.0)
-    leaf_a = await auth.delegate(mid_a, LEAF, ["read"], ttl=30.0)
-    await auth.revoke(mid_a)
-    with pytest.raises(RevokedAncestorError):
-        await auth.verify(leaf_a)
-    ctx = await auth.verify(mid_b)
-    assert ctx.scopes == ["write"]
+async def test_verify_rejects_issue_time_after_expiry() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*"])
+    forged = _append_forged_child(
+        parent,
+        {
+            "aud": "leaf-0",
+            "exp": 10.0,
+            "iat": 999.0,
+            "scp": ["efs.write:/agents/leaf-0/*"],
+            "sub": "leaf-0",
+        },
+    )
+
+    with pytest.raises(TtlEscalationError):
+        await auth.verify(forged)
 
 
 @pytest.mark.asyncio
-async def test_stale_parent_expired_ancestor_fails() -> None:
-    auth = _auth(clock=0.0)
-    root = await auth.issue(ROOT, ["read"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
-    auth.set_clock(10_000_000.0)
+async def test_delegation_rejects_unchanged_wildcard_scope() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*", "scribe:*"])
+
+    with pytest.raises(ScopeEscalationError):
+        await auth.delegate(
+            parent,
+            audience=AgentId("leaf-0"),
+            scopes_subset=["efs.write:/agents/*"],
+            ttl=10.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_rejects_manually_forged_unchanged_wildcard_scope() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*", "scribe:*"])
+    forged = _append_forged_child(
+        parent,
+        {
+            "aud": "leaf-0",
+            "exp": 10.0,
+            "iat": 0.0,
+            "scp": ["efs.write:/agents/*"],
+            "sub": "leaf-0",
+        },
+    )
+
+    with pytest.raises(ScopeEscalationError):
+        await auth.verify(forged)
+
+
+@pytest.mark.asyncio
+async def test_expired_parent_invalidates_child() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*"])
+    child = await auth.delegate(
+        parent,
+        audience=AgentId("leaf-0"),
+        scopes_subset=["efs.write:/agents/leaf-0/*"],
+        ttl=10.0,
+    )
+
+    auth.set_clock(11.0)
+
     with pytest.raises(ExpiredAncestorError):
         await auth.verify(child)
 
 
 @pytest.mark.asyncio
-async def test_revoked_parent_cannot_mint_children() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    await auth.revoke(root)
+async def test_malformed_chain_segments_raise_typed_error() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    bad_segment = _encode({"chain": [None]})
+    missing_claims = _encode({"chain": [{"sig": "00"}]})
+
+    with pytest.raises(MalformedTokenError):
+        await auth.verify(bad_segment)
+    with pytest.raises(MalformedTokenError):
+        await auth.verify(missing_claims)
+
+
+@pytest.mark.asyncio
+async def test_revoking_parent_invalidates_child() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["efs.write:/agents/*"])
+    child = await auth.delegate(
+        parent,
+        audience=AgentId("leaf-0"),
+        scopes_subset=["efs.write:/agents/leaf-0/*"],
+        ttl=10.0,
+    )
+
+    await auth.revoke(parent)
+
     with pytest.raises(RevokedAncestorError):
-        await auth.delegate(root, MID, ["read"], ttl=60.0)
+        await auth.verify(child)
 
 
 @pytest.mark.asyncio
-async def test_audience_confusion_rejected() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    child = await auth.delegate(root, MID, ["read"], ttl=60.0)
+async def test_verify_for_rejects_wrong_presenter() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["scribe:*"])
+    child = await auth.delegate(
+        parent,
+        audience=AgentId("leaf-0"),
+        scopes_subset=["scribe:verify"],
+        ttl=10.0,
+    )
+
     with pytest.raises(AudienceMismatchError):
-        await auth.verify_presented(child, LEAF)
-    ctx = await auth.verify_presented(child, MID)
-    assert ctx.subject == MID
+        await auth.verify_for(child, AgentId("attacker-0"))
 
 
 @pytest.mark.asyncio
-async def test_tampered_chain_rejected() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
-    forged = Token(str(root).replace('"read"', '"admin"'))
-    with pytest.raises(DelegationError):
-        await auth.verify(forged)
+async def test_verify_presented_alias_checks_presenter() -> None:
+    auth = DelegatableAuth(clock=0.0)
+    parent = await auth.issue(AgentId("coordinator-0"), ["scribe:*"])
+    child = await auth.delegate(
+        parent,
+        audience=AgentId("leaf-0"),
+        scopes_subset=["scribe:verify"],
+        ttl=10.0,
+    )
 
+    ctx = await auth.verify_presented(child, AgentId("leaf-0"))
 
-@pytest.mark.asyncio
-async def test_garbage_token_rejected() -> None:
-    auth = _auth()
-    for garbage in ("", "not-json", '{"chain": [], "sig": "00"}'):
-        with pytest.raises(DelegationError):
-            await auth.verify(Token(garbage))
+    assert ctx.subject == AgentId("leaf-0")
 
 
 @pytest.mark.asyncio
 async def test_delegation_errors_are_value_errors() -> None:
-    auth = _auth()
-    root = await auth.issue(ROOT, ["read"])
+    auth = DelegatableAuth(clock=0.0)
+    root = await auth.issue(AgentId("coordinator-0"), ["scribe:*"])
     await auth.revoke(root)
-    with pytest.raises(ValueError, match="revoked"):
+
+    with pytest.raises(DelegationError, match="revoked"):
         await auth.verify(root)
 
 
-@pytest.mark.asyncio
-async def test_default_jwt_plugin_is_vulnerable_baseline() -> None:
-    """Document the gap this plugin closes: jwt has no chain semantics.
+def test_plugin_registry_resolves_delegatable_auth() -> None:
+    assert PluginRegistry().resolve("auth", "delegatable") is DelegatableAuth
 
-    Under ``JwtAuth`` a "delegated" token is just a fresh issuance, so
-    revoking the parent leaves the child fully valid — the stale-parent
-    attack the adversarial validator must catch.
-    """
-    jwt = JwtAuth(secret=b"test-secret")
-    parent = await jwt.issue(ROOT, ["read"])
-    child = await jwt.issue(MID, ["read", "admin"])  # escalation unnoticed
-    await jwt.revoke(parent)
-    ctx = await jwt.verify(child)  # still verifies: no cascade
-    assert "admin" in ctx.scopes
+
+def test_scope_covers_requires_path_wildcard_boundary() -> None:
+    assert scope_covers(
+        "efs.write:/agents/leaf-1/*",
+        "efs.write:/agents/leaf-1/report.json",
+    )
+    assert not scope_covers(
+        "efs.write:/agents/leaf-1*",
+        "efs.write:/agents/leaf-10/report.json",
+    )
+    assert not scope_covers("efs.write:/agents/*", "efs.write:/agents/../private/*")
+    assert not scope_covers("efs.write:/agents/*", "efs.write:/agents//leaf-0/report.json")
+    assert scope_covers("scribe:*", "scribe:publish")

@@ -234,7 +234,7 @@ class CoordinatorAgent(_GossipMixin):
         if kind == "bootstrap" and sender == ctx.agent_id:
             root = cast("Token", await self._auth.issue(ctx.agent_id, ROOT_SCOPES))
             for mid in self._intermediaries:
-                token = await _delegate(self._auth, root, mid, MID_SCOPES, ttl=6000.0)
+                token = await _delegate(self._auth, root, mid, MID_SCOPES, ttl=3000.0)
                 granted = token is not None
                 await _audit(
                     ctx,

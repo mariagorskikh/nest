@@ -17,8 +17,11 @@ Example::
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import hashlib
 import json
+import math
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
@@ -4102,6 +4105,654 @@ def validate_provenance_chain_unforgeable(
 
 
 # ---------------------------------------------------------------------------
+# EFS Scribe offline validators
+# ---------------------------------------------------------------------------
+
+
+def _efs_scribe_event_matches(
+    ev: dict[str, Any],
+    *,
+    agent: str | None = None,
+    agents: set[str] | None = None,
+    to: str | None = None,
+) -> bool:
+    if ev.get("kind") != "send":
+        return False
+    sender = str(ev.get("agent", ""))
+    if agent is not None and sender != agent:
+        return False
+    if agents is not None and sender not in agents:
+        return False
+    return not (to is not None and ev.get("to") != to)
+
+
+def _efs_scribe_field_msg(
+    events: list[dict[str, Any]],
+    prefix: str,
+    *,
+    agent: str | None = None,
+    agents: set[str] | None = None,
+    to: str | None = None,
+) -> list[list[str]]:
+    """Collect ``|``-delimited EFS Scribe trace messages."""
+    rows: list[list[str]] = []
+    for ev in events:
+        if not _efs_scribe_event_matches(ev, agent=agent, agents=agents, to=to):
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith(prefix):
+            rows.append(msg.split("|", 2))
+    return rows
+
+
+def _efs_scribe_json_msg_entries(
+    events: list[dict[str, Any]],
+    prefix: str,
+    *,
+    agent: str | None = None,
+    agents: set[str] | None = None,
+    to: str | None = None,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Collect JSON payloads framed as ``prefix|<canonical-json>``."""
+    payloads: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for ev in events:
+        if not _efs_scribe_event_matches(ev, agent=agent, agents=agents, to=to):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith(prefix):
+            continue
+        try:
+            payload: Any = json.loads(msg.split("|", 1)[1])
+        except (IndexError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            payloads.append((ev, cast("dict[str, Any]", payload)))
+    return payloads
+
+
+_EFS_SCRIBE_EXPECTED_SUBJECTS = {f"leaf-{idx}" for idx in range(12)}
+_EFS_SCRIBE_EXPECTED_INTERMEDIARIES = {f"intermediary-{idx}" for idx in range(3)}
+_EFS_SCRIBE_EXPECTED_DELEGATION_EDGES = {
+    *{("coordinator-0", intermediary) for intermediary in _EFS_SCRIBE_EXPECTED_INTERMEDIARIES},
+    *{(f"intermediary-{leaf_idx // 4}", f"leaf-{leaf_idx}") for leaf_idx in range(12)},
+}
+
+
+def _efs_scribe_mock_uid(*parts: str) -> str:
+    return "0x" + hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def _efs_scribe_canonical(value: dict[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _efs_scribe_sha256(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+
+
+def _efs_scribe_without_signature(request: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in request.items() if key != "signature"}
+
+
+def _efs_scribe_expected_path(subject: str) -> str | None:
+    if not subject.startswith("leaf-"):
+        return None
+    try:
+        leaf_idx = int(subject.removeprefix("leaf-"))
+    except ValueError:
+        return None
+    if leaf_idx < 0:
+        return None
+    intermediary_idx = leaf_idx // 4
+    return f"/agents/intermediary-{intermediary_idx}/{subject}/report.json"
+
+
+def _efs_scribe_sha256_like(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    prefix = "sha256:"
+    digest = value.removeprefix(prefix)
+    return (
+        value.startswith(prefix)
+        and len(digest) == 64
+        and all(c in "0123456789abcdef" for c in digest)
+    )
+
+
+def _efs_scribe_hex_like(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        bytes.fromhex(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _efs_scribe_signature_valid(request: dict[str, Any], subject: str) -> bool:
+    try:
+        from nest_plugins_reference.identity.did_key import DidKeyIdentity
+
+        from nest_core.types import AgentId, Signature
+
+        signature_obj = request.get("signature")
+        if not isinstance(signature_obj, dict):
+            return False
+        signature_data = cast("dict[str, Any]", signature_obj)
+        signer = signature_data.get("signer")
+        value = signature_data.get("value")
+        algorithm = signature_data.get("algorithm")
+        if (
+            not isinstance(signer, str)
+            or not isinstance(value, str)
+            or not isinstance(algorithm, str)
+        ):
+            return False
+        signature = Signature(
+            signer=AgentId(signer),
+            value=bytes.fromhex(value),
+            algorithm=algorithm,
+        )
+        identity = DidKeyIdentity(AgentId(subject), seed=b"efs-scribe-offline")
+        signed_payload = _efs_scribe_canonical(_efs_scribe_without_signature(request)).encode()
+        return identity.verify(signed_payload, signature, AgentId(subject))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+async def _efs_scribe_verify_capability_async(
+    token: str,
+    subject: str,
+    tick: float,
+    required_scopes: list[str],
+) -> list[str]:
+    from nest_plugins_reference.auth.delegatable import DelegatableAuth
+
+    from nest_core.types import AgentId, Token
+
+    auth = DelegatableAuth(clock=tick)
+    auth_context = await auth.verify_for(
+        Token(token),
+        AgentId(subject),
+        required_scopes=required_scopes,
+    )
+    return auth_context.scopes
+
+
+def _efs_scribe_capability_scopes(
+    request: dict[str, Any],
+    subject: str,
+    path: str | None,
+) -> list[str] | None:
+    token_obj = request.get("capability_token")
+    if not isinstance(token_obj, str) or not token_obj:
+        return None
+    tick_obj = request.get("tick")
+    if not isinstance(tick_obj, (str, int, float)):
+        return None
+    try:
+        tick = float(tick_obj)
+    except ValueError:
+        return None
+    if not math.isfinite(tick):
+        return None
+    required_scopes = ["scribe:publish"]
+    if path is not None:
+        required_scopes.insert(0, f"efs.write:{path}")
+    try:
+        return asyncio.run(
+            _efs_scribe_verify_capability_async(token_obj, subject, tick, required_scopes)
+        )
+    except ValueError:
+        return None
+
+
+def validate_efs_scribe_delegation_tree(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The scenario delegates from one coordinator to 3 intermediaries to 12 leaves."""
+    rows = _efs_scribe_field_msg(events, "scribe_delegation|")
+    edges = {(row[1], row[2]) for row in rows if len(row) >= 3}
+    missing = sorted(_EFS_SCRIBE_EXPECTED_DELEGATION_EDGES - edges)
+    extra = sorted(edges - _EFS_SCRIBE_EXPECTED_DELEGATION_EDGES)
+    if missing or extra:
+        detail: list[str] = []
+        if missing:
+            detail.append(f"missing edges {missing}")
+        if extra:
+            detail.append(f"unexpected edges {extra}")
+        return [
+            ValidationResult(
+                "efs_scribe_delegation_tree",
+                False,
+                "; ".join(detail),
+            )
+        ]
+    return [
+        ValidationResult(
+            "efs_scribe_delegation_tree",
+            True,
+            "delegated through 3 intermediaries to 12 leaves",
+        )
+    ]
+
+
+def validate_efs_scribe_receipts_verified(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every emitted EFS Scribe receipt is ok and binds auth/content/lens checks."""
+    failures: list[str] = []
+    request_entries = _efs_scribe_json_msg_entries(
+        events,
+        "scribe_request|",
+        agents=_EFS_SCRIBE_EXPECTED_SUBJECTS,
+        to="scribe-0",
+    )
+    receipt_entries = _efs_scribe_json_msg_entries(
+        events,
+        "scribe_receipt|",
+        agent="scribe-0",
+        to="verifier-0",
+    )
+    receipts = [receipt for _event, receipt in receipt_entries]
+    if not receipts:
+        return [ValidationResult("efs_scribe_receipts_verified", False, "no receipts recorded")]
+
+    requests_by_id: dict[str, tuple[str, dict[str, Any]]] = {}
+    duplicate_request_ids: set[str] = set()
+    for event, request in request_entries:
+        request_id = str(request.get("request_id", ""))
+        if not request_id:
+            failures.append("observed request missing request_id")
+            continue
+        if request_id in requests_by_id:
+            duplicate_request_ids.add(request_id)
+            continue
+        requests_by_id[request_id] = (str(event.get("agent", "")), request)
+    if duplicate_request_ids:
+        failures.append(f"duplicate requests {sorted(duplicate_request_ids)}")
+
+    seen_subjects: set[str] = set()
+    seen_nonces: dict[tuple[str, str], str] = {}
+    required_checks = {"auth", "content_hash", "lens", "mode", "nonce", "signature"}
+    for receipt in receipts:
+        request_id = str(receipt.get("request_id", "<missing>"))
+        request_entry = requests_by_id.get(request_id)
+        checks_obj = receipt.get("checks")
+        efs_obj = receipt.get("efs")
+        integrity_obj = receipt.get("integrity")
+        auth_context_obj = receipt.get("auth_context")
+        if receipt.get("ok") is not True:
+            failures.append(f"{request_id}: ok is false")
+            continue
+        if (
+            receipt.get("type") != "efs.scribe.verification_receipt"
+            or receipt.get("version") != "1"
+        ):
+            failures.append(f"{request_id}: unexpected receipt type/version")
+            continue
+        if request_entry is None:
+            failures.append(f"{request_id}: matching request missing")
+            continue
+        request_sender, request = request_entry
+        if not isinstance(checks_obj, dict):
+            failures.append(f"{request_id}: checks missing")
+            continue
+        if not isinstance(integrity_obj, dict):
+            failures.append(f"{request_id}: integrity missing")
+            continue
+        if not isinstance(auth_context_obj, dict):
+            failures.append(f"{request_id}: auth context missing")
+            continue
+        checks = cast("dict[str, Any]", checks_obj)
+        integrity = cast("dict[str, Any]", integrity_obj)
+        auth_context = cast("dict[str, Any]", auth_context_obj)
+        efs = cast("dict[str, Any] | None", efs_obj) if isinstance(efs_obj, dict) else None
+        if efs is None or efs.get("network") != "offline" or efs.get("chain_id") != 0:
+            failures.append(f"{request_id}: mode confusion")
+            continue
+        if efs.get("tx_hashes") != []:
+            failures.append(f"{request_id}: offline receipt has tx hashes")
+            continue
+        missing = [name for name in sorted(required_checks) if checks.get(name) is not True]
+        if missing:
+            failures.append(f"{request_id}: missing checks {missing}")
+            continue
+        subject = str(auth_context.get("subject", ""))
+        if subject not in _EFS_SCRIBE_EXPECTED_SUBJECTS:
+            failures.append(f"{request_id}: unexpected subject {subject!r}")
+            continue
+        if subject in seen_subjects:
+            failures.append(f"{request_id}: duplicate receipt for {subject}")
+            continue
+        seen_subjects.add(subject)
+        expected_path = _efs_scribe_expected_path(subject)
+        if efs.get("path") != expected_path:
+            failures.append(f"{request_id}: path mismatch for {subject}")
+            continue
+        if request_id != f"req-{subject}":
+            failures.append(f"{request_id}: request id mismatch for {subject}")
+            continue
+        if request_sender != subject:
+            failures.append(f"{request_id}: request sender mismatch")
+            continue
+        if (
+            request.get("type") != "efs.scribe.request"
+            or request.get("version") != "1"
+            or request.get("op") != "file.upsert"
+        ):
+            failures.append(f"{request_id}: unexpected request envelope")
+            continue
+        if request.get("agent_id") != subject:
+            failures.append(f"{request_id}: request subject mismatch")
+            continue
+        if request.get("path") != efs.get("path"):
+            failures.append(f"{request_id}: request path mismatch")
+            continue
+        if request.get("mode", "offline") != "offline":
+            failures.append(f"{request_id}: request mode confusion")
+            continue
+        nonce_obj = request.get("nonce")
+        if not isinstance(nonce_obj, str) or not nonce_obj:
+            failures.append(f"{request_id}: request nonce missing")
+            continue
+        nonce = nonce_obj
+        nonce_key = (subject, nonce)
+        if nonce_key in seen_nonces:
+            failures.append(f"{request_id}: duplicate nonce with {seen_nonces[nonce_key]}")
+            continue
+        seen_nonces[nonce_key] = request_id
+        payload_obj = request.get("payload")
+        if not isinstance(payload_obj, dict):
+            failures.append(f"{request_id}: payload missing")
+            continue
+        payload = cast("dict[str, Any]", payload_obj)
+        if payload.get("agent") != subject:
+            failures.append(f"{request_id}: payload agent mismatch")
+            continue
+        body_obj = payload.get("body")
+        if not isinstance(body_obj, dict):
+            failures.append(f"{request_id}: payload body missing")
+            continue
+        body = cast("dict[str, Any]", body_obj)
+        if body.get("path") != request.get("path"):
+            failures.append(f"{request_id}: payload path mismatch")
+            continue
+        payload_sha256 = integrity.get("payload_sha256")
+        if not _efs_scribe_sha256_like(payload_sha256):
+            failures.append(f"{request_id}: payload hash missing")
+            continue
+        expected_payload_sha256 = _efs_scribe_sha256(_efs_scribe_canonical(payload))
+        if request.get("payload_hash") != expected_payload_sha256:
+            failures.append(f"{request_id}: payload digest mismatch")
+            continue
+        if request.get("payload_hash") != payload_sha256:
+            failures.append(f"{request_id}: request payload hash mismatch")
+            continue
+        capability_scopes = _efs_scribe_capability_scopes(
+            request,
+            subject,
+            str(request.get("path")),
+        )
+        if capability_scopes is None:
+            failures.append(f"{request_id}: capability token invalid")
+            continue
+        if auth_context.get("service") != "efs-scribe":
+            failures.append(f"{request_id}: auth service mismatch")
+            continue
+        if auth_context.get("scopes") != capability_scopes:
+            failures.append(f"{request_id}: auth scopes mismatch")
+            continue
+        signature_obj = request.get("signature")
+        if not isinstance(signature_obj, dict):
+            failures.append(f"{request_id}: signature missing")
+            continue
+        signature = cast("dict[str, Any]", signature_obj)
+        if signature.get("algorithm") != "sim-rsa-sha256":
+            failures.append(f"{request_id}: signature algorithm mismatch")
+            continue
+        if signature.get("signer") != subject:
+            failures.append(f"{request_id}: signature signer mismatch")
+            continue
+        signature_value = signature.get("value")
+        if not _efs_scribe_hex_like(signature_value):
+            failures.append(f"{request_id}: signature value malformed")
+            continue
+        if not _efs_scribe_signature_valid(request, subject):
+            failures.append(f"{request_id}: signature invalid")
+            continue
+        canonical_request_sha256 = integrity.get("canonical_request_sha256")
+        if not _efs_scribe_sha256_like(canonical_request_sha256):
+            failures.append(f"{request_id}: canonical request hash missing")
+            continue
+        expected_request_hash = _efs_scribe_sha256(
+            _efs_scribe_canonical(_efs_scribe_without_signature(request))
+        )
+        if canonical_request_sha256 != expected_request_hash:
+            failures.append(f"{request_id}: canonical request hash mismatch")
+            continue
+        expected_data_uid = _efs_scribe_mock_uid("data", str(payload_sha256))
+        if efs.get("data_uid") != expected_data_uid:
+            failures.append(f"{request_id}: data uid mismatch")
+            continue
+        expected_subject_url = "mock-eas:" + _efs_scribe_mock_uid(request_id, str(payload_sha256))
+        if receipt.get("subject_url") != expected_subject_url:
+            failures.append(f"{request_id}: subject url mismatch")
+
+    missing_subjects = sorted(_EFS_SCRIBE_EXPECTED_SUBJECTS - seen_subjects)
+    if missing_subjects:
+        failures.append(f"missing receipts for {missing_subjects}")
+
+    if failures:
+        return [ValidationResult("efs_scribe_receipts_verified", False, "; ".join(failures))]
+    return [
+        ValidationResult(
+            "efs_scribe_receipts_verified",
+            True,
+            f"{len(receipts)} receipt(s) verified",
+        )
+    ]
+
+
+def validate_efs_scribe_rejects_adversarial_writes(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """All configured bad EFS Scribe writes are rejected."""
+    expected = {
+        "scope_escalation",
+        "revoked_parent",
+        "audience_confusion",
+        "cross_lens",
+        "nonce_replay",
+        "payload_hash_mismatch",
+        "path_traversal",
+        "payload_path_mismatch",
+        "mode_confusion",
+        "wrong_signature",
+    }
+    auth_evidence = _efs_scribe_field_msg(
+        events,
+        "scribe_auth_attack|",
+        agent="coordinator-0",
+        to="verifier-0",
+    )
+    write_evidence = _efs_scribe_field_msg(
+        events,
+        "scribe_attack_request|",
+        agent="leaf-0",
+        to="scribe-0",
+    )
+    evidence = {row[1] for row in auth_evidence if len(row) >= 3 and row[2] == "rejected"}
+    malformed_evidence: list[str] = []
+    for row in write_evidence:
+        if len(row) < 3:
+            continue
+        attack = row[1]
+        try:
+            request_obj: Any = json.loads(row[2])
+        except json.JSONDecodeError:
+            malformed_evidence.append(attack)
+            continue
+        if not isinstance(request_obj, dict):
+            malformed_evidence.append(attack)
+            continue
+        request = cast("dict[str, Any]", request_obj)
+        if _efs_scribe_attack_request_matches(attack, request):
+            evidence.add(attack)
+        else:
+            malformed_evidence.append(attack)
+    rows = _efs_scribe_field_msg(
+        events,
+        "scribe_attack|",
+        agents={"coordinator-0", "scribe-0"},
+        to="verifier-0",
+    )
+    outcomes: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        if len(row) >= 3:
+            outcomes[row[1]].append(row[2])
+    missing = sorted(expected - outcomes.keys())
+    unexpected = sorted(outcomes.keys() - expected)
+    missing_evidence = sorted(expected - evidence)
+    accepted = sorted(
+        name
+        for name, values in outcomes.items()
+        if name in expected and any(v != "rejected" for v in values)
+    )
+    duplicate_outcomes = sorted(name for name, values in outcomes.items() if len(values) > 1)
+    failed = (
+        missing
+        or unexpected
+        or missing_evidence
+        or accepted
+        or duplicate_outcomes
+        or malformed_evidence
+    )
+    if failed:
+        detail: list[str] = []
+        if missing:
+            detail.append(f"missing attacks {missing}")
+        if unexpected:
+            detail.append(f"unexpected attacks {unexpected}")
+        if missing_evidence:
+            detail.append(f"missing attack evidence {missing_evidence}")
+        if malformed_evidence:
+            detail.append(f"malformed attack evidence {sorted(malformed_evidence)}")
+        if accepted:
+            detail.append(f"accepted attacks {accepted}")
+        if duplicate_outcomes:
+            detail.append(f"duplicate attack outcomes {duplicate_outcomes}")
+        return [ValidationResult("efs_scribe_rejects_adversarial_writes", False, "; ".join(detail))]
+    return [
+        ValidationResult(
+            "efs_scribe_rejects_adversarial_writes",
+            True,
+            f"{len(expected)} adversarial write(s) rejected",
+        )
+    ]
+
+
+def _efs_scribe_attack_request_matches(attack: str, request: dict[str, Any]) -> bool:
+    parts = _efs_scribe_attack_request_parts(request)
+    if parts is None:
+        return False
+    agent, path, payload, body, expected_path = parts
+    payload_obj = request.get("payload")
+    signature_obj = request.get("signature")
+    signature = cast("dict[str, Any]", signature_obj) if isinstance(signature_obj, dict) else {}
+    payload_hash_matches = request.get("payload_hash") == _efs_scribe_sha256(
+        _efs_scribe_canonical(payload)
+    )
+    signature_valid = _efs_scribe_signature_valid(request, agent)
+    if attack != "wrong_signature" and not signature_valid:
+        return False
+    expected_nonces = {
+        "nonce_replay": "nonce-leaf-0-1",
+        "cross_lens": "nonce-leaf-0-cross-lens",
+        "path_traversal": "nonce-leaf-0-traversal",
+        "payload_path_mismatch": "nonce-leaf-0-payload-path",
+        "payload_hash_mismatch": "nonce-leaf-0-bad-hash",
+        "wrong_signature": "nonce-leaf-0-wrong-sig",
+        "mode_confusion": "nonce-leaf-0-mode",
+    }
+    if request.get("nonce") != expected_nonces.get(attack):
+        return False
+    if attack == "nonce_replay":
+        return path == expected_path and body.get("path") == path and payload_hash_matches
+    if attack == "cross_lens":
+        return (
+            path != expected_path
+            and ".." not in path.split("/")
+            and body.get("path") == path
+            and payload_hash_matches
+        )
+    if attack == "path_traversal":
+        return ".." in path.split("/") and body.get("path") == path and payload_hash_matches
+    if attack == "payload_path_mismatch":
+        return path == expected_path and body.get("path") != path and payload_hash_matches
+    if attack == "payload_hash_mismatch":
+        return isinstance(payload_obj, dict) and path == expected_path and not payload_hash_matches
+    if attack == "wrong_signature":
+        return (
+            path == expected_path
+            and body.get("path") == path
+            and payload_hash_matches
+            and signature.get("algorithm") == "sim-rsa-sha256"
+            and signature.get("signer") != agent
+            and not signature_valid
+        )
+    if attack == "mode_confusion":
+        return (
+            path == expected_path
+            and body.get("path") == path
+            and payload_hash_matches
+            and request.get("mode", "offline") != "offline"
+        )
+    return False
+
+
+def _efs_scribe_attack_request_parts(
+    request: dict[str, Any],
+) -> tuple[str, str, dict[str, Any], dict[str, Any], str] | None:
+    agent = str(request.get("agent_id", ""))
+    expected_path = _efs_scribe_expected_path(agent)
+    path_obj = request.get("path")
+    payload_obj = request.get("payload")
+    if (
+        agent != "leaf-0"
+        or expected_path is None
+        or not isinstance(path_obj, str)
+        or request.get("type") != "efs.scribe.request"
+        or request.get("version") != "1"
+        or request.get("op") != "file.upsert"
+        or request.get("request_id") != "req-leaf-0"
+        or not isinstance(request.get("nonce"), str)
+        or not _efs_scribe_sha256_like(request.get("payload_hash"))
+    ):
+        return None
+    if _efs_scribe_capability_scopes(request, agent, None) is None:
+        return None
+    if not isinstance(payload_obj, dict):
+        return None
+    payload = cast("dict[str, Any]", payload_obj)
+    body_obj = payload.get("body")
+    if payload.get("agent") != agent or not isinstance(body_obj, dict):
+        return None
+    body = cast("dict[str, Any]", body_obj)
+    if not isinstance(body.get("path"), str):
+        return None
+    signature_obj = request.get("signature")
+    if not isinstance(signature_obj, dict):
+        return None
+    signature = cast("dict[str, Any]", signature_obj)
+    if signature.get("algorithm") != "sim-rsa-sha256" or not _efs_scribe_hex_like(
+        signature.get("value")
+    ):
+        return None
+    return agent, path_obj, payload, body, expected_path
+
+
+# ---------------------------------------------------------------------------
 # BFT HotStuff validators
 # ---------------------------------------------------------------------------
 
@@ -5666,6 +6317,11 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_provenance_substitution_resistant,
         validate_provenance_freshness_unforgeable,
         validate_provenance_chain_unforgeable,
+    ],
+    "delegated_auth": [
+        validate_efs_scribe_delegation_tree,
+        validate_efs_scribe_receipts_verified,
+        validate_efs_scribe_rejects_adversarial_writes,
     ],
     "bft_hotstuff": [
         validate_bft_no_conflicting_commits,

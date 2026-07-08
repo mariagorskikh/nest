@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Property tests for the delegatable auth plugin.
 
-Two invariants under random delegation chains: (1) *monotone
-attenuation* — a verified leaf never holds a scope its root lacked and
-never outlives any ancestor; (2) *cascading revocation* — revoking a
-random ancestor always invalidates every descendant minted under it.
-Token bytes are also deterministic for a fixed clock and secret.
+Two invariants under random delegation chains: (1) *strict monotone
+attenuation* — each delegated child narrows the parent's scopes, a
+verified leaf never holds a scope its root lacked, and a leaf never
+outlives any ancestor; (2) *cascading revocation* — revoking a random
+ancestor always invalidates every descendant minted under it. Token
+bytes are also deterministic for a fixed clock and secret.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from nest_plugins_reference.auth.delegatable import (
     RevokedAncestorError,
 )
 
-_SCOPES = st.sets(st.sampled_from(["read", "write", "pay", "admin"]), min_size=1)
+_SCOPES = st.sets(st.sampled_from(["read", "write", "pay", "admin"]), min_size=2)
 
 
 def _run(coro: Coroutine[Any, Any, None]) -> None:
@@ -38,7 +39,9 @@ async def _build_chain(
     scope_sets: list[set[str]] = [set(root_scopes)]
     for depth, pick in enumerate(subset_picks, start=1):
         parent_scopes = sorted(scope_sets[-1])
-        keep = max(1, pick % (len(parent_scopes) + 1))
+        if len(parent_scopes) == 1:
+            break
+        keep = 1 + (pick % (len(parent_scopes) - 1))
         child_scopes = set(parent_scopes[:keep])
         token = await auth.delegate(
             tokens[-1],
