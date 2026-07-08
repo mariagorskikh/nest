@@ -108,3 +108,64 @@ def test_malformed_onion_packet():
     comms = OnionRoutingComms(AgentId("a1"))
     with pytest.raises(ValueError, match="Failed to decrypt"):
         comms.deserialize(b"invalid_bytes_that_are_not_encrypted_properly")
+
+
+def _encrypt_malformed_for_test(dest: AgentId, plaintext: bytes) -> bytes:
+    import os
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from nest_plugins_reference.comms.onion import _get_key_for_agent
+    aesgcm = AESGCM(_get_key_for_agent(dest))
+    nonce = os.urandom(12)
+    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+    return nonce + ciphertext
+
+
+def test_malformed_onion_packet_not_json_dict():
+    """Test that a decrypted packet that isn't a JSON dict raises an error."""
+    comms = OnionRoutingComms(AgentId("a1"))
+    raw = _encrypt_malformed_for_test(AgentId("a1"), b'"just_a_string"')
+    with pytest.raises(ValueError, match="Failed to decrypt") as exc_info:
+        comms.deserialize(raw)
+    assert "Onion packet must decode to a JSON object" in str(exc_info.value.__cause__)
+
+
+def test_malformed_onion_packet_missing_next_hop():
+    """Test that a decrypted packet missing next_hop raises an error."""
+    import json
+    comms = OnionRoutingComms(AgentId("a1"))
+    raw = _encrypt_malformed_for_test(AgentId("a1"), json.dumps({"payload": "YmFzZTY0"}).encode())
+    with pytest.raises(ValueError, match="Failed to decrypt") as exc_info:
+        comms.deserialize(raw)
+    assert "Onion packet missing next_hop" in str(exc_info.value.__cause__)
+
+
+def test_malformed_onion_packet_missing_payload():
+    """Test that a decrypted packet missing payload raises an error."""
+    import json
+    comms = OnionRoutingComms(AgentId("a1"))
+    raw = _encrypt_malformed_for_test(AgentId("a1"), json.dumps({"next_hop": "a2"}).encode())
+    with pytest.raises(ValueError, match="Failed to decrypt") as exc_info:
+        comms.deserialize(raw)
+    assert "Onion packet payload must be a base64 string" in str(exc_info.value.__cause__)
+
+
+@pytest.mark.asyncio
+async def test_send_malformed_relay_metadata(mock_transport):
+    """Test that sending with malformed relay metadata fails gracefully."""
+    comms = OnionRoutingComms(AgentId("origin"), mock_transport)
+    
+    # Missing payload
+    msg = Message(
+        id=MessageId("m1"),
+        sender=AgentId("origin"),
+        receiver=AgentId("dest"),
+        payload=b"",
+        metadata={"onion_action": "relay", "onion_next_hop": "relay1"}
+    )
+    resp = await comms.send(AgentId("dest"), msg)
+    assert resp.success is False
+
+    # Invalid base64
+    msg.metadata["onion_raw_payload"] = "not_valid_base64!!"
+    resp = await comms.send(AgentId("dest"), msg)
+    assert resp.success is False
