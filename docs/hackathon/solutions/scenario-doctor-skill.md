@@ -98,9 +98,9 @@ A validation and linting service for NANDA Town scenario configuration files.
 
 ---
 
-## Agent Setup Guide
-
-To use the Scenario Doctor in your automation or agent flow:
-1. **Query known layers**: Call `GET /layers` to retrieve the current registry mapping of layers and plugins.
-2. **Schema Verification**: Before running `nest run`, submit the scenario configuration to `POST /validate-scenario`. Check if `"valid": true` is returned. If not, inspect the returned `"errors"` list.
-3. **Registry Linting**: Submit the configuration to `POST /lint` to check if any custom plugins or layers violate the current registry mapping, helping prevent runtime module import crashes.
+# How the agent should use this
+1. Parse the scenario YAML configuration.
+2. Call `POST /validate-scenario` with the YAML string as the raw body.
+3. If validation fails (`"valid": false`), inspect the `"errors"` list to adjust the YAML structure, and retry.
+4. Call `POST /lint` with the YAML string as the raw body.
+5. If linting fails (`"clean": false`), inspect the `"warnings"` list to correct any misspelled layer/plugin names, and retry.
