@@ -77,6 +77,9 @@ dev-dependencies = [
     # nest-cli is a deprecated shim — only installed for the dev test suite
     # so the shim's smoke tests can import it.
     "nest-cli",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "httpx>=0.25.0",
 ]
 
 [tool.uv.sources]
@@ -100,6 +103,15 @@ ignore = ["TC001", "TC002", "TC003", "A002"]
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
+exclude = [
+    "**/node_modules",
+    "**/.venv",
+    "**/venv",
+    "**/.git",
+    "**/.next",
+    "**/__pycache__",
+    "apps/scenario-doctor",
+]
 venvPath = "."
 venv = ".venv"
 extraPaths = [
