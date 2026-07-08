@@ -2,7 +2,7 @@
 [project]
 name = "nest-plugins-reference"
 version = "0.1.1"
-description = "Nanda Town reference plugins: default implementations for all 12 layers"
+description = "Nanda Town reference plugins: default implementations for the core layers"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -41,6 +41,10 @@ hybrid_x25519 = "nest_plugins_reference.privacy.hybrid_x25519:HybridX25519Privac
 
 [project.entry-points."nest.plugins.datafacts"]
 cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
+
+[project.entry-points."nest.plugins.failure_detector"]
+heartbeat = "nest_plugins_reference.failure_detection.heartbeat:HeartbeatFailureDetector"
+phi_accrual = "nest_plugins_reference.failure_detection.phi_accrual:PhiAccrualFailureDetector"
 
 [build-system]
 requires = ["hatchling"]
