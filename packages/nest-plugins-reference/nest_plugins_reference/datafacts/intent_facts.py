@@ -52,12 +52,12 @@ Example::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
+from nest_core.types import DataFactsUrl, DatasetMetadata
 
-from nest_plugins_reference.datafacts.cid_facts import CidFacts, SharedClock
+from nest_plugins_reference.datafacts.cid_facts import CidFacts
 
 if TYPE_CHECKING:
     from nest_core.layers.identity import Identity
@@ -108,6 +108,8 @@ class IntentGatedFacts(CidFacts):
     ) -> None:
         super().__init__(identity, **kwargs)
         self._intent_ttl = intent_ttl
+        # Cache agent_id string — DidKeyIdentity stores it as _agent_id.
+        self._owner_str: str = str(identity._agent_id)  # type: ignore[attr-defined]
         # (agent_id_str, dataset_name) -> expiry tick
         self._pending_intents: dict[tuple[str, str], float] = {}
         self._intent_log: list[IntentRecord] = []
@@ -124,7 +126,7 @@ class IntentGatedFacts(CidFacts):
 
             facts.register_publish_intent("prices")
         """
-        agent_str = str(self._identity.agent_id)
+        agent_str = self._owner_str
         now = self._clock.tick
         expiry = now + self._intent_ttl
         key = (agent_str, dataset_name)
@@ -149,7 +151,7 @@ class IntentGatedFacts(CidFacts):
             IntentError: if no intent is registered, or if the intent has
                 expired.
         """
-        agent_str = str(self._identity.agent_id)
+        agent_str = self._owner_str
         key = (agent_str, dataset_name)
         expiry = self._pending_intents.get(key)
 
@@ -223,7 +225,7 @@ class IntentGatedFacts(CidFacts):
             facts.register_publish_intent("prices")
             assert facts.has_live_intent("prices")
         """
-        key = (str(self._identity.agent_id), dataset_name)
+        key = (self._owner_str, dataset_name)
         expiry = self._pending_intents.get(key)
         if expiry is None:
             return False

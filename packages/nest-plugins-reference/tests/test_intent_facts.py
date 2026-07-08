@@ -16,16 +16,15 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
+import contextlib
 
+import pytest
 from nest_core.layers.datafacts import DataFacts
 from nest_core.plugins import PluginRegistry
 from nest_core.types import AgentId, DatasetMetadata
-
 from nest_plugins_reference.datafacts.cid_facts import SharedClock
 from nest_plugins_reference.datafacts.intent_facts import IntentError, IntentGatedFacts
 from nest_plugins_reference.identity.did_key import DidKeyIdentity
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -325,10 +324,8 @@ class TestAdversarialValidator:
     async def test_validator_catches_missing_intent_attempt(self) -> None:
         """Attack attempt is visible: IntentError raised, log shows no fulfilled entry."""
         facts = _make_facts()
-        try:
+        with contextlib.suppress(IntentError):
             await facts.publish(DatasetMetadata(name="secret", owner=AgentId("a1")))
-        except IntentError:
-            pass  # expected
 
         log = facts.intent_log()
         # No intent was ever registered, so log is empty -> surprise detected
@@ -352,7 +349,4 @@ def _no_surprise_publications(
 ) -> bool:
     """Return False if any published name lacks a fulfilled intent log entry."""
     fulfilled_names = {r.dataset_name for r in intent_log if r.status == "fulfilled"}
-    for name in published_names:
-        if name not in fulfilled_names:
-            return False
-    return True
+    return all(name in fulfilled_names for name in published_names)
