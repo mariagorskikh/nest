@@ -199,6 +199,23 @@ class TestMalformedState:
             await PnCounterMemory("a").write("score", b'{"op":"mul","amount":2}')
 
     @pytest.mark.asyncio
+    async def test_write_rejects_fractional_amount(self) -> None:
+        mem = PnCounterMemory("a")
+        with pytest.raises(PnCounterStateError):
+            await mem.write("score", b'{"op":"inc","amount":1.5}')
+        assert await mem.read("score") is None
+
+    @pytest.mark.asyncio
+    async def test_merge_rejects_fractional_state_coordinate(self) -> None:
+        mem = PnCounterMemory("a")
+        with pytest.raises(PnCounterStateError):
+            await mem.merge(
+                "score",
+                b'{"crdt":"pn_counter","positive":{"b":1.5},"negative":{}}',
+            )
+        assert await mem.read("score") is None
+
+    @pytest.mark.asyncio
     async def test_copypasta_payload_rejected_without_state_corruption(self) -> None:
         mem = PnCounterMemory("builder")
         await mem.write("calculator:ready_score", b'{"op":"inc","amount":3}')

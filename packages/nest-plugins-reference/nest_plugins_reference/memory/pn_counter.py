@@ -331,10 +331,7 @@ def _clean_counter_map(raw: object, label: str) -> dict[str, int]:
         raise PnCounterStateError(msg)
     clean: dict[str, int] = {}
     for key, value in cast("dict[str, Any]", raw).items():
-        if isinstance(value, bool):
-            msg = f"{label}[{key!r}] must be a non-negative integer"
-            raise PnCounterStateError(msg)
-        amount = int(value)
+        amount = _parse_int_like(value)
         if amount < 0:
             msg = f"{label}[{key!r}] must be non-negative"
             raise PnCounterStateError(msg)
@@ -377,11 +374,7 @@ def _parse_int(value: bytes) -> int:
 
 
 def _parse_int_like(value: object) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, int):
         msg = f"expected integer, got {value!r}"
         raise PnCounterStateError(msg)
-    try:
-        return int(cast("Any", value))
-    except (TypeError, ValueError) as exc:
-        msg = f"expected integer, got {value!r}"
-        raise PnCounterStateError(msg) from exc
+    return value
