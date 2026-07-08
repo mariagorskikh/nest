@@ -55,25 +55,37 @@ def _message_body(ev: dict[str, Any]) -> str:
 # Delivery rate (formerly called "success_rate" -- kept as alias for compat)
 # ---------------------------------------------------------------------------
 def _delivery_rate(events: list[dict[str, Any]]) -> float:
-    """Fraction of sent messages that were received (message delivery rate).
+    """Fraction of message delivery attempts that were received.
 
     NOTE: This was previously named ``_success_rate``.  The old name was
     misleading -- a 100 % delivery rate does NOT mean the protocol succeeded;
     it only means every message was delivered, even if every request was
     rejected.  The ``deal_rate`` metric captures actual protocol success for
     marketplace scenarios.
+
+    The denominator counts **delivery attempts**, not ``send`` events.  Every
+    attempt the simulator makes ends as exactly one trace record -- a
+    ``receive`` (delivered) or a ``dropped`` (lost) -- so ``receives /
+    (receives + dropped)`` is the true delivery rate.  Counting ``send`` events
+    instead was wrong for broadcasts: one ``broadcast`` fans out to N recipients
+    and logs N ``receive`` records but zero ``send`` records, so a
+    broadcast-heavy trace produced a rate above 1.0 (e.g. the ``reputation``
+    scenario reported 1.21).  For unicast the two definitions agree exactly --
+    every ``send`` yields one ``receive`` or one ``dropped`` -- so this only
+    corrects the broadcast case and can never exceed 1.0.
     """
-    sends = 0
     receives = 0
+    dropped = 0
     for ev in events:
         kind = ev.get("kind", "")
-        if kind == "send":
-            sends += 1
-        elif kind == "receive":
+        if kind == "receive":
             receives += 1
-    if sends == 0:
+        elif kind == "dropped":
+            dropped += 1
+    attempts = receives + dropped
+    if attempts == 0:
         return 0.0
-    return receives / sends
+    return receives / attempts
 
 
 # Backward-compatible alias

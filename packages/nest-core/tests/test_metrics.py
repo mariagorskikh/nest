@@ -45,6 +45,32 @@ class TestComputeMetrics:
         results = compute_metrics(trace, ["success_rate"])
         assert abs(results["success_rate"] - 2.0 / 3.0) < 0.01
 
+    def test_delivery_rate_with_broadcast_stays_within_one(self, tmp_path: Path) -> None:
+        """A broadcast fans out to N receives with no matching 'send'.
+
+        The old formula (receives / sends) counted those receives in the
+        numerator with nothing in the denominator, pushing the rate above 1.0.
+        Counting delivery attempts (receive + dropped) keeps it correct.
+        """
+        events = [
+            {"ts": 0.0, "agent": "a0", "kind": "start"},
+            {"ts": 0.0, "agent": "a1", "kind": "start"},
+            {"ts": 0.0, "agent": "a2", "kind": "start"},
+            # One broadcast from a0 delivered to a1 and a2: two receives, no send.
+            {"ts": 1.0, "agent": "a0", "kind": "broadcast", "size": 4, "msg": "ping"},
+            {"ts": 1.0, "agent": "a1", "kind": "receive", "from": "a0", "size": 4},
+            {"ts": 1.0, "agent": "a2", "kind": "receive", "from": "a0", "size": 4},
+            # A second broadcast where one delivery is dropped: one receive, one dropped.
+            {"ts": 2.0, "agent": "a0", "kind": "broadcast", "size": 4, "msg": "pong"},
+            {"ts": 2.0, "agent": "a1", "kind": "receive", "from": "a0", "size": 4},
+            {"ts": 2.0, "agent": "a2", "kind": "dropped", "from": "a0", "size": 4},
+        ]
+        trace = tmp_path / "b.jsonl"
+        trace.write_text("\n".join(json.dumps(e) for e in events))
+        rate = compute_metrics(trace, ["delivery_rate"])["delivery_rate"]
+        assert rate <= 1.0
+        assert abs(rate - 3.0 / 4.0) < 1e-9  # 3 delivered of 4 attempts
+
     def test_message_count(self, tmp_path: Path) -> None:
         trace = tmp_path / "t.jsonl"
         self._write_trace(trace)
