@@ -145,6 +145,31 @@ same key concurrently, `lww_register` keeps 1 value and `mv_register` keeps `N`.
   `mv_register_siblings` scenario; confirms every replica's final state in the
   trace holds the same set of all `N` sibling values.
 
+### Cost and scale
+
+MV-Register carries the version vector that LWW does not, so it costs more, but
+the cost is bounded by *concurrency degree* -- the number of writes to one key
+that are unresolved at the same time -- not by fleet size or total write count.
+When a write causally follows what a replica has seen (the common case), the key
+collapses to one sibling and merge is `O(vector size)`, the same order as LWW.
+Siblings only accumulate while a genuine conflict is open, and one overwrite that
+has seen them collapses them again.
+
+Two properties keep it bounded in this simulator:
+
+- **Version vectors are keyed by agent id**, which is stable and bounded by the
+  agent count, so a vector never grows past the number of writers to that key.
+- **Merge folds incrementally into the maintained sibling set** rather than
+  recomputing it, so repeated gossip rounds over state a replica already has are
+  cheap (a subset check), not quadratic.
+
+The pathological case -- every agent writing the same key at once and never
+resolving -- is what the scale test in `test_mv_register.py` exercises: 50
+replicas gossiping all-to-all still converge correctly to all 50 siblings. For
+fleets in the thousands with churned (non-reused) ids, the standard next step is
+dotted version vectors or sibling pruning; the plugin is structured so that
+change is local to the merge.
+
 ### Demo scenario
 
 `scenarios/mv_register_siblings.yaml` -- 6 agents each own a replica, write the

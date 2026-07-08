@@ -180,7 +180,11 @@ class VersionVector:
             lo = VersionVector.from_dict({"a": 1})
             assert hi.dominates(lo) and not lo.dominates(hi)
         """
-        return all(self.get(n) >= other.get(n) for n in self._nodes(other))
+        # Only ``other``'s entries can make this false: a node present only in
+        # ``self`` compares against ``other``'s implicit 0 and always holds.
+        # Iterating ``other.items`` avoids allocating the node-set union on the
+        # hot dominance path.
+        return all(self.get(node) >= count for node, count in other.items)
 
     def strictly_dominates(self, other: VersionVector) -> bool:
         """Return True if this vector causally follows (and differs from) ``other``.
@@ -231,30 +235,46 @@ class Value:
         return (self.vv.items, self.payload)
 
 
-def _keep_maximal(values: list[Value]) -> list[Value]:
-    """Return the concurrent survivors: drop any value another strictly follows.
+def _merge_into_antichain(
+    current: list[Value],
+    incoming: list[Value],
+) -> tuple[list[Value], bool]:
+    """Fold ``incoming`` into a maximal ``current`` sibling set, keeping it maximal.
 
-    Deduplicates identical ``(payload, vv)`` pairs, discards every value that is
-    strictly dominated by some other value, and returns the result sorted by
-    :meth:`Value.sort_key`. What remains is an antichain under the version-vector
-    order -- the register's sibling set. This is the whole of the MV-Register
-    join, so it is commutative, associative, and idempotent by construction.
+    The result is the antichain of the version-vector order over
+    ``current + incoming`` -- every value not strictly dominated by another,
+    deduplicated by ``(payload, vv)`` and sorted by :meth:`Value.sort_key`.
+    Because the maximal set of a union is order-independent, this is exactly the
+    MV-Register join, so it is commutative, associative, and idempotent.
+
+    When ``current`` is already an antichain (the store only ever holds one),
+    folding each incoming value against the running survivors is
+    ``O(len(incoming) * len(result))`` -- it skips the quadratic
+    ``current``-vs-``current`` comparisons a from-scratch recompute would repeat
+    on every merge, which is what keeps repeated gossip rounds cheap. Passing
+    ``current=[]`` normalizes an arbitrary ``incoming`` list from scratch.
+    Returns the sorted survivors and whether anything changed.
 
     Example::
 
-        survivors = _keep_maximal([older, newer])  # -> [newer]
+        survivors, changed = _merge_into_antichain(store_values, gossiped_values)
     """
-    unique: dict[tuple[tuple[tuple[str, int], ...], bytes], Value] = {}
-    for value in values:
-        unique[value.sort_key()] = value
-    candidates = list(unique.values())
-    survivors = [
-        value
-        for value in candidates
-        if not any(other.vv.strictly_dominates(value.vv) for other in candidates)
-    ]
-    survivors.sort(key=Value.sort_key)
-    return survivors
+    result: dict[tuple[tuple[tuple[str, int], ...], bytes], Value] = {
+        value.sort_key(): value for value in current
+    }
+    changed = False
+    for value in incoming:
+        key = value.sort_key()
+        if key in result:
+            continue
+        if any(kept.vv.strictly_dominates(value.vv) for kept in result.values()):
+            continue
+        superseded = [k for k, kept in result.items() if value.vv.strictly_dominates(kept.vv)]
+        for k in superseded:
+            del result[k]
+        result[key] = value
+        changed = True
+    return sorted(result.values(), key=Value.sort_key), changed
 
 
 class MvRegisterMemory:
@@ -471,14 +491,14 @@ class MvRegisterMemory:
         before_repr = before[0].payload if before else None
         for value in incoming:
             self._clock = max(self._clock, value.vv.get(self._node_id))
-        merged = _keep_maximal(before + incoming)
+        merged, changed = _merge_into_antichain(before, incoming)
+        if not changed:
+            return False
         self._store[key] = merged
         after_repr = merged[0].payload if merged else None
-        if merged != before:
-            if after_repr is not None and after_repr != before_repr:
-                await self._notify(key, after_repr)
-            return True
-        return False
+        if after_repr is not None and after_repr != before_repr:
+            await self._notify(key, after_repr)
+        return True
 
     async def merge_all(self, state: bytes) -> list[str]:
         """Merge a full-state snapshot, returning the keys whose value changed.

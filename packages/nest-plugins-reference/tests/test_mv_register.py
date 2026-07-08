@@ -488,6 +488,16 @@ class TestLossBenchmark:
         # The hidden property, quantified: LWW drops n-1 of every n concurrent writes.
         assert (n - lww_survivors) == (n - 1)
 
+    @pytest.mark.asyncio
+    async def test_correct_at_scale_with_full_all_to_all_gossip(self) -> None:
+        # The worst case for a multi-value register: 50 replicas all write the
+        # same key concurrently and never resolve, then gossip all-to-all. The
+        # merge stays correct (every replica converges to all 50 siblings) --
+        # this is what the incremental antichain fold has to get right at size.
+        n = 50
+        survivors = await _surviving_after_concurrent_writes(MvRegisterMemory, n)
+        assert survivors == n
+
 
 # ---------------------------------------------------------------------------
 # Registry wiring
