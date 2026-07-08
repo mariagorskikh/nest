@@ -2,7 +2,7 @@
 
 A validation and linting service for NANDA Town scenario configuration files.
 
-- **Hosted URL**: `https://scenario-doctor.up.railway.app`
+- **Hosted URL**: `https://nandatown-production.up.railway.app`
 - **Purpose**: Helps OpenClaw agents quickly validate the structure of scenario YAML files and check for unregistered layers/plugins without running the full simulation.
 
 ## Endpoints
@@ -17,7 +17,7 @@ A validation and linting service for NANDA Town scenario configuration files.
   ```
 - **Example Call**:
   ```bash
-  curl https://scenario-doctor.up.railway.app/health
+  curl https://nandatown-production.up.railway.app/health
   ```
 
 ### 2. `GET /layers`
@@ -43,7 +43,7 @@ A validation and linting service for NANDA Town scenario configuration files.
   ```
 - **Example Call**:
   ```bash
-  curl https://scenario-doctor.up.railway.app/layers
+  curl https://nandatown-production.up.railway.app/layers
   ```
 
 ### 3. `POST /validate-scenario`
@@ -68,7 +68,7 @@ A validation and linting service for NANDA Town scenario configuration files.
   ```
 - **Example Call**:
   ```bash
-  curl -X POST -H "Content-Type: text/yaml" --data-binary @scenarios/delegated_auth.yaml https://scenario-doctor.up.railway.app/validate-scenario
+  curl -X POST -H "Content-Type: text/yaml" --data-binary @scenarios/delegated_auth.yaml https://nandatown-production.up.railway.app/validate-scenario
   ```
 
 ### 4. `POST /lint`
@@ -93,7 +93,7 @@ A validation and linting service for NANDA Town scenario configuration files.
   ```
 - **Example Call**:
   ```bash
-  curl -X POST -H "Content-Type: text/yaml" --data-binary @scenarios/delegated_auth.yaml https://scenario-doctor.up.railway.app/lint
+  curl -X POST -H "Content-Type: text/yaml" --data-binary @scenarios/delegated_auth.yaml https://nandatown-production.up.railway.app/lint
   ```
 
 ---
