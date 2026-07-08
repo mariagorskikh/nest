@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+name: auth_capability_delegation
+problem: 04-auth-capability-delegation
+description: >
+  Exercises bounded capability-token delegation with audience binding,
+  subset-only scopes, max-depth rejection, and cascading revocation.
+validators:
+  - nest_plugins_reference.validators.auth_delegation_validators:CapabilityDelegationValidator
+events:
+  - kind: root
+    token: buyer-root
+    subject: buyer
+    audience: market
+    scopes: [quote, pay]
+    ttl_seconds: 3600
+  - kind: delegate
+    token: buyer-root
+    subject: broker
+    audience: escrow
+    scopes: [quote]
+    ttl_seconds: 600
+  - kind: verify
+    token: broker
+    audience: escrow
+    scopes: [quote]
+  - kind: verify
+    token: broker
+    audience: market
+    scopes: [quote]
+    expect: audience
+  - kind: delegate
+    token: broker
+    subject: rogue
+    scopes: [pay]
+    expect: scope
+  - kind: revoke
+    token: buyer-root
+  - kind: verify
+    token: broker
+    audience: escrow
+    scopes: [quote]
+    expect: revoked

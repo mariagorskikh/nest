@@ -16,6 +16,10 @@ Example::
 
 from __future__ import annotations
 
+from nest_plugins_reference.validators.auth_delegation_validators import (
+    AuthDelegationReport,
+    CapabilityDelegationValidator,
+)
 from nest_plugins_reference.validators.gossip_validators import (
     ConvergenceFailureError,
     PartitionLeakError,
@@ -32,6 +36,8 @@ from nest_plugins_reference.validators.privacy_validators import (
 )
 
 __all__ = [
+    "AuthDelegationReport",
+    "CapabilityDelegationValidator",
     "ConvergenceFailureError",
     "PartitionLeakError",
     "ValidatorReport",
