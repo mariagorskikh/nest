@@ -108,10 +108,20 @@ class OnionRoutingComms:
             ciphertext = raw[12:]
             decrypted = aesgcm.decrypt(nonce, ciphertext, None)
             parsed = json.loads(decrypted)
-            
+
+            if not isinstance(parsed, dict):
+                raise TypeError("Onion packet must decode to a JSON object")
+
             next_hop = parsed.get("next_hop")
-            inner_payload = base64.b64decode(parsed.get("payload", ""))
-            
+            payload_b64 = parsed.get("payload")
+
+            if not isinstance(next_hop, str) or not next_hop:
+                raise TypeError("Onion packet missing next_hop")
+            if not isinstance(payload_b64, str):
+                raise TypeError("Onion packet payload must be a base64 string")
+
+            inner_payload = base64.b64decode(payload_b64, validate=True)
+
             if next_hop == "FINAL":
                 # We are the final destination! Decode the actual inner message.
                 msg_data = json.loads(inner_payload)
@@ -134,7 +144,7 @@ class OnionRoutingComms:
                     metadata={
                         "onion_action": "relay",
                         "onion_next_hop": next_hop,
-                        "onion_raw_payload": parsed.get("payload") # keep as base64 string
+                        "onion_raw_payload": payload_b64,  # keep as base64 string
                     }
                 )
         except Exception as exc:
@@ -163,36 +173,38 @@ class OnionRoutingComms:
             
         # 2. We are the origin. Construct the circuit!
         circuit: list[AgentId] = []
-        
+
         # In a real network, we would query the registry for random relays.
         # For this implementation, if a registry is provided, we fetch peers.
         if self._registry is not None:
             cards = await self._registry.lookup(Query())
             # Exclude self and final destination from relays
-            available_relays = [c.agent_id for c in cards if c.agent_id not in (self._agent_id, to)]
-            
+            available_relays = [
+                c.agent_id for c in cards if c.agent_id not in (self._agent_id, to)
+            ]
+
             # Pick up to (circuit_length - 1) relays
             needed = max(0, self.circuit_length - 1)
             # Simplistic random selection (taking first N for simplicity of mock)
             circuit = available_relays[:needed]
-            
+
         # The final node in the circuit is always the destination
         circuit.append(to)
-        
+
         # 3. Serialize the inner message
         inner_bytes = self.serialize(msg)
         current_payload = inner_bytes
-        
+
         # 4. Wrap layers in reverse order (from destination back to first relay)
         # For the destination, next_hop is "FINAL"
         current_payload = self._wrap_layer(circuit[-1], "FINAL", current_payload)
-        
+
         # For intermediate relays, next_hop is the node AFTER them in the circuit
         for i in range(len(circuit) - 2, -1, -1):
             relay = circuit[i]
-            next_relay = str(circuit[i+1])
+            next_relay = str(circuit[i + 1])
             current_payload = self._wrap_layer(relay, next_relay, current_payload)
-            
+
         # 5. Send to the first node in the circuit
         first_hop = circuit[0]
         await self._transport.send(first_hop, current_payload)

@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import base64
-import json
 from unittest.mock import AsyncMock
 
-from nest_core.types import AgentId, Message, MessageId, Query, AgentCard
-from nest_plugins_reference.comms.onion import OnionRoutingComms, _get_key_for_agent
+import pytest
+
+from nest_core.types import AgentCard, AgentId, Message, MessageId
+from nest_plugins_reference.comms.onion import OnionRoutingComms
 
 @pytest.fixture
 def msg():
