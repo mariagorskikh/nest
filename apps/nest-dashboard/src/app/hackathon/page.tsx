@@ -90,14 +90,6 @@ export default async function HackathonLandingPage() {
               Browse by layer
             </Link>
             <a
-              href={hackathonEvent.lumaUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-secondary"
-            >
-              Info session &middot; Jul 7 on Luma
-            </a>
-            <a
               href={hackathonEvent.officialUrl}
               target="_blank"
               rel="noopener noreferrer"
@@ -164,27 +156,14 @@ export default async function HackathonLandingPage() {
                 <span className="italic text-ink-700">demo</span> in Boston.
               </h2>
             </div>
-            <a
-              href={hackathonEvent.lumaUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hidden sm:inline-flex font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500 hover:text-ink-900"
-            >
-              Register on Luma →
-            </a>
           </div>
 
-          <div className="grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2 lg:grid-cols-3">
             {[
               {
                 label: "Virtual hackathon",
                 date: hackathonEvent.virtualWindow,
                 body: "Build agentic AI apps in the Nanda Town sandbox from anywhere. No Luma registration needed to participate virtually.",
-              },
-              {
-                label: "Info session",
-                date: "Mon, July 7",
-                body: "Virtual webinar: format, participation options, requirements, judging criteria, and how to get started. Register on Luma.",
               },
               {
                 label: "Submissions due",
@@ -296,16 +275,7 @@ export default async function HackathonLandingPage() {
             </h2>
             <p className="mt-5 max-w-xs text-[0.95rem] leading-[1.6] text-ink-500">
               The short version: yes, your team can do the whole thing
-              virtually. Details below, and in the{" "}
-              <a
-                href={hackathonEvent.lumaUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline underline-offset-4 decoration-cream-400 hover:text-ink-900"
-              >
-                July 7 info session
-              </a>
-              .
+              virtually. Details below.
             </p>
           </div>
           <HackathonFaq entries={hackathonFaqs} />

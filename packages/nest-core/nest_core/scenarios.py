@@ -127,3 +127,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("escrow_marketplace", escrow_marketplace_factory)
+    elif name == "failure_detection":
+        from nest_core.scenarios_builtin.failure_detection import (
+            failure_detection_factory,
+        )
+
+        register_scenario("failure_detection", failure_detection_factory)

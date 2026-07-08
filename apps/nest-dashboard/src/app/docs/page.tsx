@@ -398,7 +398,6 @@ export default function DocsPage() {
               {[
                 { k: 'Build window', v: hackathonEvent.virtualWindow, note: 'Virtual — build from anywhere.' },
                 { k: 'Submissions due', v: hackathonEvent.submissionDeadline, note: 'Hard deadline, wherever you build.' },
-                { k: 'Info session', v: hackathonEvent.infoSession, note: 'Free webinar. Register on Luma.' },
                 { k: 'Finale', v: hackathonEvent.finale, note: 'Optional. Does not affect your score.' },
               ].map((d) => (
                 <div key={d.k} className="rounded-xl bg-cream-200 p-6">
@@ -468,13 +467,9 @@ git push origin hackathon/<your-handle>-<theme>
                 <a href="/hackathon" className="text-rust hover:text-rust/80 underline underline-offset-2">
                   Hackathon page
                 </a>
-                , see every open PR on{' '}
+                , or see every open PR on{' '}
                 <a href={hackathonEvent.githubPRsUrl} target="_blank" rel="noopener noreferrer" className="text-rust hover:text-rust/80 underline underline-offset-2">
                   GitHub
-                </a>
-                , or register for the info session on{' '}
-                <a href={hackathonEvent.lumaUrl} target="_blank" rel="noopener noreferrer" className="text-rust hover:text-rust/80 underline underline-offset-2">
-                  Luma
                 </a>
                 .
               </p>

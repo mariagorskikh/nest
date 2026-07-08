@@ -3728,6 +3728,316 @@ def validate_bft_no_stuck_view(
 
 
 # ---------------------------------------------------------------------------
+# Failure-detection validators
+# ---------------------------------------------------------------------------
+
+
+_MAX_PLAUSIBLE_GAP = 22.0
+"""Longest silence (logical time) that a *live* peer can plausibly produce.
+
+Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with ``hb_max == 20`` and
+zero message drop, so consecutive observer receipts from a living peer are at
+most 20 apart.  A 2-unit margin gives 22: if the observer received a heartbeat
+within this window, the peer was provably alive and any suspicion of it is a
+false positive.
+"""
+
+_ACCURACY_WARMUP = 100.0
+"""Logical time before which suspicions are ignored for the accuracy check.
+
+An accrual detector needs a handful of inter-arrival samples before its score
+is meaningful; this window lets every detector populate its history before its
+verdicts are held against it.
+"""
+
+
+def _parse_fd_record(ev: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the decoded JSON dict if *ev* is an ``fd:*`` broadcast, else ``None``.
+
+    Example::
+
+        rec = _parse_fd_record(event)
+    """
+    if ev.get("kind") != "broadcast":
+        return None
+    msg = str(ev.get("msg", ""))
+    if '"fd"' not in msg:
+        return None
+    try:
+        obj = json.loads(msg)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return cast("dict[str, Any]", obj)
+
+
+def _fd_observer_ids(events: list[dict[str, Any]]) -> set[str]:
+    """Return the set of agent ids that emit ``fd:status`` broadcasts."""
+    observers: set[str] = set()
+    for ev in events:
+        rec = _parse_fd_record(ev)
+        if rec is not None and rec.get("fd") == "status":
+            agent = ev.get("agent")
+            if isinstance(agent, str):
+                observers.add(agent)
+    return observers
+
+
+def _fd_statuses(events: list[dict[str, Any]]) -> dict[str, list[tuple[float, bool]]]:
+    """Return peer -> sorted ``(ts, suspected)`` from ``fd:status`` broadcasts."""
+    statuses: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+    for ev in events:
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "status":
+            continue
+        peer = rec.get("peer")
+        suspected = rec.get("suspected")
+        ts = ev.get("ts")
+        if isinstance(peer, str) and isinstance(suspected, bool) and isinstance(ts, (int, float)):
+            statuses[peer].append((float(ts), suspected))
+    for peer in statuses:
+        statuses[peer].sort(key=lambda item: item[0])
+    return statuses
+
+
+def _fd_transitions(
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, list[tuple[float, bool]]], float]:
+    """Return (peer -> sorted ``(ts, reachable)`` markers, max ts over all events)."""
+    transitions: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+    last_ts = 0.0
+    for ev in events:
+        ts = ev.get("ts")
+        if isinstance(ts, (int, float)):
+            last_ts = max(last_ts, float(ts))
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "phase":
+            continue
+        peer = rec.get("peer")
+        reachable = rec.get("reachable")
+        if isinstance(peer, str) and isinstance(reachable, bool) and isinstance(ts, (int, float)):
+            transitions[peer].append((float(ts), reachable))
+    for peer in transitions:
+        transitions[peer].sort(key=lambda item: item[0])
+    return transitions, last_ts
+
+
+def _fd_hb_receipts(events: list[dict[str, Any]], observer_ids: set[str]) -> dict[str, list[float]]:
+    """Return peer -> sorted receipt timestamps of that peer's heartbeats at an observer."""
+    receipts: dict[str, list[float]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        agent = ev.get("agent")
+        if agent not in observer_ids:
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("FDHB|"):
+            continue
+        sender = ev.get("from")
+        ts = ev.get("ts")
+        if isinstance(sender, str) and isinstance(ts, (int, float)):
+            receipts[sender].append(float(ts))
+    for peer in receipts:
+        receipts[peer].sort()
+    return receipts
+
+
+def _segments_for_peer(
+    transitions: list[tuple[float, bool]], last_ts: float
+) -> list[tuple[float, float, bool]]:
+    """Expand reachability markers into ``(start, end, reachable)`` segments."""
+    if not transitions:
+        return []
+    segments: list[tuple[float, float, bool]] = []
+    for idx, (ts, reachable) in enumerate(transitions):
+        end = transitions[idx + 1][0] if idx + 1 < len(transitions) else last_ts
+        segments.append((ts, end, reachable))
+    return segments
+
+
+def _in_any_interval(t: float, intervals: list[tuple[float, float]]) -> bool:
+    """Return whether *t* falls within any ``[start, end]`` interval."""
+    return any(start <= t <= end for start, end in intervals)
+
+
+def _last_leq(sorted_ts: list[float], t: float) -> float | None:
+    """Return the largest timestamp ``<= t`` in *sorted_ts*, or ``None``."""
+    found: float | None = None
+    for ts in sorted_ts:
+        if ts <= t:
+            found = ts
+        else:
+            break
+    return found
+
+
+def validate_failure_detection_completeness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every peer that truly goes silent is eventually -- and still -- suspected.
+
+    For each unreachable segment in the ground-truth ``fd:phase`` markers, the
+    detector must report the peer suspected at some status update inside the
+    segment and still have it suspected at the last in-segment update.  A trace
+    with no unreachable segment at all is a scenario setup failure.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+
+    outage_segments: dict[str, list[tuple[float, float]]] = {}
+    for peer, peer_transitions in transitions.items():
+        downs = [
+            (start, end)
+            for start, end, reachable in _segments_for_peer(peer_transitions, last_ts)
+            if not reachable
+        ]
+        if downs:
+            outage_segments[peer] = downs
+
+    if not outage_segments:
+        return [
+            ValidationResult(
+                "failure_detection_completeness",
+                False,
+                "no unreachable fd:phase segment found in trace",
+            )
+        ]
+
+    failures: list[str] = []
+    checked = 0
+    for peer, downs in outage_segments.items():
+        peer_statuses = statuses.get(peer, [])
+        for u_start, u_end in downs:
+            checked += 1
+            in_window = [(t, s) for (t, s) in peer_statuses if u_start < t <= u_end]
+            if not in_window:
+                failures.append(f"{peer}: no status during outage [{u_start}, {u_end}]")
+                continue
+            if not any(s for _, s in in_window):
+                failures.append(f"{peer}: never suspected during outage [{u_start}, {u_end}]")
+                continue
+            if not in_window[-1][1]:
+                failures.append(f"{peer}: not suspected at outage end [{u_start}, {u_end}]")
+
+    if failures:
+        return [ValidationResult("failure_detection_completeness", False, "; ".join(failures))]
+    return [
+        ValidationResult(
+            "failure_detection_completeness",
+            True,
+            f"all {checked} outage segment(s) detected and still suspected at end",
+        )
+    ]
+
+
+def validate_failure_detection_accuracy(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Live peers are not falsely suspected; recovered peers are cleared.
+
+    Accuracy: after a warm-up, while a peer is provably reachable -- it is inside
+    a reachable ``fd:phase`` segment *and* the observer received a heartbeat from
+    it no longer than ``_MAX_PLAUSIBLE_GAP`` ago -- the detector must not suspect
+    it.  A tight fixed timeout violates this on the upper tail of normal
+    heartbeat jitter; an accrual detector does not.
+
+    Recovery: a peer that genuinely went down and came back must end its final
+    reachable segment un-suspected.
+
+    Returns two results: ``failure_detection_accuracy`` and
+    ``failure_detection_recovery``.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+    observer_ids = _fd_observer_ids(events)
+    receipts = _fd_hb_receipts(events, observer_ids)
+    watched = sorted(statuses.keys())
+
+    # ----- accuracy: no false suspicion of a provably-live peer -----
+    reachable_intervals: dict[str, list[tuple[float, float]]] = {}
+    for peer in watched:
+        segments = _segments_for_peer(transitions.get(peer, []), last_ts)
+        if segments:
+            reachable_intervals[peer] = [
+                (start, end) for start, end, reachable in segments if reachable
+            ]
+        else:
+            reachable_intervals[peer] = [(0.0, last_ts)]
+
+    false_positives: list[str] = []
+    for peer in watched:
+        intervals = reachable_intervals[peer]
+        peer_receipts = receipts.get(peer, [])
+        for t, suspected in statuses.get(peer, []):
+            if not suspected or t < _ACCURACY_WARMUP:
+                continue
+            if not _in_any_interval(t, intervals):
+                continue
+            recent = _last_leq(peer_receipts, t)
+            if recent is not None and (t - recent) <= _MAX_PLAUSIBLE_GAP:
+                false_positives.append(
+                    f"{peer}: suspected at t={t} but a heartbeat arrived {round(t - recent, 3)} ago"
+                )
+
+    if false_positives:
+        accuracy = ValidationResult("failure_detection_accuracy", False, "; ".join(false_positives))
+    else:
+        accuracy = ValidationResult(
+            "failure_detection_accuracy",
+            True,
+            f"no false suspicion of a provably-live peer across {len(watched)} peer(s)",
+        )
+
+    # ----- recovery: a healed peer ends un-suspected -----
+    recovery_failures: list[str] = []
+    recovered_peers = 0
+    for peer in watched:
+        segments = _segments_for_peer(transitions.get(peer, []), last_ts)
+        if not any(not reachable for _, _, reachable in segments):
+            continue
+        final_reachable: tuple[float, float] | None = None
+        seen_down = False
+        for start, end, reachable in segments:
+            if not reachable:
+                seen_down = True
+                final_reachable = None
+            elif seen_down:
+                final_reachable = (start, end)
+        if final_reachable is None:
+            recovery_failures.append(f"{peer}: no reachable segment after final outage")
+            continue
+        recovered_peers += 1
+        r_start, r_end = final_reachable
+        in_window = [(t, s) for (t, s) in statuses.get(peer, []) if r_start <= t <= r_end]
+        if not in_window:
+            recovery_failures.append(f"{peer}: no status after recovery [{r_start}, {r_end}]")
+            continue
+        if in_window[-1][1]:
+            recovery_failures.append(f"{peer}: still suspected at end of recovery segment")
+
+    if recovery_failures:
+        recovery = ValidationResult(
+            "failure_detection_recovery", False, "; ".join(recovery_failures)
+        )
+    elif recovered_peers == 0:
+        recovery = ValidationResult(
+            "failure_detection_recovery",
+            False,
+            "no peer recovered from an outage in trace",
+        )
+    else:
+        recovery = ValidationResult(
+            "failure_detection_recovery",
+            True,
+            f"all {recovered_peers} recovered peer(s) cleared by end",
+        )
+
+    return [accuracy, recovery]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -3818,5 +4128,9 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_escrow_role_binding,
         validate_escrow_bps_in_range,
         validate_escrow_no_payout_without_delivery,
+    ],
+    "failure_detection": [
+        validate_failure_detection_completeness,
+        validate_failure_detection_accuracy,
     ],
 }

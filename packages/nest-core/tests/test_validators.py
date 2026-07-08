@@ -1823,6 +1823,7 @@ class TestValidatorRegistry:
             "provenance_supply_chain",
             "bft_hotstuff",
             "escrow_marketplace",
+            "failure_detection",
         }
         assert set(VALIDATORS.keys()) == expected
 
