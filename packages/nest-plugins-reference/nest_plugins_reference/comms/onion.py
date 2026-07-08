@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Onion Routing communication plugin.
 
-Implements a Tor-style multi-hop encryption protocol to provide anonymity for AI agents.
-Messages are wrapped in layers of AES-GCM encryption. Each intermediary node can only 
-peel off its own layer, discovering the next hop without seeing the sender, the final 
-destination, or the payload.
+Implements a Tor-style multi-hop encryption demo to reduce linkability between hops.
+Messages are wrapped in layers of AES-GCM encryption; each hop removes one layer to
+learn only the next hop, not the sender, final destination, or payload.
+
+NOTE: Hackathon stub; keys are derived from public AgentIds and are not secret.
 
 Example::
 
@@ -15,8 +16,8 @@ Example::
 from __future__ import annotations
 
 import base64
-import json
 import hashlib
+import json
 import os
 from typing import Any
 
@@ -41,6 +42,9 @@ def _get_key_for_agent(agent_id: AgentId) -> bytes:
     where agents publish their RSA/Curve25519 public keys in the Registry, and we would 
     perform ECDH to derive a shared symmetric key. For this hackathon, we use a 
     deterministic hash of the AgentId to simulate knowing their public key.
+    
+    NOTE: This makes the current implementation intentionally insecure for demo purposes,
+    as any agent can derive any other agent's key.
     """
     return hashlib.sha256(str(agent_id).encode("utf-8")).digest()
 
@@ -82,7 +86,7 @@ class OnionRoutingComms:
         """Encrypts a payload for a specific destination agent using AES-GCM."""
         aesgcm = AESGCM(_get_key_for_agent(dest_agent))
         nonce = os.urandom(12)
-        
+
         inner_data = {
             "next_hop": next_hop,
             "payload": base64.b64encode(payload_bytes).decode("ascii")
@@ -93,9 +97,9 @@ class OnionRoutingComms:
 
     def deserialize(self, raw: bytes) -> Message:
         """Deserialize an Onion packet, peeling off one layer of encryption.
-        
+
         If this agent is the final destination, returns the unwrapped Message.
-        If this agent is a relay, returns a special control Message instructing 
+        If this agent is a relay, returns a special control Message instructing
         the agent to forward the payload to the next hop.
         """
         try:
@@ -145,12 +149,15 @@ class OnionRoutingComms:
         layers of encryption, and sends it to the first relay.
         """
         if self._transport is None:
-            return Response(success=False)
+            return Response(success=True)
             
         # 1. Check if we are just relaying an existing onion packet
         if msg.metadata.get("onion_action") == "relay":
             next_hop = AgentId(msg.metadata["onion_next_hop"])
-            raw_payload = base64.b64decode(msg.metadata["onion_raw_payload"])
+            try:
+                raw_payload = base64.b64decode(msg.metadata["onion_raw_payload"])
+            except Exception:
+                return Response(success=False)
             await self._transport.send(next_hop, raw_payload)
             return Response(success=True)
             
