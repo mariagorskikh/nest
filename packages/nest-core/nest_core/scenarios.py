@@ -129,3 +129,7 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("failure_detection", failure_detection_factory)
+    elif name == "delegated_auth":
+        from nest_core.scenarios_builtin.delegated_auth import delegated_auth_factory
+
+        register_scenario("delegated_auth", delegated_auth_factory)
