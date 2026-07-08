@@ -61,11 +61,10 @@ import hashlib
 import hmac
 import json
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from nest_core.types import AgentId, AuthContext, Token
-
 
 # ---------------------------------------------------------------------------
 # Custom exceptions
@@ -140,7 +139,11 @@ def _strip_ancestors(payload: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in payload.items() if k != _ANCESTORS_KEY}
 
 
-def _chain_nonce(secret: bytes, ancestor_payloads: list[dict[str, Any]], leaf_payload: dict[str, Any]) -> str:
+def _chain_nonce(
+    secret: bytes,
+    ancestor_payloads: list[dict[str, Any]],
+    leaf_payload: dict[str, Any],
+) -> str:
     """Compute the HMAC nonce over the full chain.
 
     Concatenates the canonical forms of all ancestor payloads (from root to
@@ -254,7 +257,9 @@ class DelegatableAuth:
     ) -> None:
         self._secret = secret
         self._clock = clock
-        self._revoked_paths: set[tuple[str, ...]] = revoked_paths if revoked_paths is not None else set()
+        self._revoked_paths: set[tuple[str, ...]] = (
+            revoked_paths if revoked_paths is not None else set()
+        )
 
     # -- Auth protocol methods -------------------------------------------
 
@@ -325,10 +330,9 @@ class DelegatableAuth:
 
         # --- Audience check ---
         aud_str: str = payload.get("aud", "")
-        if aud_str and presenter is not None:
-            if str(presenter) != aud_str:
-                msg = f"Token audience is {aud_str!r} but presenter is {presenter!r}"
-                raise AudienceMismatchError(msg)
+        if aud_str and presenter is not None and str(presenter) != aud_str:
+            msg = f"Token audience is {aud_str!r} but presenter is {presenter!r}"
+            raise AudienceMismatchError(msg)
 
         return AuthContext(
             subject=AgentId(payload["sub"]),
@@ -383,7 +387,9 @@ class DelegatableAuth:
 
         # --- Verify parent is still valid ---
         parent_expected = _chain_nonce(
-            self._secret, parent.ancestors, _strip_ancestors(parent.payload),
+            self._secret,
+            parent.ancestors,
+            _strip_ancestors(parent.payload),
         )
         if not hmac.compare_digest(parent_expected, parent.nonce):
             msg = "Parent token has invalid nonce chain"
@@ -411,10 +417,7 @@ class DelegatableAuth:
 
         parent_remaining_ttl = max(0, int(parent_iat + parent_ttl - now))
         if ttl > parent_remaining_ttl:
-            msg = (
-                f"Child TTL ({ttl}) exceeds parent remaining TTL "
-                f"({parent_remaining_ttl})"
-            )
+            msg = f"Child TTL ({ttl}) exceeds parent remaining TTL ({parent_remaining_ttl})"
             raise ValueError(msg)
 
         # --- Build child's ancestor chain ---
