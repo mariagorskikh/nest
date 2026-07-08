@@ -253,7 +253,7 @@ class TestAdversarial:
     @pytest.mark.asyncio
     async def test_ttl_enforced(self, auth: DelegatableAuth) -> None:
         past_time = 0.0
-        auth._clock = past_time
+        auth._clock = past_time  # type: ignore[reportPrivateUsage]
 
         root = await auth.issue(AgentId("admin"), ["read"])
         child = await auth.delegate(
@@ -263,7 +263,7 @@ class TestAdversarial:
             ttl=10,
         )
         # Advance clock past TTL
-        auth._clock = 20.0
+        auth._clock = 20.0  # type: ignore[reportPrivateUsage]
         with pytest.raises(ValueError, match="expired"):
             await auth.verify(child, presenter=AgentId("worker"))
 
@@ -327,9 +327,9 @@ class TestValidatorsFailAgainstJwt:
         no effect on tokens issued independently.
         """
         # Use explicit clock so tokens are distinct
-        jwt._clock = 0.0
+        jwt._clock = 0.0  # type: ignore[reportPrivateUsage]
         token_a = await jwt.issue(AgentId("admin"), ["read"])
-        jwt._clock = 1.0
+        jwt._clock = 1.0  # type: ignore[reportPrivateUsage]
         token_b = await jwt.issue(AgentId("admin"), ["read"])
         await jwt.revoke(token_a)
         # token_b still verifies — no parent-child link
@@ -350,7 +350,10 @@ class TestValidatorsFailAgainstJwt:
         auth = DelegatableAuth(secret=b"test-secret")
         root = await auth.issue(AgentId("admin"), ["read"])
         child = await auth.delegate(
-            root, audience=AgentId("worker"), scopes=["read"], ttl=100,
+            root,
+            audience=AgentId("worker"),
+            scopes=["read"],
+            ttl=100,
         )
         await auth.revoke(root)
         with pytest.raises(RevokedAncestorError):
@@ -362,7 +365,10 @@ class TestValidatorsFailAgainstJwt:
         auth = DelegatableAuth(secret=b"test-secret")
         root = await auth.issue(AgentId("admin"), ["read"])
         child = await auth.delegate(
-            root, audience=AgentId("worker"), scopes=["read"], ttl=100,
+            root,
+            audience=AgentId("worker"),
+            scopes=["read"],
+            ttl=100,
         )
         with pytest.raises(AudienceMismatchError):
             await auth.verify(child, presenter=AgentId("eve"))
