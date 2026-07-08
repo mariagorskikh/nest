@@ -3,9 +3,9 @@
 
 This scenario exercises a more applied memory rule than "store every byte":
 local reports are fused into a calculator project node only when they restrict
-onto an existing basis dimension. A large copypasta-like payload has no
-``node`` and no valid ``basis`` field, so it cannot glue to the calculator node
-and cannot change the decision.
+onto an existing basis dimension. A public-domain context-saturation payload
+has no ``node`` and no valid ``basis`` field, so it cannot glue to the
+calculator node and cannot change the decision.
 
 The coordinator writes accepted evidence into ``pn_counter`` memory and ships
 the calculator only after all required basis dimensions have fused.
@@ -18,6 +18,7 @@ Example::
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, cast
 
 from nest_core.scenario import ScenarioConfig
@@ -31,6 +32,8 @@ _IGNORE_PREFIX = "fusion_ignore|"
 _DELTA_PREFIX = "pn_delta|"
 _DECISION_PREFIX = "decision|"
 _FINAL_PREFIX = "final:"
+_FIXTURE_DIR = Path(__file__).with_name("fixtures")
+_DEFAULT_SATURATION_FIXTURE = "context_saturation_payload.txt"
 
 
 class FusionReporterAgent(StateMachineAgent):
@@ -173,7 +176,7 @@ def memory_basis_fusion_calculator_factory(
     config: ScenarioConfig,
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
-    """Create calculator reporters plus a copypasta saturation reporter.
+    """Create calculator reporters plus a context-saturation reporter.
 
     Example::
 
@@ -188,8 +191,9 @@ def memory_basis_fusion_calculator_factory(
         )
     ]
     threshold = int(task_config.get("threshold", len(required_basis)))
+    saturation_fixture = str(task_config.get("saturation_fixture", _DEFAULT_SATURATION_FIXTURE))
     coordinator = AgentId("coordinator-0")
-    copypasta = ("r/copypasta saturation " * 500).encode("utf-8")
+    saturation_payload = (_FIXTURE_DIR / saturation_fixture).read_bytes()
 
     agents: dict[AgentId, StateMachineAgent] = {
         coordinator: FusionCoordinatorAgent(coordinator, required_basis, threshold)
@@ -200,7 +204,7 @@ def memory_basis_fusion_calculator_factory(
         ("test-multiply", _report("calculator", "multiply", "multiplication tested")),
         ("test-divide", _report("calculator", "divide", "division tested")),
         ("off-basis", _report("calculator", "horoscope", "irrelevant basis")),
-        ("copypasta", copypasta),
+        ("context-saturation", saturation_payload),
     ]
     for name, payload in reports:
         aid = AgentId(name)

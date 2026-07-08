@@ -140,7 +140,8 @@ for r in validate_trace(Path('traces/memory_pn_counter_reports.jsonl'), 'memory_
 `scenarios/memory_basis_fusion_calculator.yaml` -- a coordinator acts like a
 small typed memory brain. Reports can fuse into the `calculator` node only if
 they restrict onto one of its declared basis dimensions: `add`, `subtract`,
-`multiply`, or `divide`. A large copypasta payload has no legal overlap, and an
+`multiply`, or `divide`. A frozen Project Gutenberg excerpt is used as a
+public-domain context-saturation payload with no legal overlap, and an
 otherwise well-formed `"horoscope"` report is outside the node's basis, so both
 are ignored instead of being stored as meaningful evidence. The coordinator
 ships only after all required basis dimensions fuse and the PN-Counter score
@@ -152,6 +153,23 @@ python -c "
 from pathlib import Path
 from nest_core.validators import validate_trace
 for r in validate_trace(Path('traces/memory_basis_fusion_calculator.jsonl'), 'memory_basis_fusion_calculator'):
+    print(('PASS' if r.passed else 'FAIL'), r.name, '-', r.detail)
+"
+```
+
+`scenarios/memory_code_saturation_calculator.yaml` -- the same basis-fusion
+rule, but the saturation payload is a code-shaped excerpt from the permissively
+licensed `drivers/gpu/drm/amd/amdgpu/amdgpu_object.c` file in
+`torvalds/linux`. This guards against a subtler failure mode: a payload can look
+plausibly technical while still having no legal node/basis overlap with the
+calculator task.
+
+```bash
+nest run scenarios/memory_code_saturation_calculator.yaml
+python -c "
+from pathlib import Path
+from nest_core.validators import validate_trace
+for r in validate_trace(Path('traces/memory_code_saturation_calculator.jsonl'), 'memory_code_saturation_calculator'):
     print(('PASS' if r.passed else 'FAIL'), r.name, '-', r.detail)
 "
 ```

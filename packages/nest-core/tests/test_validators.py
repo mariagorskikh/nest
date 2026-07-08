@@ -1816,6 +1816,7 @@ class TestValidatorRegistry:
             "identity_rotation",
             "memory_concurrent_writers",
             "memory_basis_fusion_calculator",
+            "memory_code_saturation_calculator",
             "memory_pn_counter_reports",
             "streaming_payments",
             "empic_payments",

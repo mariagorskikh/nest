@@ -4302,6 +4302,10 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_basis_fusion_calculator_action,
         validate_pn_counter_delta_preservation,
     ],
+    "memory_code_saturation_calculator": [
+        validate_basis_fusion_calculator_action,
+        validate_pn_counter_delta_preservation,
+    ],
     "streaming_payments": [
         validate_streaming_conservation,
         validate_streaming_no_drain_after_close,
