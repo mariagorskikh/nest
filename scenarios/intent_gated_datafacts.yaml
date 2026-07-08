@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+# Intent-gated DataFacts scenario.
+#
+# Demonstrates the IntentGatedFacts plugin under adversarial conditions:
+#   - Normal agents register intent then publish (succeeds)
+#   - Attacker agent attempts surprise publication without registering intent
+#   - Expired-intent agent registers intent then waits past TTL before publishing
+#
+# The adversarial validator (test_intent_facts.py::TestAdversarialValidator)
+# will PASS on this plugin and FAIL against datafacts_v1.
+
+name: intent_gated_datafacts
+
+description: >
+  Supply-chain scenario where each hop must pre-declare a publish intent before
+  uploading dataset metadata.  An adversarial agent that skips the intent step
+  is blocked.  The scenario uses 5 agents: 3 honest supply-chain participants,
+  1 attacker (no intent registered), and 1 lazy agent (intent expires before use).
+
+tier: 1
+
+seed: 42
+
+agents:
+  count: 5
+  brain: state-machine
+  roles:
+    - name: supplier
+      count: 1
+    - name: manufacturer
+      count: 1
+    - name: retailer
+      count: 1
+    - name: attacker
+      count: 1
+    - name: lazy_publisher
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: intent_facts
+
+task:
+  type: supply_chain
+  config:
+    items_per_round: 2
+    rounds: 3
+  intent_facts:
+    intent_ttl: 5
+    attacker_skips_intent: true
+    lazy_publisher_delay_ticks: 10
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 5000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+  - intent_fulfillment_rate
+
+validators:
+  - no_surprise_publications
+  - no_expired_intent_replays
+
+output:
+  trace: ./traces/intent_gated_datafacts.jsonl
+
+seeds:
+  - 42
+  - 7
+  - 1337
