@@ -24,6 +24,16 @@ Source: [`nest_plugins_reference/payments/prepaid_credits.py`](../../packages/ne
 ## Additional reference plugins
 
 `streaming` — bilateral per-tick streams with mid-stream cancellation.
+Every mutation is idempotency-keyed (retries return the original result),
+and the plugin enforces three invariants ``prepaid_credits`` cannot:
+conservation of funds across all stream operations, rate enforcement
+(no tick drains more than ``rate_per_tick``), and stop-on-close
+(no debit after ``close_stream``). Ships with Hypothesis property-based
+tests that verify these invariants hold for arbitrary sequences of
+open/tick/close/refund, plus validators that catch drain-after-close,
+over-bill-on-partition, rate violations, and double-open attacks.
+See [`scenarios/streaming_payments.yaml`](../../scenarios/streaming_payments.yaml)
+for the adversarial test scenario.
 
 `empic_escrow` — EMPIC-shaped escrow for service providers and
 consumers. Pull mode locks one request payment until accepted data is

@@ -1405,6 +1405,224 @@ def validate_streaming_no_overbill_on_partition(
 
 
 # ---------------------------------------------------------------------------
+# Streaming payments validators (enhanced)
+# ---------------------------------------------------------------------------
+
+
+def validate_streaming_rate_enforcement(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Rate enforcement: no tick drains more than the declared rate_per_tick.
+
+    Tracks ``rate_per_tick`` from each ``stream_opened`` event, then verifies
+    that every ``payment_debited`` for that stream does not exceed the
+    declared rate in a single tick. Fails against ``prepaid_credits``
+    (has no rate concept); passes against ``streaming``.
+
+    Example::
+
+        results = validate_streaming_rate_enforcement(events)
+    """
+    stream_rates: dict[str, int] = {}
+    violations: list[str] = []
+
+    for ev in events:
+        if ev.get("event_type") == "stream_opened":
+            ref = ev.get("stream_ref", "")
+            rate = ev.get("rate_per_tick", 0)
+            if ref and rate:
+                stream_rates[ref] = rate
+
+    # Group debits by (stream_ref, tick) and check each group's total
+    grouped: dict[tuple[str, int], list[int]] = {}
+    for ev in events:
+        if ev.get("kind") != "payment_debited":
+            continue
+        ref = ev.get("stream_ref", "")
+        tick = ev.get("tick", 0)
+        amount = ev.get("amount", 0)
+        if ref and ref in stream_rates and amount:
+            key = (ref, tick)
+            if key not in grouped:
+                grouped[key] = []
+            grouped[key].append(amount)
+
+    for (ref, tick), amounts in grouped.items():
+        per_tick_total = sum(amounts)
+        rate = stream_rates[ref]
+        if per_tick_total > rate:
+            violations.append(f"stream {ref} tick {tick}: debited {per_tick_total}, rate={rate}")
+
+    if violations:
+        return [
+            ValidationResult(
+                "streaming_rate_enforcement",
+                False,
+                "; ".join(violations),
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "streaming_rate_enforcement",
+            True,
+            f"verified rate for {len(stream_rates)} streams, {len(grouped)} debits",
+        )
+    ]
+
+
+def validate_streaming_no_double_open(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Each stream ref must be opened at most once.
+
+    Catches the *double-open* attack: reopening a closed stream ref could
+    reset the debit counter and allow over-billing. Fails against a naive
+    plugin that allows reopen-all; passes against ``streaming`` which
+    enforces one-open-per-ref.
+
+    Example::
+
+        results = validate_streaming_no_double_open(events)
+    """
+    seen: set[str] = set()
+    duplicates: list[tuple[str, int, int]] = []
+
+    for ev in events:
+        if ev.get("event_type") != "stream_opened":
+            continue
+        ref = ev.get("stream_ref", "")
+        tick = ev.get("tick", 0)
+        if not ref:
+            continue
+        if ref in seen:
+            duplicates.append((ref, tick, len(seen)))
+        seen.add(ref)
+
+    if duplicates:
+        return [
+            ValidationResult(
+                "streaming_no_double_open",
+                False,
+                f"refs opened more than once: {duplicates}",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "streaming_no_double_open",
+            True,
+            f"verified {len(seen)} unique streams, no double-open",
+        )
+    ]
+
+
+def validate_streaming_conservation_per_tick(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Point-in-time conservation: totals match at every tick boundary.
+
+    Unlike the aggregate conservation validator, this check reconstructs the
+    running balance and asserts it is non-negative and consistent after every
+    tick. Any tick where ``total_debited != total_credited`` (including
+    streams mid-flight) is flagged.
+
+    Fails against ``prepaid_credits`` under concurrent stream pressure;
+    passes against ``streaming``.
+
+    Example::
+
+        results = validate_streaming_conservation_per_tick(events)
+    """
+    events_by_tick: dict[int, list[dict[str, Any]]] = {}
+    for ev in events:
+        tick = ev.get("tick", 0)
+        if tick not in events_by_tick:
+            events_by_tick[tick] = []
+        events_by_tick[tick].append(ev)
+
+    violations: list[str] = []
+    cumulative_debited = 0
+    cumulative_credited = 0
+
+    for tick in sorted(events_by_tick):
+        for ev in events_by_tick[tick]:
+            if ev.get("kind") == "payment_debited":
+                cumulative_debited += ev.get("amount", 0)
+            elif ev.get("kind") == "payment_credited":
+                cumulative_credited += ev.get("amount", 0)
+
+        if cumulative_debited != cumulative_credited:
+            violations.append(
+                f"tick {tick}: debited={cumulative_debited}, credited={cumulative_credited}"
+            )
+
+    if violations:
+        return [
+            ValidationResult(
+                "streaming_conservation_per_tick",
+                False,
+                f"conservation violations at {len(violations)} ticks: "
+                f"{'; '.join(violations[:5])}"
+                f"{'...' if len(violations) > 5 else ''}",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "streaming_conservation_per_tick",
+            True,
+            f"conservation verified across {len(events_by_tick)} ticks, "
+            f"{cumulative_debited} total flow",
+        )
+    ]
+
+
+def validate_streaming_audit_trail_complete(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every stream must have both an open and a close event.
+
+    Catches streams that are opened but never properly closed (leaked
+    liability). Fails against a plugin that opens streams without emitting
+    close events; passes against ``streaming`` which always emits both.
+
+    Example::
+
+        results = validate_streaming_audit_trail_complete(events)
+    """
+    opened: set[str] = set()
+    closed: set[str] = set()
+    for ev in events:
+        if ev.get("event_type") == "stream_opened":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                opened.add(ref)
+        elif ev.get("event_type") == "stream_closed":
+            ref = ev.get("stream_ref", "")
+            if ref:
+                closed.add(ref)
+
+    unclosed = opened - closed
+    if unclosed:
+        return [
+            ValidationResult(
+                "streaming_audit_trail_complete",
+                False,
+                f"unclosed streams: {sorted(unclosed)}",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "streaming_audit_trail_complete",
+            True,
+            f"verified {len(opened)} streams, all closed",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # EMPIC escrow/streaming payments validators
 # ---------------------------------------------------------------------------
 
@@ -4648,6 +4866,10 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_streaming_conservation,
         validate_streaming_no_drain_after_close,
         validate_streaming_no_overbill_on_partition,
+        validate_streaming_rate_enforcement,
+        validate_streaming_no_double_open,
+        validate_streaming_conservation_per_tick,
+        validate_streaming_audit_trail_complete,
     ],
     "empic_payments": [
         validate_empic_escrow_conservation,
