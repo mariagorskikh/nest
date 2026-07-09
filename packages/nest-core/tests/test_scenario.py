@@ -106,7 +106,7 @@ class TestPluginRegistry:
         for layer, name in [
             ("transport", "in_memory"),
             ("comms", "nest_native"),
-            ("identity", "did_key"),
+            ("identity", "ed25519_rotating"),
             ("registry", "in_memory"),
             ("auth", "jwt"),
             ("trust", "score_average"),

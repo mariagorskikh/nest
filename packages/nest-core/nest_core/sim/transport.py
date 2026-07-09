@@ -50,6 +50,8 @@ class InMemoryTransport:
         to: AgentId,
         payload: bytes,
         correlation_id: CorrelationId | None = None,
+        *,
+        deliver_at: float | None = None,
     ) -> None:
         """Enqueue a message delivery event.
 
@@ -61,7 +63,7 @@ class InMemoryTransport:
 
         self._queue.push(
             Event(
-                time=self._clock.now,
+                time=deliver_at if deliver_at is not None else self._clock.now,
                 kind="deliver",
                 agent_id=to,
                 target_id=self._agent_id,
@@ -83,6 +85,8 @@ class InMemoryTransport:
         self,
         payload: bytes,
         correlation_id: CorrelationId | None = None,
+        *,
+        deliver_at: float | None = None,
     ) -> None:
         """Broadcast to all known agents.
 
@@ -92,4 +96,9 @@ class InMemoryTransport:
         """
         for aid in self.all_agents:
             if aid != self._agent_id:
-                await self.send(aid, payload, correlation_id=correlation_id)
+                await self.send(
+                    aid,
+                    payload,
+                    correlation_id=correlation_id,
+                    deliver_at=deliver_at,
+                )

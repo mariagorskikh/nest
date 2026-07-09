@@ -337,14 +337,41 @@ layers:
 
 The `PluginRegistry` discovers plugins via entry points at startup and falls back to built-in defaults.
 
+## Versioning and releases
+
+Nanda Town is a `uv` workspace of eight publishable packages (`nest-core`, `nest-sdk`,
+`nest-cli`, `nest-mocks`, `nest-scenarios`, `nest-shell`, `nest-plugins-reference`,
+`nest-marketplace`). Versions are **independent** today — bump only the packages whose
+public API changed.
+
+Before a release:
+
+1. Update `version` in the affected `packages/*/pyproject.toml` files.
+2. Add an entry under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
+3. Run `uv lock` if dependencies changed, then `uv sync --frozen`.
+4. Run `make ci-local` and `make ci-dashboard`.
+5. Tag and publish via the GitHub release workflow (PyPI OIDC).
+
+Semver guidance (alpha): patch for bug fixes, minor for backward-compatible features,
+major for breaking API changes to layer Protocols or scenario YAML schema.
+
 ## Running CI Locally
 
-The CI pipeline (`.github/workflows/ci.yml`) runs three jobs. Replicate them locally before opening a PR:
+The CI pipeline (`.github/workflows/ci.yml`) runs Python and dashboard jobs. Replicate them locally before opening a PR:
+
+```bash
+make ci-local       # Python: ruff, pyright, codegen checks, pytest
+make ci-dashboard   # Next.js: typecheck, eslint, build
+```
+
+Or run steps individually:
 
 ```bash
 # Lint (must pass with zero issues)
 uv run ruff check .
 uv run ruff format --check .
+uv run python scripts/generate_hackathon_types.py --check
+uv run python scripts/check_hackathon_data.py
 
 # Type check (strict mode)
 uv run pyright
@@ -352,6 +379,11 @@ uv run pyright
 # Tests (including property-based tests via Hypothesis)
 uv run pytest -v
 ```
+
+### Experimental harness
+
+For systematic multi-agent replicate experiments, see
+[`scripts/harness/README.md`](scripts/harness/README.md).
 
 ## Pull Request Process
 

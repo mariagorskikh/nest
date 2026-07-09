@@ -22,6 +22,13 @@ anything that needs real cryptographic identity.
 
 Source: [`nest_plugins_reference/identity/did_key.py`](../../packages/nest-plugins-reference/nest_plugins_reference/identity/did_key.py).
 
+## Also available: `ed25519_rotating`
+
+Real Ed25519 (RFC 8032) with key rotation and continuity proofs. Scenario:
+`scenarios/identity_rotation.yaml`.
+
+Source: [`nest_plugins_reference/identity/ed25519_rotating.py`](../../packages/nest-plugins-reference/nest_plugins_reference/identity/ed25519_rotating.py).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

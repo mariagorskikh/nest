@@ -1,4 +1,10 @@
 import type { NextRequest } from "next/server";
+import {
+  checkSkillsWriteRateLimit,
+  readSkillsJsonBody,
+  requireSkillsWriteAuth,
+} from "@/lib/skills-api-guard";
+import { isSafeExternalUrl } from "@/lib/url-safety";
 import { createSkill, listSkills, type SkillSourceType } from "@/lib/skills";
 
 // This registry is read/written at request time, never prerendered.
@@ -25,12 +31,14 @@ export async function GET() {
  *     author?, description?, endpoints?, tags? }
  */
 export async function POST(request: NextRequest) {
-  let body: Record<string, unknown>;
-  try {
-    body = (await request.json()) as Record<string, unknown>;
-  } catch {
-    return Response.json({ error: "Send a JSON body." }, { status: 400 });
-  }
+  const authError = requireSkillsWriteAuth(request);
+  if (authError) return authError;
+  const rateError = checkSkillsWriteRateLimit(request);
+  if (rateError) return rateError;
+
+  const parsed = await readSkillsJsonBody(request);
+  if ("error" in parsed) return parsed.error;
+  const body = parsed.body;
 
   const name = s(body.name);
   const sourceType = s(body.source_type) as SkillSourceType;
@@ -49,6 +57,12 @@ export async function POST(request: NextRequest) {
   if ((sourceType === "url" || sourceType === "github") && !sourceUrl) {
     return Response.json(
       { error: "source_url is required for url/github submissions" },
+      { status: 400 },
+    );
+  }
+  if ((sourceType === "url" || sourceType === "github") && !isSafeExternalUrl(sourceUrl)) {
+    return Response.json(
+      { error: "source_url must be a public http(s) URL (private/internal hosts are blocked)." },
       { status: 400 },
     );
   }

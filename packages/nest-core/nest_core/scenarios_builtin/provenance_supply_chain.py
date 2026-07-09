@@ -47,6 +47,7 @@ Example::
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, cast
 
 from nest_core.scenario import ScenarioConfig
@@ -127,7 +128,10 @@ class RefineAgent(StateMachineAgent):
         msg = payload.decode("utf-8", errors="replace")
         if not msg.startswith("lineage|"):
             return
-        _, parent_url, _owner = msg.split("|", 2)
+        try:
+            _, parent_url, _owner = msg.split("|", 2)
+        except ValueError:
+            return
         facts = ctx.plugins.get("datafacts")
         if facts is None:
             return
@@ -173,7 +177,10 @@ class AggregateAgent(StateMachineAgent):
         facts = ctx.plugins.get("datafacts")
         if facts is None:
             return
-        _, parent_url, _owner = msg.split("|", 2)
+        try:
+            _, parent_url, _owner = msg.split("|", 2)
+        except ValueError:
+            return
         self._parents.append(parent_url)
         if len(self._parents) == self._expected:
             dataset = DatasetMetadata(
@@ -210,7 +217,10 @@ class VerifyAndAttackAgent(StateMachineAgent):
         facts = ctx.plugins.get("datafacts")
         if facts is None:
             return
-        _, leaf_url, _owner = msg.split("|", 2)
+        try:
+            _, leaf_url, _owner = msg.split("|", 2)
+        except ValueError:
+            return
         root_url = await self._verify_chain(ctx, facts, leaf_url)
         if root_url is not None:
             await self._attack_substitution(ctx, facts, root_url)
@@ -303,15 +313,20 @@ def _build_datafacts_handles(
     shared_instance: Any = None
     handles: dict[AgentId, Any] = {}
 
+    init_params = inspect.signature(datafacts_cls.__init__).parameters
+    accepts_identity = "identity" in init_params or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in init_params.values()
+    )
+
     for aid in all_ids:
-        try:
+        if accepts_identity:
             kwargs: dict[str, Any] = {"datasets": shared_datasets, "proofs": shared_proofs}
             if shared_clock is not None:
                 kwargs["clock"] = shared_clock
             handle = datafacts_cls(identities[aid], **kwargs)
             shared_clock = getattr(handle, "clock", shared_clock)
             handles[aid] = handle
-        except TypeError:
+        else:
             if shared_instance is None:
                 shared_instance = datafacts_cls()
             handles[aid] = shared_instance

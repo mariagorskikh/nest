@@ -232,6 +232,20 @@ Each one stresses a different part of the stack. Open them with
 | `supply_chain` | 4 (supplier → manufacturer → distributor → retailer) | Multi-hop message reliability under drop / partition. |
 | `reputation` | 16 honest + 4 malicious + 1 observer | Trust layer under adversarial agents that cheat probabilistically. |
 | `shell_marketplace` | 3 buyers + 3 sellers (LLM-backed) | Same as marketplace but agents are LLM-driven via `nest-shell`. Non-deterministic (Tier 2). |
+| `memory_concurrent_writers` | 4 writers | LWW-register CRDT convergence under concurrent writes. |
+| `escrow_marketplace` | 9 (3 buyer/seller/arbiter triples) | Escrow payments: happy path + dispute + arbitration. |
+| `streaming_payments` | buyer + seller + observer | Per-tick metered streaming payments; conservation validators. |
+| `streaming_payments_partition` | buyer + seller + observer | Streaming payments under network partition + heal. |
+| `sealed_bid_with_privacy` | 5 bidders + auctioneer | Hybrid X25519 privacy; sealed bids on the wire. |
+| `bft_consensus_partition` | 4 replicas | HotStuff BFT under network partition + heal. |
+| `bft_consensus_byzantine` | 4 replicas | HotStuff BFT with malicious leader equivocation. |
+| `multi_attribute_market` | 10 buyer/seller pairs | Pareto negotiation over price + deadline. |
+| `provenance_supply_chain` | 5 (diamond pipeline + verify) | Content-addressed DataFacts with provenance DAG. |
+| `gossip_registry` | 20 agents | Gossip-based registry anti-entropy. |
+| `comms_versioning` | 2 agents | Comms schema versioning and migration. |
+| `identity_rotation` | 2 agents | Ed25519 key rotation with continuity proofs. |
+| `receipt_reputation` | 14 agents | Receipt-backed trust graph scoring. |
+| `http_marketplace` | 10 agents | Tier-2 HTTP transport with worker routing (`workers: 2`). |
 
 Failure injection is per-scenario, edit the YAML:
 
@@ -254,16 +268,16 @@ resolved by name via entry points or a built-in default.
 |---|---|---|---|
 |  1 | Transport     | `Transport`     | `in_memory` (in-process event queue; no network I/O) |
 |  2 | Communication | `CommsProtocol` | `nest_native` (JSON envelope, base64 payload) |
-|  3 | Identity      | `Identity`      | `did_key` (deterministic public-key signatures for simulation; not Ed25519) |
-|  4 | Registry      | `Registry`      | `in_memory` (dict lookup, no persistence) |
+|  3 | Identity      | `Identity`      | `did_key` · also `ed25519_rotating` |
+|  4 | Registry      | `Registry`      | `in_memory` · also `gossip` |
 |  5 | Auth          | `Auth`          | `jwt` (HMAC-SHA256 token; not RFC JWT) |
-|  6 | Trust         | `Trust`         | `score_average` (running mean reputation; no Sybil resistance) |
-|  7 | Payments      | `Payments`      | `prepaid_credits` (in-memory ledger) |
-|  8 | Coordination  | `Coordination`  | `contract_net` (FIPA: propose · bid · resolve · commit) |
-|  9 | Negotiation   | `Negotiation`   | `alternating_offers` (Rubinstein, with patience discount) |
-| 10 | Memory        | `Memory`        | `blackboard` (shared KV, subscribe, CAS) |
-| 11 | Privacy       | `Privacy`       | `noop` (stub passthrough) |
-| 12 | Data Facts    | `DataFacts`     | `datafacts_v1` (dataset publish · fetch · ACL) |
+|  6 | Trust         | `Trust`         | `score_average` · also `agent_receipts` |
+|  7 | Payments      | `Payments`      | `prepaid_credits` · also `streaming`, `escrow` |
+|  8 | Coordination  | `Coordination`  | `contract_net` · also `hotstuff` (BFT scenario) |
+|  9 | Negotiation   | `Negotiation`   | `alternating_offers` · also `pareto` |
+| 10 | Memory        | `Memory`        | `blackboard` · also `lww_register` (CRDT) |
+| 11 | Privacy       | `Privacy`       | `noop` · also `hybrid_x25519` |
+| 12 | Data Facts    | `DataFacts`     | `datafacts_v1` · also `cid_facts` |
 
 All defaults are **reference implementations for testing**, not
 production-ready. That is the point: you replace the layer you care about
@@ -328,7 +342,102 @@ Two things to know that aren't obvious:
    trace. The event queue still orders events deterministically, so
    *correctness* tests are fine. Latency *numbers* become meaningful
    only when agents use `ctx.schedule(delay, ...)` or you write a
-   transport plugin that introduces per-hop delay.
+   transport plugin that introduces per-hop delay. The built-in
+   `latency` middleware adds deterministic per-hop delay without a custom
+   transport.
+
+---
+
+## Middleware
+
+The simulator supports composable **message middleware** on the outbound
+(`send` / `broadcast`) and inbound (`receive`) paths. Middleware is
+resolved by name from built-ins or the `nest.middleware` entry-point
+group. With no middleware configured, behavior and traces are unchanged.
+
+Built-in middleware:
+
+| Name | Purpose |
+|---|---|
+| `resilience` | Isolate `on_message` failures so one agent cannot crash the run |
+| `observability` | Structured per-message logging and counters |
+| `auth_scope` | Enforce bearer tokens with a required scope on inbound messages; denies when auth plugin is missing |
+| `latency` | Deterministic per-hop delivery delay via the virtual clock |
+
+Example scenario YAML:
+
+```yaml
+name: marketplace-hardened
+middleware:
+  - name: observability
+  - name: resilience
+  - name: latency
+    config:
+      base_delay: 0.001
+      jitter: 0.0005
+  - name: auth_scope
+    config:
+      required_scope: read
+```
+
+Register custom middleware via `pyproject.toml`:
+
+```toml
+[project.entry-points."nest.middleware"]
+my_hook = "my_pkg.middleware:MyMiddleware"
+```
+
+---
+
+## Local deployment
+
+Full stack on your machine: Python engine + Next.js dashboard. No Docker required.
+
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node.js 20+.
+
+**One command (PowerShell, from repo root):**
+
+```powershell
+# Dev mode (hot reload)
+.\scripts\deploy-local.ps1 -Mode Dev
+
+# Production-like local run + sample scenario
+.\scripts\deploy-local.ps1 -Mode Prod -RunScenario
+
+# With /skills page (Neon Postgres) — paste your connection string once
+.\scripts\deploy-local.ps1 -Mode Prod -RunScenario -InitSkills `
+  -DatabaseUrl "postgresql://user:pass@host/db?sslmode=require"
+```
+
+**Manual steps:**
+
+```powershell
+uv sync
+uv run nest doctor          # expect 7/7 checks passed
+uv run nest run marketplace # writes ./traces/marketplace.jsonl
+
+cd apps/nest-dashboard
+npm ci
+npm run dev                 # http://localhost:3000
+```
+
+For the `/skills` registry, see [apps/nest-dashboard/README.md](apps/nest-dashboard/README.md)
+(Neon `DATABASE_URL` + `node scripts/db-init.mjs`).
+
+### Security
+
+Distributed runs (`workers > 1` or non-localhost `worker_bind`) require
+`NEST_HTTP_SHARED_SECRET`. The skills API requires `NEST_SKILLS_API_KEY`
+for `POST` in production. Full findings and operator checklist:
+[`docs/security-audit.md`](docs/security-audit.md).
+
+```powershell
+# Distributed example
+$env:NEST_HTTP_SHARED_SECRET = "your-long-random-secret"
+uv run nest run marketplace --workers 2
+```
+
+Lightweight trace viewer (no Node): `nest dashboard ./traces/marketplace.jsonl`
 
 ---
 
@@ -340,16 +449,22 @@ Two things to know that aren't obvious:
 - **Reference scenarios are minimal baselines.** They check whether
   agents *interact*, not whether a real implementation of the protocol
   *is correct*. That's what your plugin is for.
-- **Single process.** No distributed execution.
-- **In-memory transport only out of the box.** No TCP, gRPC, or HTTP
-  yet.
+- **Single process by default.** Use `nest run --workers N` for multi-process
+  execution with merged traces (non-deterministic). Set
+  `NEST_HTTP_SHARED_SECRET` when `N > 1`. See
+  [`docs/distributed.md`](docs/distributed.md).
+- **In-memory transport is the default simulator path.** An HTTP reference
+  transport (`layers.transport: http`) and worker HTTP bridges are available
+  for distributed experiments.
 - **Tier 2 is non-deterministic.** Don't use it for benchmarks.
+
+See [`docs/roadmap.md`](docs/roadmap.md) for the phased hardening plan (Phases 1, 3–5).
 
 ---
 
 ## Scoreboard
 
-> Live scoreboard: [`docs/hackathon/scores.json`](docs/hackathon/scores.json) — machine-readable scores for every open hackathon PR. A marketplace UI on top of this file is coming.
+> Live scoreboard: [`docs/hackathon/scores.json`](docs/hackathon/scores.json) — machine-readable scores for every open hackathon PR. Browse submissions in the Next.js dashboard at `/hackathon`.
 
 The judge panel lives in [`scripts/judge/`](scripts/judge/):
 

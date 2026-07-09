@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   # Phase 1: Build and publish core (no Nanda Town deps)
@@ -15,45 +16,67 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d8db0a86d3d88f3017a4e6b8a1e2b234e7a0a1b5 # v4.0.0
         with:
-          version: "latest"
-      - uses: actions/setup-python@v5
+          version: "0.7.12"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
+      - name: Verify publishable package versions
+        run: uv run python scripts/check_publish_versions.py
       - name: Build nest-core
         run: uv build --package nest-core
       - name: Publish nest-core
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-          attestations: false
+          attestations: true
 
-  # Phase 2: Build and publish SDK (depends on core)
+  smoke-test:
+    needs: publish-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Read nest-core version
+        id: version
+        run: |
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          v = tomllib.loads(Path("packages/nest-core/pyproject.toml").read_bytes())["project"]["version"]
+          print(f"version={v}")
+          PY
+        shell: bash
+      - name: Post-publish smoke test
+        run: |
+          pip install "nest-core==${{ steps.version.outputs.version }}"
+          python -c "import nest_core; print(nest_core.__version__)"
+
   publish-sdk:
     needs: publish-core
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d8db0a86d3d88f3017a4e6b8a1e2b234e7a0a1b5 # v4.0.0
         with:
-          version: "latest"
-      - uses: actions/setup-python@v5
+          version: "0.7.12"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Build nest-sdk
         run: uv build --package nest-sdk
       - name: Publish nest-sdk
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-          attestations: false
+          attestations: true
 
   # Phase 3: Build and publish plugins-reference (depends on core + sdk)
   publish-plugins-reference:
@@ -61,22 +84,21 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d8db0a86d3d88f3017a4e6b8a1e2b234e7a0a1b5 # v4.0.0
         with:
-          version: "latest"
-      - uses: actions/setup-python@v5
+          version: "0.7.12"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Build nest-plugins-reference
         run: uv build --package nest-plugins-reference
       - name: Publish nest-plugins-reference
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-          attestations: false
+          attestations: true
 
   # Phase 4: Build and publish leaf packages (parallel, depend on sdk)
   publish-cli:
@@ -84,85 +106,81 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d8db0a86d3d88f3017a4e6b8a1e2b234e7a0a1b5 # v4.0.0
         with:
-          version: "latest"
-      - uses: actions/setup-python@v5
+          version: "0.7.12"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Build nest-cli
         run: uv build --package nest-cli
       - name: Publish nest-cli
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-          attestations: false
+          attestations: true
 
   publish-shell:
     needs: publish-sdk
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d8db0a86d3d88f3017a4e6b8a1e2b234e7a0a1b5 # v4.0.0
         with:
-          version: "latest"
-      - uses: actions/setup-python@v5
+          version: "0.7.12"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Build nest-shell
         run: uv build --package nest-shell
       - name: Publish nest-shell
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-          attestations: false
+          attestations: true
 
   publish-scenarios:
     needs: publish-core
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d8db0a86d3d88f3017a4e6b8a1e2b234e7a0a1b5 # v4.0.0
         with:
-          version: "latest"
-      - uses: actions/setup-python@v5
+          version: "0.7.12"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Build nest-scenarios
         run: uv build --package nest-scenarios
       - name: Publish nest-scenarios
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-          attestations: false
+          attestations: true
 
   publish-mocks:
     needs: publish-core
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d8db0a86d3d88f3017a4e6b8a1e2b234e7a0a1b5 # v4.0.0
         with:
-          version: "latest"
-      - uses: actions/setup-python@v5
+          version: "0.7.12"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Build nest-mocks
         run: uv build --package nest-mocks
       - name: Publish nest-mocks
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
-          attestations: false
+          attestations: true

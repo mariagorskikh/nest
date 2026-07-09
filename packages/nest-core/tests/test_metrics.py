@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import html
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -22,9 +24,9 @@ class TestComputeMetrics:
             {"ts": 0.0, "agent": "a1", "kind": "start"},
             {"ts": 0.0, "agent": "a2", "kind": "start"},
             {"ts": 1.0, "agent": "a1", "kind": "send", "to": "a2", "size": 10, "corr": "c-1"},
-            {"ts": 1.0, "agent": "a2", "kind": "receive", "from": "a1", "size": 10, "corr": "c-1"},
+            {"ts": 3.0, "agent": "a2", "kind": "receive", "from": "a1", "size": 10, "corr": "c-1"},
             {"ts": 2.0, "agent": "a2", "kind": "send", "to": "a1", "size": 8, "corr": "c-2"},
-            {"ts": 2.0, "agent": "a1", "kind": "receive", "from": "a2", "size": 8, "corr": "c-2"},
+            {"ts": 4.0, "agent": "a1", "kind": "receive", "from": "a2", "size": 8, "corr": "c-2"},
             {"ts": 3.0, "agent": "a1", "kind": "send", "to": "a2", "size": 5, "corr": "c-3"},
             {"ts": 3.0, "agent": "a2", "kind": "dropped", "from": "a1", "size": 5, "corr": "c-3"},
             {"ts": 5.0, "agent": "a1", "kind": "stop"},
@@ -55,7 +57,57 @@ class TestComputeMetrics:
         trace = tmp_path / "t.jsonl"
         self._write_trace(trace)
         results = compute_metrics(trace, ["mean_latency"])
+        assert results["mean_latency"] == pytest.approx(2.0)
+
+    def test_p95_latency(self, tmp_path: Path) -> None:
+        trace = tmp_path / "t.jsonl"
+        events = [
+            {"ts": 0.0, "agent": "a1", "kind": "start"},
+            {"ts": 1.0, "agent": "a1", "kind": "send", "to": "a2", "corr": "c-1"},
+            {"ts": 2.0, "agent": "a2", "kind": "receive", "from": "a1", "corr": "c-1"},
+            {"ts": 1.0, "agent": "a1", "kind": "send", "to": "a2", "corr": "c-2"},
+            {"ts": 5.0, "agent": "a2", "kind": "receive", "from": "a1", "corr": "c-2"},
+            {"ts": 6.0, "agent": "a1", "kind": "stop"},
+        ]
+        trace.write_text("\n".join(json.dumps(e) for e in events))
+        results = compute_metrics(trace, ["p95_latency"])
+        assert results["p95_latency"] == pytest.approx(4.0)
+
+    def test_empty_trace_returns_zeros(self, tmp_path: Path) -> None:
+        trace = tmp_path / "empty.jsonl"
+        trace.write_text("")
+        results = compute_metrics(
+            trace,
+            ["delivery_rate", "message_count", "mean_latency", "duration", "agent_count"],
+        )
+        assert results["delivery_rate"] == 0.0
+        assert results["message_count"] == 0.0
         assert results["mean_latency"] == 0.0
+        assert results["duration"] == 0.0
+        assert results["agent_count"] == 0.0
+
+    def test_throughput_zero_duration(self, tmp_path: Path) -> None:
+        trace = tmp_path / "instant.jsonl"
+        events = [
+            {"ts": 1.0, "agent": "a1", "kind": "start"},
+            {"ts": 1.0, "agent": "a1", "kind": "send", "to": "a2", "corr": "c-1"},
+            {"ts": 1.0, "agent": "a1", "kind": "stop"},
+        ]
+        trace.write_text("\n".join(json.dumps(e) for e in events))
+        results = compute_metrics(trace, ["throughput"])
+        assert results["throughput"] == 0.0
+
+    def test_non_finite_timestamps_do_not_crash(self, tmp_path: Path) -> None:
+        trace = tmp_path / "nan.jsonl"
+        events = [
+            {"ts": float("nan"), "agent": "a1", "kind": "start"},
+            {"ts": 1.0, "agent": "a1", "kind": "send", "to": "a2", "corr": "c-1"},
+            {"ts": float("inf"), "agent": "a2", "kind": "receive", "from": "a1", "corr": "c-1"},
+            {"ts": 2.0, "agent": "a1", "kind": "stop"},
+        ]
+        trace.write_text("\n".join(json.dumps(e) for e in events))
+        results = compute_metrics(trace, ["duration", "mean_latency", "throughput"])
+        assert all(math.isfinite(v) for v in results.values())
 
     def test_dropped_count(self, tmp_path: Path) -> None:
         trace = tmp_path / "t.jsonl"
@@ -285,6 +337,23 @@ class TestHtmlReport:
         assert result.exists()
         content = result.read_text()
         assert "Delivery Rate" in content
+
+    def test_html_report_escapes_agent_names(self, tmp_path: Path) -> None:
+        evil_name = "<script>alert(1)</script>"
+        trace = tmp_path / "trace.jsonl"
+        events = [
+            {"ts": 0.0, "agent": evil_name, "kind": "start"},
+            {"ts": 1.0, "agent": evil_name, "kind": "send", "to": "a2"},
+        ]
+        trace.write_text("\n".join(json.dumps(e) for e in events))
+
+        metrics = {"message_count": 1.0}
+        report_path = tmp_path / "report.html"
+        generate_html_report(trace, metrics, report_path)
+
+        content = report_path.read_text()
+        assert evil_name not in content
+        assert html.escape(evil_name) in content
 
 
 class TestRunnerMetrics:

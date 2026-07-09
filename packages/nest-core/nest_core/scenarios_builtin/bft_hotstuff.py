@@ -186,10 +186,8 @@ class ReplicaAgent(StateMachineAgent):
             return
         if msg.justify_qc is not None and not self._qc_is_valid(ctx, msg.justify_qc):
             return
-        if (
-            self._locked_qc is not None
-            and msg.justify_qc is not None
-            and msg.justify_qc.view < self._locked_qc.view
+        if self._locked_qc is not None and (
+            msg.justify_qc is None or msg.justify_qc.view < self._locked_qc.view
         ):
             return
         if msg.view > self._current_view:

@@ -16,17 +16,17 @@ implementation per layer.
 | # | Layer | What it does | Reference default |
 |---|---|---|---|
 |  1 | **Transport** | Move bytes between agents. | `in_memory` (zero-latency event queue) |
-|  2 | **Communication** | Frame messages, request/response semantics. | `nest_native` (JSON envelope, base64 payload) |
-|  3 | **Identity** | Sign / verify per-agent payloads. | `did_key` (deterministic simulation public-key signatures, *not* Ed25519) |
-|  4 | **Registry** | Publish and discover agent cards. | `in_memory` (dict, no persistence) |
+|  2 | **Communication** | Frame messages, request/response semantics. | `nest_native`, `versioned` |
+|  3 | **Identity** | Sign / verify per-agent payloads. | `did_key`, `ed25519_rotating` |
+|  4 | **Registry** | Publish and discover agent cards. | `in_memory`, `gossip` |
 |  5 | **Auth** | Issue, verify, revoke capability tokens. | `jwt` (HMAC-signed, *not* RFC JWT) |
 |  6 | **Trust** | Reputation scores, attestations, reports. | `score_average` (running mean) |
-|  7 | **Payments** | Quote, pay, verify, refund. | `prepaid_credits` (in-memory ledger) |
-|  8 | **Coordination** | Group decisions, task allocation. | `contract_net` (FIPA: propose / bid / commit) |
-|  9 | **Negotiation** | Bilateral bargaining. | `alternating_offers` (Rubinstein) |
-| 10 | **Memory** | Shared K/V with subscribe + CAS. | `blackboard` |
-| 11 | **Privacy** | Encrypt, decrypt, zero-knowledge proofs. | `noop` (stub passthrough) |
-| 12 | **Data Facts** | Dataset publish / fetch / ACL. | `datafacts_v1` |
+|  7 | **Payments** | Quote, pay, verify, refund. | `prepaid_credits`, `streaming`, `escrow` |
+|  8 | **Coordination** | Group decisions, task allocation. | `contract_net`, `hotstuff` (BFT) |
+|  9 | **Negotiation** | Bilateral bargaining. | `alternating_offers`, `pareto` |
+| 10 | **Memory** | Shared K/V with subscribe + CAS. | `blackboard`, `lww_register` |
+| 11 | **Privacy** | Encrypt, decrypt, zero-knowledge proofs. | `noop`, `hybrid_x25519` |
+| 12 | **Data Facts** | Dataset publish / fetch / ACL. | `datafacts_v1`, `cid_facts` |
 
 All reference defaults are deliberately simplified — testing scaffolding,
 not production code. The point is to replace the one layer you care
@@ -46,7 +46,9 @@ A scenario is a YAML file that pins together:
 - **duration / seed / output**: how long to run, what to seed, where to write the trace
 
 See [`writing-a-scenario.md`](writing-a-scenario.md) for the full
-schema. The seven scenarios bundled with `nest-core` are:
+schema. The repository ships **21 built-in scenarios** — see the
+[README scenarios table](../README.md#built-in-scenarios) for the full list.
+The original seven hackathon scenarios are:
 
 | Name | Stresses |
 |---|---|

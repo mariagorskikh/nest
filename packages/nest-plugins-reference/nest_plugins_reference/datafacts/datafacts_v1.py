@@ -10,9 +10,19 @@ Example::
 
 from __future__ import annotations
 
-import time
+from dataclasses import dataclass
 
 from nest_core.types import AccessGrant, AgentId, DataFactsUrl, DatasetMetadata
+
+
+@dataclass
+class SimulationClock:
+    """Logical simulation clock for freshness checks (not wall time)."""
+
+    now: float = 0.0
+
+    def advance(self, delta: float = 1.0) -> None:
+        self.now += delta
 
 
 class DataFactsV1:
@@ -24,10 +34,11 @@ class DataFactsV1:
         url = await df.publish(meta)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: SimulationClock | None = None) -> None:
         self._datasets: dict[DataFactsUrl, DatasetMetadata] = {}
         self._grants: dict[DataFactsUrl, list[AccessGrant]] = {}
         self._timestamps: dict[DataFactsUrl, float] = {}
+        self._clock = clock if clock is not None else SimulationClock()
 
     async def publish(self, dataset: DatasetMetadata) -> DataFactsUrl:
         """Publish dataset metadata and return its URL.
@@ -38,7 +49,8 @@ class DataFactsV1:
         """
         url = DataFactsUrl(f"df://{dataset.name}")
         self._datasets[url] = dataset
-        self._timestamps[url] = time.time()
+        self._timestamps[url] = self._clock.now
+        self._clock.advance()
         return url
 
     async def fetch(self, url: DataFactsUrl) -> DatasetMetadata:
@@ -75,4 +87,4 @@ class DataFactsV1:
         ts = self._timestamps.get(url)
         if ts is None:
             return False
-        return (time.time() - ts) < 3600
+        return (self._clock.now - ts) < 3600

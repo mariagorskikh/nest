@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Example scenario using HTTP routing (see docs/distributed.md).
+name: http_marketplace
+description: "Small marketplace run — use nest run --workers 2 for distributed HTTP routing."
+
+tier: 1
+seed: 42
+parallel: true
+workers: 2
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+    - name: seller
+      count: 5
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: marketplace
+  config:
+    rounds: 3
+
+duration: "ticks: 2000"
+
+output:
+  trace: ./traces/http_marketplace.jsonl

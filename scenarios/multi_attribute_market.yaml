@@ -48,6 +48,9 @@ task:
 
 duration: "ticks: 10000"
 
+failures:
+  message_drop: 0.1
+
 metrics:
   - message_count
 

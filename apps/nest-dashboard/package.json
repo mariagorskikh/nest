@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "ci": "npm run typecheck && npm run lint && npm run build"
   },
   "engines": {
     "node": ">=20.0.0"

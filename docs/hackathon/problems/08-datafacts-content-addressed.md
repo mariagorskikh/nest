@@ -2,7 +2,10 @@
 title: Content-addressed datasets with provenance chains and freshness proofs
 layer: datafacts
 difficulty: medium
+status: solved
 ---
+
+> **Status: SOLVED** — implemented in `scenarios/provenance_supply_chain.yaml` with the `cid_facts` DataFacts plugin.
 
 # Content-addressed datasets with provenance chains and freshness proofs
 

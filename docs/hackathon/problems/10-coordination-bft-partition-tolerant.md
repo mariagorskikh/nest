@@ -2,7 +2,10 @@
 title: Partition-tolerant BFT consensus with view-change and liveness proofs
 layer: coordination
 difficulty: hard
+status: solved
 ---
+
+> **Status: SOLVED** — implemented in `scenarios/bft_consensus_partition.yaml` and `scenarios/bft_consensus_byzantine.yaml` with HotStuff BFT.
 
 # Partition-tolerant BFT consensus with view-change and liveness proofs
 

@@ -23,6 +23,7 @@ Example::
 
 from __future__ import annotations
 
+import pytest
 from nest_core.types import AgentId, Statement, Witness
 from nest_plugins_reference.privacy.hybrid_x25519 import (
     HybridX25519Privacy,
@@ -38,6 +39,8 @@ from nest_plugins_reference.validators import (
     check_stale_revocation_blocked,
     corrupt_proof,
 )
+
+pytestmark = pytest.mark.asyncio
 
 
 def _mk(name: str, *, seed: bytes | None = None) -> HybridX25519Privacy:

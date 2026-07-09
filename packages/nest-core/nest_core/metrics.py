@@ -9,8 +9,10 @@ Example::
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import defaultdict
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -37,14 +39,17 @@ def compute_metrics(
     return results
 
 
-def _load_events(path: Path) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    with path.open() as f:
+def _iter_events(path: Path) -> Iterator[dict[str, Any]]:
+    """Stream JSONL events line-by-line without loading the full trace."""
+    with path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
-                events.append(json.loads(line))
-    return events
+                yield json.loads(line)
+
+
+def _load_events(path: Path) -> list[dict[str, Any]]:
+    return list(_iter_events(path))
 
 
 def _message_body(ev: dict[str, Any]) -> str:
@@ -190,13 +195,22 @@ def _unique_pairs(events: list[dict[str, Any]]) -> float:
 # Core metrics
 # ---------------------------------------------------------------------------
 def _mean_latency(events: list[dict[str, Any]]) -> float:
+    latencies = _collect_latencies(events)
+    if not latencies:
+        return 0.0
+    return sum(latencies) / len(latencies)
+
+
+def _collect_latencies(events: list[dict[str, Any]]) -> list[float]:
     send_times: dict[str, float] = {}
     latencies: list[float] = []
 
     for ev in events:
         kind = ev.get("kind", "")
         corr = ev.get("corr", "")
-        ts = ev.get("ts", 0.0)
+        ts = _finite_ts(ev.get("ts", 0.0))
+        if ts is None:
+            continue
 
         if kind == "send" and corr:
             send_times[corr] = ts
@@ -205,9 +219,16 @@ def _mean_latency(events: list[dict[str, Any]]) -> float:
             if send_ts is not None:
                 latencies.append(ts - send_ts)
 
+    return latencies
+
+
+def _p95_latency(events: list[dict[str, Any]]) -> float:
+    latencies = _collect_latencies(events)
     if not latencies:
         return 0.0
-    return sum(latencies) / len(latencies)
+    latencies.sort()
+    idx = min(len(latencies) - 1, math.ceil(0.95 * len(latencies)) - 1)
+    return latencies[idx]
 
 
 def _message_count(events: list[dict[str, Any]]) -> float:
@@ -227,10 +248,22 @@ def _agent_count(events: list[dict[str, Any]]) -> float:
     return float(len(agents))
 
 
+def _finite_ts(value: Any) -> float | None:
+    try:
+        ts = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(ts):
+        return None
+    return ts
+
+
 def _duration(events: list[dict[str, Any]]) -> float:
     if not events:
         return 0.0
-    timestamps = [ev.get("ts", 0.0) for ev in events]
+    timestamps = [t for ev in events if (t := _finite_ts(ev.get("ts", 0.0))) is not None]
+    if not timestamps:
+        return 0.0
     return max(timestamps) - min(timestamps)
 
 
@@ -270,6 +303,7 @@ _METRIC_FUNCS: dict[str, Any] = {
     "mean_rounds_to_deal": _mean_rounds_to_deal,
     "unique_pairs": _unique_pairs,
     "mean_latency": _mean_latency,
+    "p95_latency": _p95_latency,
     "message_count": _message_count,
     "dropped_count": _dropped_count,
     "agent_count": _agent_count,
@@ -315,6 +349,8 @@ def generate_html_report(
 
         path = generate_html_report("trace.jsonl", metrics, "report.html")
     """
+    import html
+
     trace_path = Path(trace_path)
     output_path = Path(output_path)
     events = _load_events(trace_path)
@@ -336,8 +372,9 @@ def generate_html_report(
     agent_rows = ""
     sorted_agents = sorted(agent_stats.items(), key=lambda kv: kv[1]["sends"], reverse=True)
     for agent_name, stats in sorted_agents[:20]:
+        safe_name = html.escape(str(agent_name))
         agent_rows += (
-            f"<tr><td>{agent_name}</td>"
+            f"<tr><td>{safe_name}</td>"
             f"<td>{stats['sends']}</td>"
             f"<td>{stats['receives']}</td>"
             f"<td>{stats['dropped']}</td></tr>"
@@ -373,7 +410,7 @@ footer {{ margin-top: 3rem; padding-top: 1rem;
 </head>
 <body>
 <h1>Nanda Town Trace Report</h1>
-<p>Source: <code>{trace_path.name}</code> &mdash; {len(events)} events</p>
+<p>Source: <code>{html.escape(trace_path.name)}</code> &mdash; {len(events)} events</p>
 
 <div class="summary">
 <div class="card"><div class="value">\

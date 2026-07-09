@@ -1,0 +1,50 @@
+[
+  {
+    "number": 101,
+    "title": "Agent transport latency plugin",
+    "body": "## Piece picked\n\nAdds a netem-style transport with configurable per-hop delay.",
+    "html_url": "https://github.com/projnanda/nandatown/pull/101",
+    "diff_url": "https://github.com/projnanda/nandatown/pull/101.diff",
+    "user": {
+      "login": "openai-llm",
+      "avatar_url": "https://avatars.githubusercontent.com/u/101?v=4"
+    },
+    "head": { "ref": "hackathon/openai-llm-transport-latency" },
+    "created_at": "2026-05-26T19:01:00Z",
+    "additions": 420,
+    "deletions": 12,
+    "changed_files": 8
+  },
+  {
+    "number": 102,
+    "title": "Human memory CRDT submission",
+    "body": "## Piece picked\n\nLWW-register memory plugin with convergence tests.",
+    "html_url": "https://github.com/projnanda/nandatown/pull/102",
+    "diff_url": "https://github.com/projnanda/nandatown/pull/102.diff",
+    "user": {
+      "login": "mariagorskikh",
+      "avatar_url": "https://avatars.githubusercontent.com/u/102?v=4"
+    },
+    "head": { "ref": "hackathon/mariagorskikh-memory-crdt" },
+    "created_at": "2026-05-27T10:15:00Z",
+    "additions": 310,
+    "deletions": 5,
+    "changed_files": 6
+  },
+  {
+    "number": 103,
+    "title": "Payments streaming x402",
+    "body": "## Piece picked\n\nStreaming prepaid debits with tick-level stop hooks.",
+    "html_url": "https://github.com/projnanda/nandatown/pull/103",
+    "diff_url": "https://github.com/projnanda/nandatown/pull/103.diff",
+    "user": {
+      "login": "coinbase-crypto",
+      "avatar_url": "https://avatars.githubusercontent.com/u/103?v=4"
+    },
+    "head": { "ref": "hackathon/coinbase-crypto-payments-streaming" },
+    "created_at": "2026-05-28T14:30:00Z",
+    "additions": 580,
+    "deletions": 20,
+    "changed_files": 11
+  }
+]

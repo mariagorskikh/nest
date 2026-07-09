@@ -112,6 +112,8 @@ class StreamingPayments:
         rate_per_tick: int,
         max_total: int,
         ref: PaymentRef,
+        *,
+        tick: int = 0,
     ) -> StreamHandle:
         """Open a streaming payment from this agent to another.
 
@@ -165,7 +167,7 @@ class StreamingPayments:
             to=to,
             rate_per_tick=rate_per_tick,
             max_total=max_total,
-            opened_at_tick=0,  # Will be set by context in real scenario
+            opened_at_tick=tick,
             total_debited=rate_per_tick,
         )
         self._streams[ref] = handle
@@ -221,7 +223,7 @@ class StreamingPayments:
 
         return handle.closed_at_tick is None
 
-    async def close_stream(self, ref: PaymentRef) -> Receipt:
+    async def close_stream(self, ref: PaymentRef, *, tick: int | None = None) -> Receipt:
         """Close a stream and return a receipt.
 
         Either payer or payee can call this. Unused remainder is never spent.
@@ -246,7 +248,7 @@ class StreamingPayments:
 
         handle = self._streams[ref]
         if handle.closed_at_tick is None:
-            handle.closed_at_tick = 0  # Assume current tick; real usage sets it
+            handle.closed_at_tick = tick if tick is not None else handle.opened_at_tick
 
         # Create receipt
         receipt = Receipt(

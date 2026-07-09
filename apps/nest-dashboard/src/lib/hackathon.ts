@@ -22,11 +22,23 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { EMPTY_DATASET, type Dataset } from "./hackathon-types";
+import { EMPTY_DATASET } from "./hackathon-display";
+import type { Dataset } from "./hackathon-types";
 
-// Re-export the runtime API consumers actually use from server pages,
-// so call-sites can keep importing from a single module.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function validateDataset(raw: unknown): Dataset | null {
+  if (!isRecord(raw) || !Array.isArray(raw.submissions) || !isRecord(raw.stats)) {
+    return null;
+  }
+  return raw as unknown as Dataset;
+}
+
+// Re-export generated types and display helpers from a single module.
 export * from "./hackathon-types";
+export * from "./hackathon-display";
 
 /**
  * Read the static dataset JSON from `public/hackathon-data.json`.
@@ -46,7 +58,8 @@ export async function loadDataset(): Promise<Dataset> {
       "hackathon-data.json",
     );
     const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as Dataset;
+    const parsed = validateDataset(JSON.parse(raw));
+    return parsed ?? EMPTY_DATASET;
   } catch {
     return EMPTY_DATASET;
   }

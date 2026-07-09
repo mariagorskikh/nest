@@ -20,6 +20,8 @@ Example::
 
 from __future__ import annotations
 
+from typing import Literal
+
 from nest_core.types import (
     AgentId,
     Agreement,
@@ -69,14 +71,28 @@ class ParetoNegotiation:
         self,
         agent_id: AgentId,
         *,
-        weights: dict[str, float],
+        weights: dict[Literal["price", "deadline"], float],
         price_range: tuple[int, int],
         deadline_range: tuple[int, int],
-        side: str,
+        side: Literal["buyer", "seller"],
         patience: float = 0.9,
         reservation: float = 0.0,
         max_rounds: int = 12,
     ) -> None:
+        if "price" not in weights or "deadline" not in weights:
+            msg = "weights must contain both 'price' and 'deadline' keys"
+            raise ValueError(msg)
+        plo, phi = price_range
+        dlo, dhi = deadline_range
+        if plo >= phi:
+            msg = f"price_range must have plo < phi, got {price_range!r}"
+            raise ValueError(msg)
+        if dlo >= dhi:
+            msg = f"deadline_range must have dlo < dhi, got {deadline_range!r}"
+            raise ValueError(msg)
+        if not 0 < patience <= 1:
+            msg = f"patience must be in (0, 1], got {patience!r}"
+            raise ValueError(msg)
         self._agent_id = agent_id
         self._weights = weights
         self._price_range = price_range
@@ -87,6 +103,11 @@ class ParetoNegotiation:
         self._max_rounds = max_rounds
         self._rounds: dict[str, int] = {}
         self._session_counter = 0
+        plo, phi = price_range
+        dlo, dhi = deadline_range
+        self._grid_cache: list[tuple[int, int]] = [
+            (p, d) for p in range(plo, phi + 1) for d in range(dlo, dhi + 1)
+        ]
 
     async def open(self, partner: AgentId, terms: Terms) -> NegotiationSession:
         """Open a negotiation with initial terms and a deterministic session id.
@@ -213,9 +234,7 @@ class ParetoNegotiation:
 
     def _grid(self) -> list[tuple[int, int]]:
         """Deterministic enumeration of every feasible (price, deadline) bundle."""
-        plo, phi = self._price_range
-        dlo, dhi = self._deadline_range
-        return [(p, d) for p in range(plo, phi + 1) for d in range(dlo, dhi + 1)]
+        return self._grid_cache
 
     def _extract(self, terms: Terms) -> tuple[int, int]:
         """Pull the raw (price, deadline) pair out of ``terms`` as ints."""

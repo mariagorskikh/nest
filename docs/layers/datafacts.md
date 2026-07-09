@@ -22,6 +22,13 @@ URL; permissive ACL.
 
 Source: [`nest_plugins_reference/datafacts/datafacts_v1.py`](../../packages/nest-plugins-reference/nest_plugins_reference/datafacts/datafacts_v1.py).
 
+## Also available: `cid_facts`
+
+Content-addressed registry with provenance DAG and signed freshness proofs.
+Scenario: `scenarios/provenance_supply_chain.yaml`.
+
+Source: [`nest_plugins_reference/datafacts/cid_facts.py`](../../packages/nest-plugins-reference/nest_plugins_reference/datafacts/cid_facts.py).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

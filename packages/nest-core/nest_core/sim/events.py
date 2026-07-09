@@ -35,6 +35,16 @@ class Event:
     correlation_id: CorrelationId | None = field(compare=False, default=None)
     metadata: dict[str, Any] = field(compare=False, default_factory=lambda: dict[str, Any]())
 
+    @property
+    def recipient_id(self) -> AgentId:
+        """Agent receiving this event (``agent_id`` in deliver events)."""
+        return self.agent_id
+
+    @property
+    def sender_id(self) -> AgentId:
+        """Peer that originated the message (``target_id`` in deliver events)."""
+        return self.target_id
+
 
 class EventQueue:
     """Min-heap priority queue of simulation events.

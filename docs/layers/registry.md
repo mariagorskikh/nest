@@ -21,6 +21,13 @@ Full definition: [`nest_core/layers/registry.py`](../../packages/nest-core/nest_
 
 Source: [`nest_plugins_reference/registry/in_memory.py`](../../packages/nest-plugins-reference/nest_plugins_reference/registry/in_memory.py).
 
+## Also available: `gossip`
+
+Push-pull anti-entropy registry with per-agent local views. Scenario:
+`scenarios/gossip_registry.yaml`.
+
+Source: [`nest_plugins_reference/registry/gossip.py`](../../packages/nest-plugins-reference/nest_plugins_reference/registry/gossip.py).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

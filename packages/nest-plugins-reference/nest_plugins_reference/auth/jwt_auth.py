@@ -14,8 +14,16 @@ import hashlib
 import hmac
 import json
 import time
+import warnings
+from collections import OrderedDict
+from collections.abc import Callable
 
 from nest_core.types import AgentId, AuthContext, Token
+
+# Publicly documented weak default — never use in production.
+KNOWN_WEAK_SECRET = b"nest-default-secret"
+
+ClockFn = Callable[[], float]
 
 
 class JwtAuth:
@@ -27,18 +35,49 @@ class JwtAuth:
         token = await auth.issue(AgentId("a1"), ["read"])
     """
 
-    def __init__(self, secret: bytes = b"nest-default-secret", clock: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        secret: bytes,
+        clock: ClockFn | float | None = None,
+        max_revoked: int = 10_000,
+    ) -> None:
+        if secret == KNOWN_WEAK_SECRET:
+            warnings.warn(
+                "JwtAuth secret is the publicly known weak default "
+                f"{KNOWN_WEAK_SECRET!r}; use a unique secret for any non-simulation "
+                "deployment.",
+                stacklevel=2,
+                category=UserWarning,
+            )
         self._secret = secret
-        self._clock = clock
-        self._revoked: set[str] = set()
+        self._clock_fn = self._normalize_clock(clock)
+        self._max_revoked = max(1, max_revoked)
+        self._revoked: OrderedDict[str, None] = OrderedDict()
+
+    @staticmethod
+    def _normalize_clock(clock: ClockFn | float | None) -> ClockFn:
+        if clock is None:
+            return time.time
+        if isinstance(clock, (int, float)):
+            fixed = float(clock)
+            return lambda: fixed
+        return clock
+
+    def set_clock(self, clock: ClockFn | float) -> None:
+        """Replace the clock used for token issue/expiry checks."""
+        self._clock_fn = self._normalize_clock(clock)
 
     def _now(self) -> float:
-        if self._clock is not None:
-            return self._clock
-        return time.time()
+        return self._clock_fn()
 
     def _sign(self, payload: str) -> str:
         return hmac.new(self._secret, payload.encode(), hashlib.sha256).hexdigest()
+
+    def _remember_revoked(self, token: str) -> None:
+        self._revoked[token] = None
+        while len(self._revoked) > self._max_revoked:
+            self._revoked.popitem(last=False)
 
     async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
         """Issue a token for a subject with given scopes.
@@ -102,4 +141,8 @@ class JwtAuth:
 
             await auth.revoke(token)
         """
-        self._revoked.add(str(token))
+        self._remember_revoked(str(token))
+
+    @property
+    def revoked_count(self) -> int:
+        return len(self._revoked)

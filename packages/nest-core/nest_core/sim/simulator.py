@@ -14,17 +14,22 @@ Example::
 
 from __future__ import annotations
 
+import asyncio
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from nest_core.log import LazyLogger
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.sim.clock import VirtualClock
 from nest_core.sim.events import Event, EventQueue
+from nest_core.sim.middleware import MessageContext, MiddlewareChain
 from nest_core.sim.trace import TraceWriter
 from nest_core.sim.transport import InMemoryTransport
 from nest_core.types import AgentId, CorrelationId
+
+log = LazyLogger(__name__)
 
 
 @dataclass
@@ -59,6 +64,7 @@ class _SimAgentContext:
         trace: TraceWriter | None,
         corr_counter: _CorrelationCounter,
         plugins: dict[str, Any] | None = None,
+        middleware_chain: MiddlewareChain | None = None,
     ) -> None:
         self._agent_id = agent_id
         self._clock = clock
@@ -68,6 +74,32 @@ class _SimAgentContext:
         self._trace = trace
         self._corr = corr_counter
         self._plugins: dict[str, Any] = plugins or {}
+        self._middleware_chain = middleware_chain
+
+    async def _apply_outbound(
+        self,
+        recipient: AgentId,
+        payload: bytes,
+        correlation_id: CorrelationId,
+    ) -> tuple[bytes, float | None] | None:
+        if self._middleware_chain is None:
+            return payload, None
+        mc = MessageContext(
+            sender=self._agent_id,
+            recipient=recipient,
+            payload=payload,
+            correlation_id=correlation_id,
+            now=self._clock.now,
+            rng=self._rng,
+            direction="send",
+            plugins=self._plugins,
+        )
+        result = await self._middleware_chain.on_send(mc)
+        if result is None:
+            return None
+        deliver_at = result.metadata.get("deliver_at")
+        deliver_at_f = float(deliver_at) if deliver_at is not None else None
+        return result.payload, deliver_at_f
 
     @property
     def agent_id(self) -> AgentId:
@@ -87,6 +119,10 @@ class _SimAgentContext:
 
     async def send(self, to: AgentId, payload: bytes) -> None:
         cid = self._corr.next()
+        outbound = await self._apply_outbound(to, payload, cid)
+        if outbound is None:
+            return
+        payload, deliver_at = outbound
         if self._trace:
             self._trace.record(
                 {
@@ -99,10 +135,19 @@ class _SimAgentContext:
                     "corr": str(cid),
                 }
             )
-        await self._transport.send(to, payload, correlation_id=cid)
+        await self._transport.send(
+            to,
+            payload,
+            correlation_id=cid,
+            deliver_at=deliver_at,
+        )
 
     async def broadcast(self, payload: bytes) -> None:
         cid = self._corr.next()
+        outbound = await self._apply_outbound(AgentId("*"), payload, cid)
+        if outbound is None:
+            return
+        payload, deliver_at = outbound
         if self._trace:
             self._trace.record(
                 {
@@ -114,7 +159,11 @@ class _SimAgentContext:
                     "corr": str(cid),
                 }
             )
-        await self._transport.broadcast(payload, correlation_id=cid)
+        await self._transport.broadcast(
+            payload,
+            correlation_id=cid,
+            deliver_at=deliver_at,
+        )
 
     async def schedule(self, delay: float, payload: bytes) -> None:
         self._queue.push(
@@ -151,6 +200,8 @@ class Simulator:
         partition_groups: list[list[str]] | None = None,
         partition_heal_at: int | None = None,
         plugins: dict[str, Any] | None = None,
+        parallel: bool = False,
+        middleware: list[Any] | None = None,
     ) -> None:
         if not 0.0 <= message_drop_rate <= 1.0:
             msg = f"message_drop_rate must be between 0 and 1: {message_drop_rate}"
@@ -180,6 +231,11 @@ class Simulator:
         self._failure_rng = random.Random(self._master_rng.randint(0, 2**63))
         self._plugins: dict[str, Any] = plugins or {}
         self._agent_plugins: dict[AgentId, dict[str, Any]] = {}
+        self._parallel = parallel
+        self._transport_factory: Any | None = None
+        self._middleware_chain: MiddlewareChain | None = None
+        if middleware:
+            self._middleware_chain = MiddlewareChain(middleware, trace=self._trace)
 
     @property
     def clock(self) -> VirtualClock:
@@ -190,6 +246,16 @@ class Simulator:
             t = sim.clock.now
         """
         return self._clock
+
+    @property
+    def event_queue(self) -> EventQueue:
+        """The simulator's event queue (for distributed worker bridges).
+
+        Example::
+
+            q = sim.event_queue
+        """
+        return self._queue
 
     @property
     def tick_count(self) -> int:
@@ -221,6 +287,15 @@ class Simulator:
         """
         return self._dropped_count
 
+    def set_transport_factory(self, factory: Any) -> None:
+        """Override how per-agent transports are constructed (distributed workers).
+
+        Example::
+
+            sim.set_transport_factory(lambda aid, q, c, ids: RoutedTransport(...))
+        """
+        self._transport_factory = factory
+
     def add_agent(self, agent_id: AgentId, agent: StateMachineAgent) -> None:
         """Register an agent for the simulation.
 
@@ -228,9 +303,16 @@ class Simulator:
 
             sim.add_agent(AgentId("a1"), MyAgent())
         """
+        if agent_id in self._agents:
+            msg = f"Agent already registered: {agent_id}"
+            raise ValueError(msg)
         agent_rng = random.Random(self._master_rng.randint(0, 2**63))
         all_ids = [aid for aid in self._agents]
-        transport = InMemoryTransport(agent_id, self._queue, self._clock, all_ids)
+        all_ids.append(agent_id)
+        if self._transport_factory is not None:
+            transport = self._transport_factory(agent_id, self._queue, self._clock, all_ids)
+        else:
+            transport = InMemoryTransport(agent_id, self._queue, self._clock, all_ids)
         self._agents[agent_id] = _AgentSlot(
             agent=agent,
             transport=transport,
@@ -278,8 +360,14 @@ class Simulator:
 
         self._init_failures()
 
-        for aid, slot in self._agents.items():
-            ctx = self._make_context(aid, slot)
+        log.debug(
+            "simulation_start",
+            seed=self._seed,
+            agent_count=len(self._agents),
+            parallel=self._parallel,
+        )
+
+        for aid in self._agents:
             if self._trace:
                 self._trace.record(
                     {
@@ -296,84 +384,42 @@ class Simulator:
                 )
             )
 
-        for aid, slot in self._agents.items():
-            ctx = self._make_context(aid, slot)
-            await slot.agent.on_start(ctx)
+        start_pairs = [(aid, slot) for aid, slot in self._agents.items()]
+        if self._parallel:
+            await asyncio.gather(
+                *(slot.agent.on_start(self._make_context(aid, slot)) for aid, slot in start_pairs)
+            )
+        else:
+            for aid, slot in start_pairs:
+                await slot.agent.on_start(self._make_context(aid, slot))
 
         while self._queue and self._tick_count < max_ticks:
-            event = self._queue.pop()
+            if self._parallel:
+                batch_time = self._queue.peek().time
+                batch: list[Event] = []
+                while self._queue and self._queue.peek().time == batch_time:
+                    batch.append(self._queue.pop())
+                if max_time is not None and batch_time > max_time:
+                    break
+                self._clock.advance_to(batch_time)
+                self._tick_count += len(batch)
+                self._maybe_heal_partition()
 
-            if max_time is not None and event.time > max_time:
-                break
+                async def _handle(ev: Event) -> None:
+                    await self._dispatch_event(ev)
 
-            self._clock.advance_to(event.time)
-            self._tick_count += 1
+                await asyncio.gather(*(_handle(ev) for ev in batch))
+            else:
+                event = self._queue.pop()
+                if max_time is not None and event.time > max_time:
+                    break
+                self._clock.advance_to(event.time)
+                self._tick_count += 1
+                self._maybe_heal_partition()
+                await self._dispatch_event(event)
 
-            if (
-                self._partition_heal_at is not None
-                and not self._partition_healed
-                and self._tick_count >= self._partition_heal_at
-            ):
-                self._partition_map = {}
-                self._partition_healed = True
-                if self._trace:
-                    self._trace.record(
-                        {
-                            "ts": self._clock.now,
-                            "agent": "_simulator",
-                            "kind": "partition_healed",
-                        }
-                    )
-
-            if event.kind == "start":
-                continue
-
-            if event.kind == "deliver":
-                target_slot = self._agents.get(event.agent_id)
-                if target_slot is None:
-                    continue
-
-                if self._should_drop(event.target_id, event.agent_id):
-                    self._dropped_count += 1
-                    if self._trace:
-                        drop_rec: dict[str, Any] = {
-                            "ts": self._clock.now,
-                            "agent": str(event.agent_id),
-                            "kind": "dropped",
-                            "from": str(event.target_id),
-                            "size": len(event.payload),
-                            "msg": event.payload.decode("utf-8", errors="replace"),
-                        }
-                        if event.correlation_id is not None:
-                            drop_rec["corr"] = str(event.correlation_id)
-                        self._trace.record(drop_rec)
-                    continue
-
-                delivered_payload = event.payload
-                if event.target_id in self._byzantine_agents:
-                    delivered_payload = bytes(
-                        (b ^ self._failure_rng.randint(0, 255)) for b in event.payload
-                    )
-
-                self._message_count += 1
-                if self._trace:
-                    rec: dict[str, Any] = {
-                        "ts": self._clock.now,
-                        "agent": str(event.agent_id),
-                        "kind": "receive",
-                        "from": str(event.target_id),
-                        "size": len(delivered_payload),
-                        "msg": delivered_payload.decode("utf-8", errors="replace"),
-                    }
-                    if event.correlation_id is not None:
-                        rec["corr"] = str(event.correlation_id)
-                    self._trace.record(rec)
-
-                ctx = self._make_context(event.agent_id, target_slot)
-                await target_slot.agent.on_message(ctx, event.target_id, delivered_payload)
-
-        for aid, slot in self._agents.items():
-            ctx = self._make_context(aid, slot)
+        stop_pairs = [(aid, slot) for aid, slot in self._agents.items()]
+        for aid, _slot in stop_pairs:
             if self._trace:
                 self._trace.record(
                     {
@@ -382,10 +428,128 @@ class Simulator:
                         "kind": "stop",
                     }
                 )
-            await slot.agent.on_stop(ctx)
+        if self._parallel:
+            await asyncio.gather(
+                *(slot.agent.on_stop(self._make_context(aid, slot)) for aid, slot in stop_pairs)
+            )
+        else:
+            for aid, slot in stop_pairs:
+                await slot.agent.on_stop(self._make_context(aid, slot))
 
         if self._trace:
             self._trace.close()
+
+    def _maybe_heal_partition(self) -> None:
+        """Clear any active network partition once the heal tick is reached."""
+        if (
+            self._partition_heal_at is not None
+            and not self._partition_healed
+            and self._tick_count >= self._partition_heal_at
+        ):
+            self._partition_map = {}
+            self._partition_healed = True
+            if self._trace:
+                self._trace.record(
+                    {
+                        "ts": self._clock.now,
+                        "agent": "_simulator",
+                        "kind": "partition_healed",
+                    }
+                )
+
+    async def _dispatch_event(self, event: Event) -> None:
+        """Process a single simulation event."""
+        if event.kind == "start":
+            return
+
+        if event.kind != "deliver":
+            return
+
+        target_slot = self._agents.get(event.agent_id)
+        if target_slot is None:
+            return
+
+        if self._should_drop(event.target_id, event.agent_id):
+            self._dropped_count += 1
+            if self._trace:
+                drop_rec: dict[str, Any] = {
+                    "ts": self._clock.now,
+                    "agent": str(event.agent_id),
+                    "kind": "dropped",
+                    "from": str(event.target_id),
+                    "size": len(event.payload),
+                    "msg": event.payload.decode("utf-8", errors="replace"),
+                }
+                if event.correlation_id is not None:
+                    drop_rec["corr"] = str(event.correlation_id)
+                self._trace.record(drop_rec)
+            return
+
+        delivered_payload = event.payload
+        if event.target_id in self._byzantine_agents and event.payload:
+            noise = self._failure_rng.randbytes(len(event.payload))
+            delivered_payload = bytes(a ^ b for a, b in zip(event.payload, noise, strict=True))
+
+        agent_overrides = self._agent_plugins.get(event.agent_id)
+        merged_plugins = {**self._plugins, **agent_overrides} if agent_overrides else self._plugins
+        inbound_ctx = MessageContext(
+            sender=event.target_id,
+            recipient=event.agent_id,
+            payload=delivered_payload,
+            correlation_id=event.correlation_id,
+            now=self._clock.now,
+            rng=target_slot.rng,
+            direction="receive",
+            plugins=merged_plugins,
+        )
+        if self._middleware_chain is not None:
+            inbound_result = await self._middleware_chain.on_receive(inbound_ctx)
+            if inbound_result is None:
+                deny_reason = inbound_ctx.metadata.get("deny_reason")
+                if deny_reason and self._trace:
+                    denied_rec: dict[str, Any] = {
+                        "ts": self._clock.now,
+                        "agent": str(event.agent_id),
+                        "kind": "denied",
+                        "from": str(event.target_id),
+                        "reason": str(deny_reason),
+                    }
+                    if event.correlation_id is not None:
+                        denied_rec["corr"] = str(event.correlation_id)
+                    self._trace.record(denied_rec)
+                return
+            delivered_payload = inbound_result.payload
+
+        self._message_count += 1
+        log.debug(
+            "dispatch_deliver",
+            agent=str(event.agent_id),
+            from_agent=str(event.target_id),
+            correlation_id=str(event.correlation_id) if event.correlation_id else None,
+        )
+        if self._trace:
+            rec: dict[str, Any] = {
+                "ts": self._clock.now,
+                "agent": str(event.agent_id),
+                "kind": "receive",
+                "from": str(event.target_id),
+                "size": len(delivered_payload),
+                "msg": delivered_payload.decode("utf-8", errors="replace"),
+            }
+            if event.correlation_id is not None:
+                rec["corr"] = str(event.correlation_id)
+            self._trace.record(rec)
+
+        ctx = self._make_context(event.agent_id, target_slot)
+
+        async def _deliver() -> None:
+            await target_slot.agent.on_message(ctx, event.target_id, delivered_payload)
+
+        chain = self._middleware_chain
+        if chain is not None and chain.has_delivery_error_handlers():
+            await chain.run_delivery(inbound_ctx, _deliver)
+        else:
+            await _deliver()
 
     def set_agent_plugins(self, agent_id: AgentId, overrides: dict[str, Any]) -> None:
         """Set per-agent plugin overrides (merged on top of shared plugins).
@@ -408,4 +572,5 @@ class Simulator:
             trace=self._trace,
             corr_counter=self._corr_counter,
             plugins=merged,
+            middleware_chain=self._middleware_chain,
         )

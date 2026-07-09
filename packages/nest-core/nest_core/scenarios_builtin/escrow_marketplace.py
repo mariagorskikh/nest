@@ -123,14 +123,25 @@ class BuyerAgent(StateMachineAgent):
         if payload == _OP_RESOLVE:
             if not hasattr(payments, "release"):
                 return  # prepaid_credits has nothing left to do
-            if self._mode == "happy":
-                await payments.release(self._ref)
-                await ctx.broadcast(_emit({"kind": "released", "ref": self._ref}).encode())
-            else:
-                reason = f"mode={self._mode}"
-                await payments.dispute(self._ref, reason=reason)
+            try:
+                if self._mode == "happy":
+                    await payments.release(self._ref)
+                    await ctx.broadcast(_emit({"kind": "released", "ref": self._ref}).encode())
+                else:
+                    reason = f"mode={self._mode}"
+                    await payments.dispute(self._ref, reason=reason)
+                    await ctx.broadcast(
+                        _emit({"kind": "disputed", "ref": self._ref, "reason": reason}).encode()
+                    )
+            except Exception as exc:
                 await ctx.broadcast(
-                    _emit({"kind": "disputed", "ref": self._ref, "reason": reason}).encode()
+                    _emit(
+                        {
+                            "kind": "resolve_failed",
+                            "ref": self._ref,
+                            "reason": str(exc),
+                        }
+                    ).encode()
                 )
 
 
@@ -196,6 +207,9 @@ class ArbiterAgent(StateMachineAgent):
             return
         payments = ctx.plugins["payments"]
         if not hasattr(payments, "arbitrate"):
+            return
+        handle = payments.escrow(self._ref) if hasattr(payments, "escrow") else None
+        if handle is None or handle.state != "DISPUTED":
             return
         await payments.arbitrate(
             self._ref,

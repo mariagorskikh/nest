@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import warnings
 
 from nest_core.types import AgentId, AgentIdentity, Signature
 
@@ -30,7 +31,18 @@ class DidKeyIdentity:
         sig = ident.sign(b"hello")
     """
 
+    _warned: bool = False
+
     def __init__(self, agent_id: AgentId, seed: bytes = b"") -> None:
+        if not DidKeyIdentity._warned:
+            warnings.warn(
+                "DidKeyIdentity uses deterministic textbook RSA (~512-bit) for "
+                "simulation only; it is not production cryptography. Prefer "
+                "ed25519_rotating for real deployments.",
+                stacklevel=2,
+                category=UserWarning,
+            )
+            DidKeyIdentity._warned = True
         self._agent_id = agent_id
         self._seed = seed
         self._public_numbers, self._private_exponent = _derive_keypair(seed, agent_id)

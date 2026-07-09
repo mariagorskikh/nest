@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { listSkills, type Skill } from "@/lib/skills";
+import { sanitizeHttpHref } from "@/lib/url-safety";
 import { CodeBlock } from "./code-block";
 import { SubmitForm } from "./submit-form";
 
@@ -376,16 +377,19 @@ function SkillCard({ skill }: { skill: Skill }) {
             </span>
           ))}
 
-        {skill.source_url && (
-          <a
-            href={skill.source_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium text-rust hover:text-ink-900"
-          >
-            Open source ↗
-          </a>
-        )}
+        {(() => {
+          const safeHref = sanitizeHttpHref(skill.source_url);
+          return safeHref ? (
+            <a
+              href={safeHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-rust hover:text-ink-900"
+            >
+              Open source ↗
+            </a>
+          ) : null;
+        })()}
         <a
           href={`/api/skills/${skill.id}`}
           className="font-medium text-ink-500 hover:text-ink-900"

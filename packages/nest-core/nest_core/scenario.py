@@ -72,7 +72,7 @@ class LayerConfig(BaseModel):
 
     transport: str = "in_memory"
     comms: str = "nest_native"
-    identity: str = "did_key"
+    identity: str = "ed25519_rotating"
     registry: str = "in_memory"
     auth: str = "jwt"
     trust: str = "score_average"
@@ -130,6 +130,19 @@ class OutputConfig(BaseModel):
     report: str | None = None
 
 
+class MiddlewareEntry(BaseModel):
+    """A named middleware plugin with optional configuration."""
+
+    name: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class DistributedConfig(BaseModel):
+    """Distributed execution options."""
+
+    shared_registry: bool = False
+
+
 class ScenarioConfig(BaseModel):
     """Top-level scenario configuration parsed from YAML.
 
@@ -145,10 +158,33 @@ class ScenarioConfig(BaseModel):
     layers: LayerConfig = Field(default_factory=LayerConfig)
     task: TaskConfig = Field(default_factory=TaskConfig)
     failures: FailureConfig = Field(default_factory=FailureConfig)
+    middleware: list[MiddlewareEntry] = Field(default_factory=lambda: list[MiddlewareEntry]())
     duration: str = "ticks: 10000"
     metrics: list[str] = Field(default_factory=list)
     output: OutputConfig = Field(default_factory=OutputConfig)
     seed: int = 0
+    parallel: bool = False
+    workers: int = 1
+    worker_bind: str = "127.0.0.1"
+    worker_hosts: list[str] | None = None
+    worker_mode: str = "auto"
+    distributed: DistributedConfig = Field(default_factory=DistributedConfig)
+
+    @field_validator("worker_mode")
+    @classmethod
+    def _valid_worker_mode(cls, value: str) -> str:
+        if value not in ("auto", "manual"):
+            msg = "worker_mode must be 'auto' or 'manual'"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("workers")
+    @classmethod
+    def _workers_positive(cls, value: int) -> int:
+        if value < 1:
+            msg = "workers must be >= 1"
+            raise ValueError(msg)
+        return value
 
     @field_validator("tier")
     @classmethod

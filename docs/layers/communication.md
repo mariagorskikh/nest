@@ -22,6 +22,13 @@ Full definition: [`nest_core/layers/comms.py`](../../packages/nest-core/nest_cor
 
 Source: [`nest_plugins_reference/comms/nest_native.py`](../../packages/nest-plugins-reference/nest_plugins_reference/comms/nest_native.py).
 
+## Also available: `versioned`
+
+Schema-version envelopes for migration testing. Scenario:
+`scenarios/comms_versioning.yaml`.
+
+Source: [`nest_plugins_reference/comms/versioned.py`](../../packages/nest-plugins-reference/nest_plugins_reference/comms/versioned.py).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

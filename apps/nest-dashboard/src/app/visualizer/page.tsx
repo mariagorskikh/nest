@@ -66,7 +66,7 @@ const SCENARIOS: ScenarioMeta[] = [
   {
     id: 'consensus',
     name: 'Consensus',
-    blurb: '1 leader · 19 followers · paxos-style rounds',
+    blurb: '1 leader · 19 followers · quorum agreement (≥⅔) — not full BFT',
     file: '/scenario-traces/consensus.jsonl',
   },
   {
@@ -92,6 +92,84 @@ const SCENARIOS: ScenarioMeta[] = [
     name: 'Shell marketplace',
     blurb: '3 buyers · 3 sellers · shell-driven brains',
     file: '/scenario-traces/shell_marketplace.jsonl',
+  },
+  {
+    id: 'memory_concurrent_writers',
+    name: 'Memory CRDT',
+    blurb: 'LWW-register concurrent writers · convergence',
+    file: '/scenario-traces/memory_concurrent_writers.jsonl',
+  },
+  {
+    id: 'escrow_marketplace',
+    name: 'Escrow marketplace',
+    blurb: 'HTLC escrow · happy + dispute paths',
+    file: '/scenario-traces/escrow_marketplace.jsonl',
+  },
+  {
+    id: 'streaming_payments',
+    name: 'Streaming payments',
+    blurb: 'Per-tick metered payments · conservation',
+    file: '/scenario-traces/streaming_payments.jsonl',
+  },
+  {
+    id: 'sealed_bid_with_privacy',
+    name: 'Sealed bid + privacy',
+    blurb: 'Hybrid X25519 · selective disclosure',
+    file: '/scenario-traces/sealed_bid_with_privacy.jsonl',
+  },
+  {
+    id: 'bft_consensus_partition',
+    name: 'BFT partition',
+    blurb: 'HotStuff · network partition + heal',
+    file: '/scenario-traces/bft_consensus_partition.jsonl',
+  },
+  {
+    id: 'bft_consensus_byzantine',
+    name: 'BFT byzantine',
+    blurb: 'HotStuff · malicious leader equivocation',
+    file: '/scenario-traces/bft_consensus_byzantine.jsonl',
+  },
+  {
+    id: 'multi_attribute_market',
+    name: 'Multi-attribute market',
+    blurb: 'Pareto negotiation · price + deadline',
+    file: '/scenario-traces/multi_attribute_market.jsonl',
+  },
+  {
+    id: 'provenance_supply_chain',
+    name: 'Provenance supply chain',
+    blurb: 'Content-addressed DataFacts · DAG lineage',
+    file: '/scenario-traces/provenance_supply_chain.jsonl',
+  },
+  {
+    id: 'gossip_registry',
+    name: 'Gossip registry',
+    blurb: 'Push-pull anti-entropy · local views',
+    file: '/scenario-traces/gossip_registry.jsonl',
+  },
+  {
+    id: 'comms_versioning',
+    name: 'Comms versioning',
+    blurb: 'Schema-version envelopes · migration',
+    file: '/scenario-traces/comms_versioning.jsonl',
+  },
+  {
+    id: 'identity_rotation',
+    name: 'Identity rotation',
+    blurb: 'Ed25519 key rotation · continuity proofs',
+    file: '/scenario-traces/identity_rotation.jsonl',
+  },
+  {
+    id: 'receipt_reputation',
+    name: 'Receipt reputation',
+    blurb: 'Receipt-backed trust · graph scoring',
+    file: '/scenario-traces/receipt_reputation.jsonl',
+  },
+  {
+    id: 'http_marketplace',
+    name: 'HTTP marketplace',
+    blurb: 'Tier-2 HTTP transport · worker routing',
+    file: '/scenario-traces/http_marketplace.jsonl',
   },
 ];
 
@@ -807,6 +885,8 @@ function Player({
         for (const node of nodes) {
           m.set(node.id, { x: node.x ?? 0, y: node.y ?? 0 });
         }
+      })
+      .on('end', () => {
         bump((t) => (t + 1) % 1_000_000);
       });
 
@@ -1693,15 +1773,31 @@ interface MessageStreamProps {
   simTime: number;
 }
 
+function flightIndexAtOrBefore(flights: Flight[], t: number): number {
+  let lo = 0;
+  let hi = flights.length - 1;
+  let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (flights[mid].tStart <= t) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
 function MessageStream({ derived, simTime }: MessageStreamProps) {
   const recent = useMemo(() => {
     const span = Math.max(derived.tMax - derived.tMin, 1e-6);
     const lookback = span * 0.08;
     const cut = simTime - lookback;
     const result: Flight[] = [];
-    for (let i = derived.flights.length - 1; i >= 0; i--) {
+    const endIdx = flightIndexAtOrBefore(derived.flights, simTime);
+    for (let i = endIdx; i >= 0; i--) {
       const f = derived.flights[i];
-      if (f.tStart > simTime) continue;
       if (f.tStart < cut) break;
       result.push(f);
       if (result.length >= 80) break;
@@ -1960,7 +2056,7 @@ export default function VisualizerPage() {
                 {
                   label: 'Duration',
                   value: (derived.tMax - derived.tMin).toFixed(1),
-                  suffix: 's',
+                  suffix: 't',
                   accent: '#221F1A',
                 },
               ].map((stat) => (

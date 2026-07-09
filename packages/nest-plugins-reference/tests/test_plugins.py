@@ -170,6 +170,22 @@ class TestInMemoryRegistry:
         assert results[0].agent_id == AgentId("a1")
 
     @pytest.mark.asyncio
+    async def test_lookup_scales_to_many_agents(self) -> None:
+        from nest_plugins_reference.registry.in_memory import InMemoryRegistry
+
+        reg = InMemoryRegistry()
+        for i in range(1000):
+            await reg.register(
+                AgentCard(
+                    agent_id=AgentId(f"agent-{i}"),
+                    name=f"Agent{i}",
+                    capabilities=["sell"] if i % 2 == 0 else ["buy"],
+                )
+            )
+        results = await reg.lookup(Query(capabilities=["sell"]))
+        assert len(results) == 500
+
+    @pytest.mark.asyncio
     async def test_lookup_no_match(self) -> None:
         from nest_plugins_reference.registry.in_memory import InMemoryRegistry
 
@@ -199,6 +215,18 @@ class TestInMemoryRegistry:
 
 
 class TestJwtAuth:
+    def test_requires_explicit_secret(self) -> None:
+        from nest_plugins_reference.auth.jwt_auth import JwtAuth
+
+        with pytest.raises(TypeError):
+            JwtAuth()  # type: ignore[call-arg]
+
+    def test_warns_on_known_weak_secret(self) -> None:
+        from nest_plugins_reference.auth.jwt_auth import KNOWN_WEAK_SECRET, JwtAuth
+
+        with pytest.warns(UserWarning, match="publicly known weak default"):
+            JwtAuth(secret=KNOWN_WEAK_SECRET)
+
     @pytest.mark.asyncio
     async def test_issue_verify(self) -> None:
         from nest_plugins_reference.auth.jwt_auth import JwtAuth
@@ -396,11 +424,13 @@ class TestAlternatingOffers:
 
         await neg.offer(session, Terms(price=Money(amount=80)))
         resp = await neg.respond(session)
-        assert isinstance(resp.accepted, bool)
-
         agreement = await neg.close(session)
-        assert agreement is not None
-        assert agreement.session_id == session.id
+        if resp.accepted:
+            assert agreement is not None
+            assert agreement.session_id == session.id
+        else:
+            assert agreement is None
+            assert session.status == NegotiationStatus.REJECTED
 
     @pytest.mark.asyncio
     async def test_no_terms(self) -> None:

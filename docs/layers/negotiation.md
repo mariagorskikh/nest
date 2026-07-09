@@ -22,6 +22,14 @@ discount.
 
 Source: [`nest_plugins_reference/negotiation/alternating_offers.py`](../../packages/nest-plugins-reference/nest_plugins_reference/negotiation/alternating_offers.py).
 
+## Also available: `pareto`
+
+`ParetoNegotiation` — multi-attribute bargaining over price and deadline using
+Keeney-Raiffa MAUT and Faratin–Sierra–Jennings trade-off moves. Scenario:
+`scenarios/multi_attribute_market.yaml`.
+
+Source: [`nest_plugins_reference/negotiation/pareto.py`](../../packages/nest-plugins-reference/nest_plugins_reference/negotiation/pareto.py).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

@@ -42,6 +42,10 @@ where to look for inspiration.
 
 ## Going further
 
+- **[security-audit.md](security-audit.md)** — Red/blue team security
+  posture, findings register (fixed vs open), operator checklist.
+- **[distributed.md](distributed.md)** — Parallel and distributed execution,
+  HTTP authentication, worker configuration.
 - **[CONTRIBUTING.md](../CONTRIBUTING.md)** — Development setup
   (`uv sync`), code style, how to add a *built-in* scenario, CI
   checks.

@@ -501,6 +501,45 @@ class TestPaymentsProtocol:
         assert await payer.verify_payment(PaymentRef("e4")) == PaymentStatus.CONFIRMED
 
     @pytest.mark.asyncio
+    async def test_verify_payment_delivered_is_pending(self) -> None:
+        payer, payee, _ = _triple()
+        await payer.open_escrow(
+            payee=AgentId("payee"),
+            arbiter=AgentId("arbiter"),
+            amount=Money(amount=100),
+            ref=PaymentRef("pending-1"),
+        )
+        await payee.deliver(PaymentRef("pending-1"), proof="x")
+        assert await payer.verify_payment(PaymentRef("pending-1")) == PaymentStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_verify_payment_disputed_is_pending(self) -> None:
+        payer, payee, _ = _triple()
+        await payer.open_escrow(
+            payee=AgentId("payee"),
+            arbiter=AgentId("arbiter"),
+            amount=Money(amount=100),
+            ref=PaymentRef("disputed-1"),
+        )
+        await payee.deliver(PaymentRef("disputed-1"), proof="x")
+        await payer.dispute(PaymentRef("disputed-1"), reason="bad")
+        assert await payer.verify_payment(PaymentRef("disputed-1")) == PaymentStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_second_dispute_raises(self) -> None:
+        payer, payee, _ = _triple()
+        await payer.open_escrow(
+            payee=AgentId("payee"),
+            arbiter=AgentId("arbiter"),
+            amount=Money(amount=100),
+            ref=PaymentRef("d1"),
+        )
+        await payee.deliver(PaymentRef("d1"), proof="x")
+        await payer.dispute(PaymentRef("d1"), reason="first")
+        with pytest.raises(EscrowError, match="DISPUTED"):
+            await payer.dispute(PaymentRef("d1"), reason="second")
+
+    @pytest.mark.asyncio
     async def test_quote(self) -> None:
         payer, _, _ = _triple()
         q = await payer.quote(ServiceRef("svc"))

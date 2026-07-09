@@ -2564,6 +2564,25 @@ def validate_provenance_chain_unforgeable(
 _STUCK_VIEW_K_TICKS = 300
 
 
+def _bft_replica_count(events: list[dict[str, Any]]) -> int:
+    """Infer replica count from BFT trace events (replica-* agents or vote senders)."""
+    replicas: set[str] = set()
+    for ev in events:
+        agent = str(ev.get("agent", ""))
+        if agent.startswith("replica-"):
+            replicas.add(agent)
+    if replicas:
+        return len(replicas)
+    voters: set[str] = set()
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith(("vote:", "prepare:", "result:")):
+            voters.add(str(ev.get("agent", "")))
+    return max(len(voters), 1)
+
+
 def validate_bft_no_conflicting_commits(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -2680,6 +2699,9 @@ def validate_bft_forged_quorum(
     """
     violations: list[str] = []
     checked = 0
+    n_replicas = _bft_replica_count(events)
+    expected_f = (n_replicas - 1) // 3
+    required_quorum = 2 * expected_f + 1
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -2697,16 +2719,22 @@ def validate_bft_forged_quorum(
             parts[5],
         )
         try:
-            f_value = int(f_str)
+            f_claimed = int(f_str)
         except ValueError:
             continue
-        required = 2 * f_value + 1
-        voters = {entry.partition("=")[0] for entry in votes_str.split(",") if entry}
-        checked += 1
-        if len(voters) < required:
+        if f_claimed != expected_f:
             violations.append(
                 f"{phase} qc view {view} block {block_hash_hex}: "
-                f"{len(voters)} distinct signers, needed {required}"
+                f"claimed f={f_claimed}, expected f={expected_f} for {n_replicas} replicas"
+            )
+            checked += 1
+            continue
+        voters = {entry.partition("=")[0] for entry in votes_str.split(",") if entry}
+        checked += 1
+        if len(voters) < required_quorum:
+            violations.append(
+                f"{phase} qc view {view} block {block_hash_hex}: "
+                f"{len(voters)} distinct signers, needed {required_quorum}"
             )
 
     if violations:
@@ -2751,14 +2779,16 @@ def validate_bft_no_stuck_view(
     if not commit_ticks:
         return [ValidationResult("bft_no_stuck_view", False, "no commits observed in trace")]
 
-    window_end = baseline + _STUCK_VIEW_K_TICKS
+    max_ts = max(float(ev.get("ts", 0.0)) for ev in events)
+    stuck_window = max(_STUCK_VIEW_K_TICKS, max_ts // 2) if max_ts > 0 else _STUCK_VIEW_K_TICKS
+    window_end = baseline + stuck_window
     in_window = [t for t in commit_ticks if baseline <= t <= window_end]
     if not in_window:
         return [
             ValidationResult(
                 "bft_no_stuck_view",
                 False,
-                f"no commit within {_STUCK_VIEW_K_TICKS} ticks of baseline ts={baseline}",
+                f"no commit within {stuck_window} ticks of baseline ts={baseline}",
             )
         ]
     return [

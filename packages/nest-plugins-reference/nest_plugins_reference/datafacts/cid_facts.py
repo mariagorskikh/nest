@@ -40,13 +40,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
+from nest_core.layers.identity import Identity
 from nest_core.types import AccessGrant, AgentId, DataFactsUrl, DatasetMetadata, Signature
 from pydantic import BaseModel
-
-if TYPE_CHECKING:
-    from nest_core.layers.identity import Identity
 
 
 class ProvenanceError(ValueError):

@@ -1,10 +1,13 @@
 <!DOCTYPE html>
+<!-- @deprecated Static trace viewer for `nest dashboard`. Prefer the full Next.js
+     app at apps/nest-dashboard (npm run dev). This file is kept for pip-install
+     users who need a zero-dependency offline viewer. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Nanda Town Dashboard</title>
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="d3.min.js"></script>
 <style>
 :root {
   --bg: #ffffff;
@@ -516,11 +519,18 @@ tr:hover td { background: var(--red-bg); }
     try { parseAndRender(INJECTED_TRACE, "injected-trace.jsonl"); } catch(e) {}
   }
 
-  function parseAndRender(text, filename) {
+  async function parseAndRender(text, filename) {
     const lines = text.trim().split("\n").filter(l => l.trim());
     const events = [];
-    for (const line of lines) {
-      try { events.push(JSON.parse(line)); } catch(e) {}
+    const CHUNK = 5000;
+    for (let i = 0; i < lines.length; i += CHUNK) {
+      const slice = lines.slice(i, i + CHUNK);
+      for (const line of slice) {
+        try { events.push(JSON.parse(line)); } catch(e) {}
+      }
+      if (lines.length > CHUNK) {
+        await new Promise(r => setTimeout(r, 0));
+      }
     }
     if (!events.length) { alert("No valid events found."); return; }
 
@@ -603,6 +613,7 @@ tr:hover td { background: var(--red-bg); }
     };
   }
 
+  // Score weights: delivery 40%, latency 20%, throughput 20%, drop penalty 20%.
   function computeScore(successRate, meanLatency, throughput, dropped, total) {
     const sr = successRate * 40;
     const lat = Math.max(0, 20 - meanLatency * 5);

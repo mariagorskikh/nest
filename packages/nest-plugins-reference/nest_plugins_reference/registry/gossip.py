@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -229,7 +229,7 @@ class GossipRegistry:
         """
         return [v.card for v in self._view.values() if not v.tombstone and _matches(v.card, query)]
 
-    async def subscribe(self, query: Query) -> AsyncIterator[AgentCard]:
+    async def subscribe(self, query: Query) -> AsyncGenerator[AgentCard, None]:
         """Yield cards matching ``query`` from the local view, then end.
 
         This is a deliberately simple implementation: yield the current

@@ -39,6 +39,7 @@ Example::
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from nest_core.types import (
     AgentId,
@@ -86,7 +87,7 @@ class EscrowHandle:
     payee: AgentId
     arbiter: AgentId
     amount: int
-    state: str
+    state: Literal["FUNDED", "DELIVERED", "RELEASED", "DISPUTED", "ARBITRATED", "REFUNDED"]
     proof: str | None = None
     dispute_reason: str | None = None
     payee_bps_paid: int | None = None

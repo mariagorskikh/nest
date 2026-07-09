@@ -10,7 +10,7 @@ Example::
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Protocol, runtime_checkable
 
 from nest_core.types import AgentCard, AgentId, Query
@@ -44,7 +44,7 @@ class Registry(Protocol):
         """
         ...
 
-    async def subscribe(self, query: Query) -> AsyncIterator[AgentCard]:
+    def subscribe(self, query: Query) -> AsyncGenerator[AgentCard, None]:
         """Subscribe to new agents matching a query.
 
         Example::

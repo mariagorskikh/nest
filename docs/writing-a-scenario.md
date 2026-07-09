@@ -61,6 +61,21 @@ failures:                           # all optional
     groups:
       - ["agent-0", "agent-1"]
       - ["agent-2", "agent-3"]
+  partition_heal_at_tick: 1800       # optional; heal partition at this tick (see bft_consensus_partition)
+
+middleware:                         # optional; composable message hooks
+  - name: observability
+  - name: auth_scope
+    config:
+      required_scope: read
+
+workers: 1                          # 1 = single process; >1 = distributed (needs NEST_HTTP_SHARED_SECRET)
+worker_bind: "127.0.0.1"            # bind address for worker HTTP bridges
+worker_hosts: []                    # advertise hosts for multi-machine routing
+worker_mode: auto                   # auto | manual
+
+distributed:                        # optional distributed options
+  shared_registry: false            # coordinator-hosted registry RPC across workers
 
 duration: "ticks: 10000"            # NOTE: string, not nested dict. Format: "ticks: N"
 
@@ -108,6 +123,47 @@ agents stay deterministic when you toggle failures on/off):
   is flipped into a Byzantine mode where they send garbled payloads.
 - **`network_partition.groups`** — A list of lists of agent IDs. Agents
   can only deliver messages to other agents in the same group.
+- **`partition_heal_at_tick`** — Optional integer. When set, the simulator
+  clears the partition at this tick and emits a `partition_healed` trace
+  event. Works in both single-process and distributed (`workers > 1`) runs.
+  See [`bft_consensus_partition.yaml`](../scenarios/bft_consensus_partition.yaml).
+
+## Middleware
+
+Optional composable hooks on outbound (`send` / `broadcast`) and inbound
+(`receive`) message paths. Resolved by name from built-ins or the
+`nest.middleware` entry-point group.
+
+| Name | Purpose |
+|---|---|
+| `resilience` | Isolate `on_message` failures |
+| `observability` | Structured per-message logging |
+| `auth_scope` | Enforce bearer tokens with a required scope; **denies** when auth plugin is missing |
+| `latency` | Deterministic per-hop delivery delay |
+
+```yaml
+middleware:
+  - name: auth_scope
+    config:
+      required_scope: read
+```
+
+When `auth_scope` is enabled, ensure `layers.auth: jwt` (or your auth
+plugin) is configured — otherwise inbound messages are denied with
+`auth_plugin_missing`.
+
+## Distributed execution fields
+
+| Field | Default | Purpose |
+|---|---|---|
+| `workers` | `1` | Number of worker partitions; `> 1` requires `NEST_HTTP_SHARED_SECRET` |
+| `worker_bind` | `127.0.0.1` | Bind address for worker HTTP bridges |
+| `worker_hosts` | `[]` | Hostnames other workers use to reach each bridge |
+| `worker_mode` | `auto` | `auto` (spawn subprocesses) or `manual` (remote launch) |
+| `distributed.shared_registry` | `false` | Coordinator-hosted registry RPC |
+
+See [`distributed.md`](distributed.md) for multi-host launch, HTTP auth,
+and environment variables.
 
 ## Tier 2 (LLM-backed) scenarios
 

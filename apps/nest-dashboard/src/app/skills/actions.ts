@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createSkill, type SkillSourceType } from "@/lib/skills";
+import { isSafeExternalUrl } from "@/lib/url-safety";
 import { initialSubmitState, type SubmitState } from "./form-state";
 
 function str(value: FormDataEntryValue | null): string {
@@ -62,6 +63,12 @@ export async function submitSkill(
   }
   if ((sourceType === "url" || sourceType === "github") && !isValidHttpUrl(sourceUrl)) {
     return { ...initialSubmitState, error: "That link doesn't look like a real URL." };
+  }
+  if ((sourceType === "url" || sourceType === "github") && !isSafeExternalUrl(sourceUrl)) {
+    return {
+      ...initialSubmitState,
+      error: "That link isn't allowed — private or internal URLs are blocked for safety.",
+    };
   }
   if (sourceType === "content" && content.length < 20) {
     return {

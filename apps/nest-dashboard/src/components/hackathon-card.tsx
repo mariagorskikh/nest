@@ -7,11 +7,11 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Submission } from "@/lib/hackathon-types";
+import { SCORE_TOTAL_MAX } from "@/lib/hackathon-types";
 import {
   formatLinesAdded,
   formatScore,
-  SCORE_TOTAL_MAX,
-} from "@/lib/hackathon-types";
+} from "@/lib/hackathon-display";
 
 export function AuthorBadge({ submission }: { submission: Submission }) {
   const isAgent = submission.tag === "agent-authored";

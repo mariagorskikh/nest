@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from typing import NamedTuple
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn
@@ -373,3 +374,47 @@ def test_fsj_tradeoff_does_not_guarantee_pareto_optimality() -> None:
     assert dominators, (
         f"expected an ephemeral dominating bundle; agreement={agreement}, exchanged={exchanged}"
     )
+
+
+def test_degenerate_price_range_rejected() -> None:
+    with pytest.raises(ValueError, match="price_range"):
+        ParetoNegotiation(
+            AgentId("buyer"),
+            weights={"price": 0.5, "deadline": 0.5},
+            price_range=(50, 50),
+            deadline_range=(1, 5),
+            side="buyer",
+        )
+
+
+def test_degenerate_deadline_range_rejected() -> None:
+    with pytest.raises(ValueError, match="deadline_range"):
+        ParetoNegotiation(
+            AgentId("buyer"),
+            weights={"price": 0.5, "deadline": 0.5},
+            price_range=(10, 50),
+            deadline_range=(7, 7),
+            side="buyer",
+        )
+
+
+def test_missing_weights_key_rejected() -> None:
+    with pytest.raises(ValueError, match="weights must contain"):
+        ParetoNegotiation(
+            AgentId("buyer"),
+            weights={"price": 1.0},  # type: ignore[arg-type]
+            price_range=(10, 50),
+            deadline_range=(1, 5),
+            side="buyer",
+        )
+
+
+def test_inverted_price_range_rejected() -> None:
+    with pytest.raises(ValueError, match="price_range"):
+        ParetoNegotiation(
+            AgentId("seller"),
+            weights={"price": 0.5, "deadline": 0.5},
+            price_range=(100, 20),
+            deadline_range=(1, 5),
+            side="seller",
+        )

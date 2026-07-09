@@ -2,7 +2,10 @@
 title: Hybrid encryption with selective disclosure and broadcast revocation
 layer: privacy
 difficulty: hard
+status: solved
 ---
+
+> **Status: SOLVED** — implemented in `scenarios/sealed_bid_with_privacy.yaml` with the `hybrid_x25519` privacy plugin.
 
 # Hybrid encryption with selective disclosure and broadcast revocation
 

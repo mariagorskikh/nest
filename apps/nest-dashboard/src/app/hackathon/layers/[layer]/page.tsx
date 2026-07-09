@@ -31,7 +31,7 @@ export default async function LayerPage({
     notFound();
   }
 
-  const subs = submissionsForLayer(data, layer);
+  const subs = submissionsForLayer(data, meta.key);
 
   return (
     <div className="bg-cream-100">

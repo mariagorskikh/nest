@@ -117,7 +117,7 @@ export default async function HackathonLandingPage() {
           <Stat
             label="Lines added"
             value={formatLinesAdded(data.stats.total_lines_added)}
-            hint={`${data.stats.total_files_changed} files touched`}
+            hint={`${data.stats.total_files_changed ?? 0} files touched`}
           />
         </div>
       </section>

@@ -13,6 +13,7 @@ from nest_core.validators import (
     validate_auction_all_notified,
     validate_auction_single_winner,
     validate_auction_winner_highest,
+    validate_bft_forged_quorum,
     validate_consensus_agreement,
     validate_consensus_no_conflict,
     validate_consensus_validity,
@@ -934,3 +935,22 @@ class TestValidatorRegistry:
     def test_each_scenario_has_validators(self) -> None:
         for scenario, validators in VALIDATORS.items():
             assert len(validators) >= 2, f"{scenario} needs at least 2 validators"
+
+
+class TestBftForgedQuorum:
+    def test_rejects_f_zero_in_broadcast(self) -> None:
+        events = [
+            {
+                "ts": 1.0,
+                "agent": "replica-0",
+                "kind": "send",
+                "msg": "qc:commit:1:abcd1234:0:replica-0=sig",
+            },
+            {"ts": 0.0, "agent": "replica-0", "kind": "start"},
+            {"ts": 0.0, "agent": "replica-1", "kind": "start"},
+            {"ts": 0.0, "agent": "replica-2", "kind": "start"},
+            {"ts": 0.0, "agent": "replica-3", "kind": "start"},
+        ]
+        results = validate_bft_forged_quorum(events)
+        assert not results[0].passed
+        assert "expected f=" in results[0].detail

@@ -2,7 +2,10 @@
 title: Multi-attribute negotiation with Pareto-frontier search
 layer: negotiation
 difficulty: medium
+status: solved
 ---
+
+> **Status: SOLVED** — implemented in `scenarios/multi_attribute_market.yaml` with the `pareto` negotiation plugin.
 
 # Multi-attribute negotiation with Pareto-frontier search
 

@@ -12,12 +12,27 @@ Example::
 from __future__ import annotations
 
 import importlib.metadata
-from typing import Any
+from typing import Any, Literal, TypeVar, overload
+
+from nest_core.layers.comms import CommsProtocol
+from nest_core.layers.coordination import Coordination
+from nest_core.layers.datafacts import DataFacts
+from nest_core.layers.identity import Identity
+from nest_core.layers.memory import Memory
+from nest_core.layers.negotiation import Negotiation
+from nest_core.layers.payments import Payments
+from nest_core.layers.privacy import Privacy
+from nest_core.layers.registry import Registry
+from nest_core.layers.transport import Transport
+from nest_core.layers.trust import Trust
+
+T = TypeVar("T")
 
 # Built-in reference plugins keyed by (layer, name)
 _REF = "nest_plugins_reference"
 _BUILTINS: dict[tuple[str, str], str] = {
     ("transport", "in_memory"): f"{_REF}.transport.in_memory:StandaloneInMemoryTransport",
+    ("transport", "http"): f"{_REF}.transport.http_transport:HttpTransport",
     ("comms", "nest_native"): f"{_REF}.comms.nest_native:NestNativeComms",
     ("comms", "versioned"): f"{_REF}.comms.versioned:VersionedComms",
     ("identity", "did_key"): f"{_REF}.identity.did_key:DidKeyIdentity",
@@ -83,6 +98,42 @@ class PluginRegistry:
             eps = importlib.metadata.entry_points(group=group)
             for ep in eps:
                 self._cache[(layer, ep.name)] = ep
+
+    @overload
+    def resolve(self, layer: Literal["transport"], name: str) -> type[Transport]: ...
+
+    @overload
+    def resolve(self, layer: Literal["comms"], name: str) -> type[CommsProtocol]: ...
+
+    @overload
+    def resolve(self, layer: Literal["identity"], name: str) -> type[Identity]: ...
+
+    @overload
+    def resolve(self, layer: Literal["registry"], name: str) -> type[Registry]: ...
+
+    @overload
+    def resolve(self, layer: Literal["trust"], name: str) -> type[Trust]: ...
+
+    @overload
+    def resolve(self, layer: Literal["payments"], name: str) -> type[Payments]: ...
+
+    @overload
+    def resolve(self, layer: Literal["coordination"], name: str) -> type[Coordination]: ...
+
+    @overload
+    def resolve(self, layer: Literal["negotiation"], name: str) -> type[Negotiation]: ...
+
+    @overload
+    def resolve(self, layer: Literal["memory"], name: str) -> type[Memory]: ...
+
+    @overload
+    def resolve(self, layer: Literal["privacy"], name: str) -> type[Privacy]: ...
+
+    @overload
+    def resolve(self, layer: Literal["datafacts"], name: str) -> type[DataFacts]: ...
+
+    @overload
+    def resolve(self, layer: str, name: str) -> Any: ...
 
     def resolve(self, layer: str, name: str) -> Any:
         """Resolve a (layer, name) pair to a plugin class.

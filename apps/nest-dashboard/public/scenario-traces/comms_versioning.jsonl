@@ -1,0 +1,74 @@
+{"agent":"auditor-0","kind":"start","ts":0.0}
+{"agent":"peer-0","kind":"start","ts":0.0}
+{"agent":"peer-1","kind":"start","ts":0.0}
+{"agent":"peer-2","kind":"start","ts":0.0}
+{"agent":"peer-3","kind":"start","ts":0.0}
+{"agent":"peer-4","kind":"start","ts":0.0}
+{"agent":"peer-5","kind":"start","ts":0.0}
+{"agent":"peer-6","kind":"start","ts":0.0}
+{"agent":"peer-7","kind":"start","ts":0.0}
+{"agent":"peer-0","from":"peer-0","kind":"receive","msg":"emit","size":4,"ts":1.0}
+{"agent":"peer-0","corr":"corr-1","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-0-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-0\", \"timestamp\": null}","size":191,"to":"auditor-0","ts":1.0}
+{"agent":"auditor-0","corr":"corr-1","from":"peer-0","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-0-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-0\", \"timestamp\": null}","size":191,"ts":1.0}
+{"agent":"auditor-0","corr":"corr-2","kind":"send","msg":"ack:m-0-base:accepted:","size":22,"to":"peer-0","ts":1.0}
+{"agent":"peer-0","corr":"corr-2","from":"auditor-0","kind":"receive","msg":"ack:m-0-base:accepted:","size":22,"ts":1.0}
+{"agent":"peer-1","from":"peer-1","kind":"receive","msg":"emit","size":4,"ts":2.0}
+{"agent":"peer-1","corr":"corr-3","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-1-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-1\", \"timestamp\": null, \"x-trace-id\": \"trace-1\"}","size":217,"to":"auditor-0","ts":2.0}
+{"agent":"peer-1","corr":"corr-4","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-1-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-1\", \"timestamp\": null}","size":200,"to":"auditor-0","ts":2.0}
+{"agent":"auditor-0","corr":"corr-3","from":"peer-1","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-1-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-1\", \"timestamp\": null, \"x-trace-id\": \"trace-1\"}","size":217,"ts":2.0}
+{"agent":"auditor-0","corr":"corr-5","kind":"send","msg":"ack:m-1-minor:accepted:x-trace-id","size":33,"to":"peer-1","ts":2.0}
+{"agent":"auditor-0","corr":"corr-4","from":"peer-1","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-1-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-1\", \"timestamp\": null}","size":200,"ts":2.0}
+{"agent":"auditor-0","corr":"corr-6","kind":"send","msg":"ack:m-1-major:rejected_major:","size":29,"to":"peer-1","ts":2.0}
+{"agent":"peer-1","corr":"corr-5","from":"auditor-0","kind":"receive","msg":"ack:m-1-minor:accepted:x-trace-id","size":33,"ts":2.0}
+{"agent":"peer-1","corr":"corr-6","from":"auditor-0","kind":"receive","msg":"ack:m-1-major:rejected_major:","size":29,"ts":2.0}
+{"agent":"peer-2","from":"peer-2","kind":"receive","msg":"emit","size":4,"ts":3.0}
+{"agent":"peer-2","corr":"corr-7","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-2-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-2\", \"timestamp\": null}","size":191,"to":"auditor-0","ts":3.0}
+{"agent":"auditor-0","corr":"corr-7","from":"peer-2","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-2-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-2\", \"timestamp\": null}","size":191,"ts":3.0}
+{"agent":"auditor-0","corr":"corr-8","kind":"send","msg":"ack:m-2-base:accepted:","size":22,"to":"peer-2","ts":3.0}
+{"agent":"peer-2","corr":"corr-8","from":"auditor-0","kind":"receive","msg":"ack:m-2-base:accepted:","size":22,"ts":3.0}
+{"agent":"peer-3","from":"peer-3","kind":"receive","msg":"emit","size":4,"ts":4.0}
+{"agent":"peer-3","corr":"corr-9","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-3-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-3\", \"timestamp\": null, \"x-trace-id\": \"trace-3\"}","size":217,"to":"auditor-0","ts":4.0}
+{"agent":"peer-3","corr":"corr-10","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-3-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-3\", \"timestamp\": null}","size":200,"to":"auditor-0","ts":4.0}
+{"agent":"auditor-0","corr":"corr-9","from":"peer-3","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-3-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-3\", \"timestamp\": null, \"x-trace-id\": \"trace-3\"}","size":217,"ts":4.0}
+{"agent":"auditor-0","corr":"corr-11","kind":"send","msg":"ack:m-3-minor:accepted:x-trace-id","size":33,"to":"peer-3","ts":4.0}
+{"agent":"auditor-0","corr":"corr-10","from":"peer-3","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-3-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-3\", \"timestamp\": null}","size":200,"ts":4.0}
+{"agent":"auditor-0","corr":"corr-12","kind":"send","msg":"ack:m-3-major:rejected_major:","size":29,"to":"peer-3","ts":4.0}
+{"agent":"peer-3","corr":"corr-11","from":"auditor-0","kind":"receive","msg":"ack:m-3-minor:accepted:x-trace-id","size":33,"ts":4.0}
+{"agent":"peer-3","corr":"corr-12","from":"auditor-0","kind":"receive","msg":"ack:m-3-major:rejected_major:","size":29,"ts":4.0}
+{"agent":"peer-4","from":"peer-4","kind":"receive","msg":"emit","size":4,"ts":5.0}
+{"agent":"peer-4","corr":"corr-13","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-4-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-4\", \"timestamp\": null}","size":191,"to":"auditor-0","ts":5.0}
+{"agent":"auditor-0","corr":"corr-13","from":"peer-4","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-4-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-4\", \"timestamp\": null}","size":191,"ts":5.0}
+{"agent":"auditor-0","corr":"corr-14","kind":"send","msg":"ack:m-4-base:accepted:","size":22,"to":"peer-4","ts":5.0}
+{"agent":"peer-4","corr":"corr-14","from":"auditor-0","kind":"receive","msg":"ack:m-4-base:accepted:","size":22,"ts":5.0}
+{"agent":"peer-5","from":"peer-5","kind":"receive","msg":"emit","size":4,"ts":6.0}
+{"agent":"peer-5","corr":"corr-15","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-5-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-5\", \"timestamp\": null, \"x-trace-id\": \"trace-5\"}","size":217,"to":"auditor-0","ts":6.0}
+{"agent":"peer-5","corr":"corr-16","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-5-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-5\", \"timestamp\": null}","size":200,"to":"auditor-0","ts":6.0}
+{"agent":"auditor-0","corr":"corr-15","from":"peer-5","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-5-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-5\", \"timestamp\": null, \"x-trace-id\": \"trace-5\"}","size":217,"ts":6.0}
+{"agent":"auditor-0","corr":"corr-17","kind":"send","msg":"ack:m-5-minor:accepted:x-trace-id","size":33,"to":"peer-5","ts":6.0}
+{"agent":"auditor-0","corr":"corr-16","from":"peer-5","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-5-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-5\", \"timestamp\": null}","size":200,"ts":6.0}
+{"agent":"auditor-0","corr":"corr-18","kind":"send","msg":"ack:m-5-major:rejected_major:","size":29,"to":"peer-5","ts":6.0}
+{"agent":"peer-5","corr":"corr-17","from":"auditor-0","kind":"receive","msg":"ack:m-5-minor:accepted:x-trace-id","size":33,"ts":6.0}
+{"agent":"peer-5","corr":"corr-18","from":"auditor-0","kind":"receive","msg":"ack:m-5-major:rejected_major:","size":29,"ts":6.0}
+{"agent":"peer-6","from":"peer-6","kind":"receive","msg":"emit","size":4,"ts":7.0}
+{"agent":"peer-6","corr":"corr-19","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-6-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-6\", \"timestamp\": null}","size":191,"to":"auditor-0","ts":7.0}
+{"agent":"auditor-0","corr":"corr-19","from":"peer-6","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-6-base\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djEtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.0\", \"sender\": \"peer-6\", \"timestamp\": null}","size":191,"ts":7.0}
+{"agent":"auditor-0","corr":"corr-20","kind":"send","msg":"ack:m-6-base:accepted:","size":22,"to":"peer-6","ts":7.0}
+{"agent":"peer-6","corr":"corr-20","from":"auditor-0","kind":"receive","msg":"ack:m-6-base:accepted:","size":22,"ts":7.0}
+{"agent":"peer-7","from":"peer-7","kind":"receive","msg":"emit","size":4,"ts":8.0}
+{"agent":"peer-7","corr":"corr-21","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-7-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-7\", \"timestamp\": null, \"x-trace-id\": \"trace-7\"}","size":217,"to":"auditor-0","ts":8.0}
+{"agent":"peer-7","corr":"corr-22","kind":"send","msg":"{\"correlation_id\": null, \"id\": \"m-7-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-7\", \"timestamp\": null}","size":200,"to":"auditor-0","ts":8.0}
+{"agent":"auditor-0","corr":"corr-21","from":"peer-7","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-7-minor\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"djItb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"1.1\", \"sender\": \"peer-7\", \"timestamp\": null, \"x-trace-id\": \"trace-7\"}","size":217,"ts":8.0}
+{"agent":"auditor-0","corr":"corr-23","kind":"send","msg":"ack:m-7-minor:accepted:x-trace-id","size":33,"to":"peer-7","ts":8.0}
+{"agent":"auditor-0","corr":"corr-22","from":"peer-7","kind":"receive","msg":"{\"correlation_id\": null, \"id\": \"m-7-major\", \"kind\": \"offer\", \"metadata\": {}, \"payload\": \"dl9mdXR1cmUtb2ZmZXI=\", \"receiver\": \"auditor-0\", \"schema_version\": \"2.0\", \"sender\": \"peer-7\", \"timestamp\": null}","size":200,"ts":8.0}
+{"agent":"auditor-0","corr":"corr-24","kind":"send","msg":"ack:m-7-major:rejected_major:","size":29,"to":"peer-7","ts":8.0}
+{"agent":"peer-7","corr":"corr-23","from":"auditor-0","kind":"receive","msg":"ack:m-7-minor:accepted:x-trace-id","size":33,"ts":8.0}
+{"agent":"peer-7","corr":"corr-24","from":"auditor-0","kind":"receive","msg":"ack:m-7-major:rejected_major:","size":29,"ts":8.0}
+{"agent":"auditor-0","kind":"stop","ts":8.0}
+{"agent":"peer-0","kind":"stop","ts":8.0}
+{"agent":"peer-1","kind":"stop","ts":8.0}
+{"agent":"peer-2","kind":"stop","ts":8.0}
+{"agent":"peer-3","kind":"stop","ts":8.0}
+{"agent":"peer-4","kind":"stop","ts":8.0}
+{"agent":"peer-5","kind":"stop","ts":8.0}
+{"agent":"peer-6","kind":"stop","ts":8.0}
+{"agent":"peer-7","kind":"stop","ts":8.0}
