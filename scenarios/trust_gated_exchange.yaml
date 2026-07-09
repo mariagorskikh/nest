@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Marketplace data exchange with a TRUST-GATED privacy layer.
+#
+# Identical to the `sealed_bid_with_privacy` wiring except the privacy layer
+# is `trust_gated` instead of `hybrid_x25519`. Where `hybrid_x25519` gives
+# every listed recipient the full plaintext (it is deliberately trust-blind),
+# `trust_gated` composes the same hybrid encryption with the live trust layer:
+# high-trust recipients decrypt everything, mid-trust recipients get a
+# redacted selectively-disclosed view, and low-trust recipients are refused
+# with a signed denial receipt.
+#
+# This file wires the capability into a full simulator run (see
+# `tests/test_trust_gated_scenario.py`, which boots it, asserts the layer
+# resolves to `TrustGatedPrivacy`, and checks the run is deterministic). The
+# tier *mechanics* — full/partial/denied disclosure under a shared trust feed,
+# plus the four adversarial validators — are exercised end-to-end in
+# `tests/test_trust_gated.py`.
+name: trust_gated_exchange
+description: "1 auctioneer and 7 bidders; disclosure gated per-recipient by live trust scores."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 8
+  brain: state-machine
+  roles:
+    - name: auctioneer
+      count: 1
+    - name: bidder
+      count: 7
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: trust_gated
+  datafacts: datafacts_v1
+
+task:
+  type: auction
+  config:
+    rounds: 3
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/trust_gated_exchange.jsonl

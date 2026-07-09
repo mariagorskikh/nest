@@ -1,13 +1,13 @@
 @import "tailwindcss";
 
 /* ------------------------------------------------------------------
- *  Nanda Town design system — warm, editorial, Anthropic-inspired
+ *  Nanda Town design system — clean, minimal, accessible
  *
  *  Palette notes:
- *    cream     — page background, warm off-white
- *    paper     — card / accent surfaces, slightly darker cream
- *    ink       — body text + headings (warm black, never pure black)
- *    rust      — single accent, used sparingly
+ *    canvas    — page background
+ *    surface   — card and panel surfaces
+ *    ink       — body text and headings
+ *    primary   — main action and focus color
  *  Type:
  *    serif     — Instrument Serif (display headlines, italics)
  *    sans      — Geist Sans (body)
@@ -16,33 +16,33 @@
 
 @theme inline {
   /* Surface */
-  --color-cream-50:  #F7F5EF;   /* page bg, lightest */
-  --color-cream-100: #F0EDE4;   /* default page bg */
-  --color-cream-200: #E8E4D6;   /* card / panel bg */
-  --color-cream-300: #DDD7C5;   /* hover panel bg */
-  --color-cream-400: #C9C1AB;   /* borders */
+  --color-cream-50:  #FFFFFF;
+  --color-cream-100: #F7F9FD;
+  --color-cream-200: #F1F4FA;
+  --color-cream-300: #E8EDF6;
+  --color-cream-400: #D7DFEC;
 
   /* Ink (warm grays / blacks) */
-  --color-ink-50:    #EBE7DD;
-  --color-ink-100:   #D7D2C5;
-  --color-ink-200:   #B5AE9F;
-  --color-ink-300:   #8C8576;
-  --color-ink-400:   #6B6557;
-  --color-ink-500:   #4D4940;
-  --color-ink-600:   #353129;
-  --color-ink-700:   #221F1A;
-  --color-ink-800:   #181614;
-  --color-ink-900:   #141312;
+  --color-ink-50:    #EEF2F7;
+  --color-ink-100:   #DCE3EE;
+  --color-ink-200:   #B9C4D4;
+  --color-ink-300:   #8D9BAE;
+  --color-ink-400:   #64748B;
+  --color-ink-500:   #475569;
+  --color-ink-600:   #334155;
+  --color-ink-700:   #1F2A3D;
+  --color-ink-800:   #172033;
+  --color-ink-900:   #111827;
 
   /* Accent */
-  --color-rust:        #C45A3C;
-  --color-rust-light:  #D77452;
-  --color-rust-soft:   #E89674;
-  --color-rust-bg:     #F1DCD0;
+  --color-rust:        #4A2BC2;
+  --color-rust-light:  #6848D7;
+  --color-rust-soft:   #8E75E6;
+  --color-rust-bg:     #F1EDFC;
 
   /* Status colors — restrained, warm tones */
-  --color-sage:    #6B8559;
-  --color-amber:   #B58432;
+  --color-sage:    #16784C;
+  --color-amber:   #A16207;
 
   /* Legacy aliases for in-flight refactor (kept until pages migrate) */
   --color-warm-50:  var(--color-cream-50);
@@ -58,7 +58,7 @@
   --color-warm-950: var(--color-ink-900);
   --color-crimson:       var(--color-rust);
   --color-crimson-light: var(--color-rust-light);
-  --color-crimson-dark:  #9A4329;
+  --color-crimson-dark:  #3D21A6;
 
   --font-sans:   var(--font-geist-sans);
   --font-mono:   var(--font-geist-mono);
@@ -71,7 +71,9 @@ html {
 }
 
 body {
-  background: var(--color-cream-100);
+  background:
+    radial-gradient(circle at 12% -10%, rgba(74, 43, 194, 0.10), transparent 34rem),
+    linear-gradient(180deg, #fbfcff 0, var(--color-cream-100) 30rem);
   color: var(--color-ink-900);
   font-family: var(--font-sans), system-ui, sans-serif;
   font-feature-settings: "ss01", "cv01", "cv11";
@@ -80,8 +82,8 @@ body {
 }
 
 ::selection {
-  background: var(--color-ink-900);
-  color: var(--color-cream-50);
+  background: var(--color-rust);
+  color: white;
 }
 
 /* Display headings — Instrument Serif, generous tracking */
@@ -94,6 +96,12 @@ body {
 /* Subtle hairline borders consistent across the site */
 .hairline {
   border-color: var(--color-cream-400);
+}
+
+:focus-visible {
+  outline: 3px solid rgba(74, 43, 194, 0.65);
+  outline-offset: 3px;
+  border-radius: 0.375rem;
 }
 
 /* ------------------------------------------------------------------
@@ -132,7 +140,7 @@ body {
 .stagger-6 { animation-delay: 0.58s; }
 
 /* ------------------------------------------------------------------
- *  Decorative paper/grain texture (very subtle, like Anthropic)
+ *  Subtle surface texture
  *  Used by the .paper-texture utility on hero sections.
  * ------------------------------------------------------------------ */
 
@@ -145,21 +153,21 @@ body {
   inset: 0;
   pointer-events: none;
   background-image:
-    radial-gradient(circle at 1px 1px, rgba(20, 19, 18, 0.045) 1px, transparent 0);
-  background-size: 22px 22px;
-  opacity: 0.65;
+    radial-gradient(circle at 1px 1px, rgba(17, 24, 39, 0.035) 1px, transparent 0);
+  background-size: 24px 24px;
+  opacity: 0.45;
   mix-blend-mode: multiply;
 }
 
 /* ------------------------------------------------------------------
- *  Buttons — Anthropic-inspired pill / square
+ *  Buttons
  * ------------------------------------------------------------------ */
 
 .btn-primary {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  background: var(--color-ink-900);
+  background: var(--color-rust);
   color: var(--color-cream-50);
   padding: 0.7rem 1.25rem;
   border-radius: 0.5rem;
@@ -168,7 +176,7 @@ body {
   letter-spacing: -0.005em;
   transition: background 0.18s ease;
 }
-.btn-primary:hover { background: var(--color-ink-700); }
+.btn-primary:hover { background: var(--color-crimson-dark); }
 
 .btn-secondary {
   display: inline-flex;
@@ -184,8 +192,8 @@ body {
   transition: background 0.18s ease, border-color 0.18s ease;
 }
 .btn-secondary:hover {
-  background: var(--color-cream-200);
-  border-color: var(--color-ink-300);
+  background: var(--color-rust-bg);
+  border-color: var(--color-rust-soft);
 }
 
 /* Tiny meta label (uppercase, sparse tracking) used everywhere */

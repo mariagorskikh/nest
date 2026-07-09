@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -59,7 +58,7 @@ class CachingResolverRegistry:
         self,
         default_ttl: float = 300.0,
         negative_ttl: float = 30.0,
-        clock: float | None = None,
+        clock: float = 0.0,
     ) -> None:
         self._default_ttl = default_ttl
         self._negative_ttl = negative_ttl
@@ -78,9 +77,12 @@ class CachingResolverRegistry:
         self._clock = now
 
     def _now(self) -> float:
-        if self._clock is not None:
-            return self._clock
-        return time.time()
+        # The clock is an explicit virtual time (default 0.0), advanced only via
+        # set_clock. There is no wall-clock fallback, so TTL expiry is fully
+        # deterministic under a fixed seed: records simply never expire until the
+        # clock is advanced. This keeps the plugin Tier-1 safe under any scenario
+        # that selects `registry: resolver` from YAML.
+        return self._clock
 
     def _ttl_for(self, card: AgentCard) -> float:
         raw = card.metadata.get("ttl")

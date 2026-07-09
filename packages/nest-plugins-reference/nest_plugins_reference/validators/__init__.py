@@ -36,20 +36,32 @@ from nest_plugins_reference.validators.resolver_validators import (
     check_stale_records_expire,
     run_all_resolver_checks,
 )
+from nest_plugins_reference.validators.trust_gate_validators import (
+    check_denial_receipt_auditable,
+    check_gate_tamper_rejected,
+    check_low_trust_blocked,
+    check_partial_redaction_enforced,
+    forge_tier_upgrade,
+)
 
 __all__ = [
     "ConvergenceFailureError",
     "PartitionLeakError",
     "ValidatorReport",
     "check_converged",
+    "check_denial_receipt_auditable",
     "check_eavesdropper_blocked",
     "check_field_injection_rejected",
     "check_heartbeat_keeps_alive",
     "check_negative_cache_is_consistent",
+    "check_gate_tamper_rejected",
+    "check_low_trust_blocked",
     "check_no_partition_view_leak",
+    "check_partial_redaction_enforced",
     "check_replay_rejected",
     "check_stale_records_expire",
     "check_stale_revocation_blocked",
     "corrupt_proof",
     "run_all_resolver_checks",
+    "forge_tier_upgrade",
 ]
