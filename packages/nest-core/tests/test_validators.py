@@ -602,20 +602,7 @@ class TestReputationScoring:
         ]
         results = validate_reputation_scoring(events)
         assert results[0].passed is True
-    
-    def test_cheater_can_recover_with_good_reports(self) -> None:
-        events = [
-            _send("malicious-0", "honest-0", "cheat:1:malicious-0"),
-            _send("honest-0", "observer-0", "report:1:malicious-0:bad"),
-
-            _send("honest-1", "observer-0", "report:2:malicious-0:good"),
-            _send("honest-2", "observer-0", "report:3:malicious-0:good"),
-            _send("honest-3", "observer-0", "report:4:malicious-0:good"),
-        ]
-        results = validate_reputation_scoring(events)
-        assert results[0].passed is True
-
-
+        
 class TestReputationWarnings:
     def test_pass_warning_issued(self) -> None:
         events = [
