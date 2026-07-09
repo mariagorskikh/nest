@@ -7,7 +7,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-uv.lock
 traces/
 
 # Research-harness outputs (per-cell JSONLs, aggregated dataset, plots).

@@ -4,7 +4,6 @@
 // Source of truth: packages/nest-marketplace/nest_marketplace/adapter.py
 // Display helpers live in hackathon-display.ts.
 
-
 export type Tag = "agent-authored" | "human-authored";
 export type LayerKey =
   | "transport"
