@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Plugin registry — resolves plugin names to implementations.
 
-Discovers plugins via entry points and provides built-in defaults for all 12 layers.
+Discovers plugins via entry points and provides built-in defaults for every layer.
 
 Example::
 
@@ -20,6 +20,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("transport", "in_memory"): f"{_REF}.transport.in_memory:StandaloneInMemoryTransport",
     ("comms", "nest_native"): f"{_REF}.comms.nest_native:NestNativeComms",
     ("comms", "versioned"): f"{_REF}.comms.versioned:VersionedComms",
+    ("comms", "authenticated"): f"{_REF}.comms.authenticated:AuthenticatedComms",
     ("identity", "did_key"): f"{_REF}.identity.did_key:DidKeyIdentity",
     ("identity", "ed25519_rotating"): (f"{_REF}.identity.ed25519_rotating:Ed25519RotatingIdentity"),
     ("registry", "in_memory"): f"{_REF}.registry.in_memory:InMemoryRegistry",
@@ -27,8 +28,11 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("auth", "jwt"): f"{_REF}.auth.jwt_auth:JwtAuth",
     ("trust", "score_average"): f"{_REF}.trust.score_average:ScoreAverageTrust",
     ("trust", "agent_receipts"): f"{_REF}.trust.agent_receipts:AgentReceiptsTrust",
+    ("trust", "parc"): f"{_REF}.trust.parc:ParcTrust",
+    ("trust", "aae_permit_gate"): f"{_REF}.trust.aae_permit_gate:AAEPermitGate",
     ("payments", "prepaid_credits"): f"{_REF}.payments.prepaid_credits:PrepaidCredits",
     ("payments", "streaming"): f"{_REF}.payments.streaming:StreamingPayments",
+    ("payments", "empic_escrow"): f"{_REF}.payments.empic_escrow:EMPICEscrowPayments",
     ("payments", "escrow"): f"{_REF}.payments.escrow:EscrowPayments",
     ("coordination", "contract_net"): f"{_REF}.coordination.contract_net:ContractNet",
     ("coordination", "hotstuff"): f"{_REF}.coordination.hotstuff:HotStuff",
@@ -44,6 +48,12 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("privacy", "hybrid_x25519"): f"{_REF}.privacy.hybrid_x25519:HybridX25519Privacy",
     ("datafacts", "datafacts_v1"): f"{_REF}.datafacts.datafacts_v1:DataFactsV1",
     ("datafacts", "cid_facts"): f"{_REF}.datafacts.cid_facts:CidFacts",
+    ("failure_detector", "heartbeat"): (
+        f"{_REF}.failure_detection.heartbeat:HeartbeatFailureDetector"
+    ),
+    ("failure_detector", "phi_accrual"): (
+        f"{_REF}.failure_detection.phi_accrual:PhiAccrualFailureDetector"
+    ),
 }
 
 
@@ -80,6 +90,7 @@ class PluginRegistry:
             "memory",
             "privacy",
             "datafacts",
+            "failure_detector",
         ]:
             group = f"nest.plugins.{layer}"
             eps = importlib.metadata.entry_points(group=group)

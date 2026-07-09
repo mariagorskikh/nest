@@ -53,9 +53,6 @@ export function Footer() {
           <FooterColumn title="NandaHack">
             <FooterLink href="/hackathon">Hackathon — join virtually</FooterLink>
             <FooterLink href="/hackathon#faq">FAQs</FooterLink>
-            <FooterLink href={hackathonEvent.lumaUrl} external>
-              Info session · Jul 7 (Luma)
-            </FooterLink>
             <FooterLink href={hackathonEvent.officialUrl} external>
               Official site
             </FooterLink>

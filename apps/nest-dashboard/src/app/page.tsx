@@ -162,14 +162,6 @@ export default function Home() {
                   Hackathon details &amp; FAQs
                 </Link>
                 <a
-                  href={hackathonEvent.lumaUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-secondary"
-                >
-                  Join the info session &middot; Jul 7
-                </a>
-                <a
                   href={hackathonEvent.officialUrl}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -179,8 +171,7 @@ export default function Home() {
                 </a>
               </div>
 
-              <dl className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-6 border-t border-cream-400/70 pt-6 max-w-xl">
-                <EventDate label="Info session" value="Mon, Jul 7" hint="virtual · on Luma" />
+              <dl className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-6 border-t border-cream-400/70 pt-6 max-w-xl">
                 <EventDate label="Submissions due" value="Fri, Jul 10" hint="12:00 PM ET" />
                 <EventDate label="Summit & finale" value="Sat, Jul 11" hint="MIT Media Lab · optional" />
               </dl>
@@ -216,7 +207,7 @@ export default function Home() {
               <MiniMap width={780} height={440} />
               <div className="mt-4 flex items-center justify-between px-1">
                 <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-300">
-                  Live agent network · synthetic feed
+                  Live agent network
                 </span>
                 <span className="text-[0.85rem] text-ink-400 group-hover:text-ink-900 transition-colors">
                   Open map &rarr;
