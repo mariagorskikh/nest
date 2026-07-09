@@ -43,6 +43,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("privacy", "hybrid_x25519"): f"{_REF}.privacy.hybrid_x25519:HybridX25519Privacy",
     ("datafacts", "datafacts_v1"): f"{_REF}.datafacts.datafacts_v1:DataFactsV1",
     ("datafacts", "cid_facts"): f"{_REF}.datafacts.cid_facts:CidFacts",
+    ("datafacts", "merkle_datafacts"): f"{_REF}.datafacts.merkle_datafacts:MerkleDataFacts",
     ("failure_detector", "heartbeat"): (
         f"{_REF}.failure_detection.heartbeat:HeartbeatFailureDetector"
     ),
