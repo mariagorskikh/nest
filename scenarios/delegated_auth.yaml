@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated-capability scenario: a coordinator roots a delegation tree over 3
+# intermediaries and 12 leaves, then stages scope-escalation, audience-confusion,
+# and use-after-revoke attacks against the configured auth plugin.
+#
+# Under `auth: delegatable` all three attacks are blocked and the validators
+# pass. Flip `auth` to `jwt` (the default) and the same attacks succeed, so the
+# validators fail — the honest demonstration that JWT cannot express delegated,
+# transitively-revocable capabilities.
+name: delegated_auth
+description: "Coordinator delegates to 3 intermediaries and 12 leaves; stages scope-escalation, audience, and cascading-revocation attacks."
+
+tier: 1
+seed: 42
+
+agents:
+  # 1 coordinator + 3 intermediaries + 12 leaves + 1 auditor = 17.
+  count: 17
+  brain: state-machine
+  roles:
+    - name: coordinator
+      count: 1
+    - name: intermediary
+      count: 3
+    - name: leaf
+      count: 12
+    - name: auditor
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: delegatable
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: delegated_auth
+  config:
+    intermediaries: 3
+    leaves_per_intermediary: 4
+
+failures:
+  message_drop: 0.05
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/delegated_auth.jsonl

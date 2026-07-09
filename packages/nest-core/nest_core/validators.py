@@ -4600,11 +4600,139 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 # ---------------------------------------------------------------------------
+# Delegated-auth (capability-token) validators
+# ---------------------------------------------------------------------------
+
+
+def _auth_attack_outcomes(events: list[dict[str, Any]], attack: str) -> list[tuple[str, str]]:
+    """Collect ``(agent, outcome)`` for ``attack:<attack>:<agent>:<outcome>`` lines.
+
+    The delegated-auth scenario emits one such line per attack it stages,
+    recording the *actual* verdict the configured auth plugin returned. A
+    delegation-aware plugin blocks the attack (``blocked``); a plugin without
+    delegation semantics (e.g. ``jwt``) lets it through (``accepted``).
+
+    Example::
+
+        outcomes = _auth_attack_outcomes(events, "escalation")
+    """
+    prefix = f"attack:{attack}:"
+    outcomes: list[tuple[str, str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith(prefix):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 4:
+            outcomes.append((parts[2], parts[3]))
+    return outcomes
+
+
+def _validate_auth_attack(
+    events: list[dict[str, Any]],
+    *,
+    name: str,
+    attack: str,
+) -> list[ValidationResult]:
+    """Fail if any staged ``attack`` was accepted, or if none were staged.
+
+    Requiring at least one staged attack means a plugin cannot pass by simply
+    never exercising the defence: under ``jwt`` the scenario stages the attacks
+    and records ``accepted``; under ``delegatable`` it records ``blocked``.
+
+    Example::
+
+        results = _validate_auth_attack(events, name="auth_no_scope_escalation",
+                                        attack="escalation")
+    """
+    outcomes = _auth_attack_outcomes(events, attack)
+    if not outcomes:
+        return [
+            ValidationResult(
+                name,
+                False,
+                f"no {attack} attack was staged in the trace (defence unexercised)",
+            )
+        ]
+    accepted = [agent for agent, outcome in outcomes if outcome != "blocked"]
+    if accepted:
+        return [
+            ValidationResult(
+                name,
+                False,
+                f"{len(accepted)} {attack} attack(s) accepted: {', '.join(sorted(accepted))}",
+            )
+        ]
+    return [
+        ValidationResult(
+            name,
+            True,
+            f"all {len(outcomes)} {attack} attack(s) blocked",
+        )
+    ]
+
+
+def validate_auth_no_scope_escalation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack 1: a delegated token must never gain scopes its parent lacks.
+
+    Fails if any staged scope-escalation attack was accepted. ``jwt`` lets an
+    agent mint itself a broader token (accepted); ``delegatable`` rejects the
+    widened caveat at ``delegate``/``verify`` (blocked).
+
+    Example::
+
+        results = validate_auth_no_scope_escalation(events)
+    """
+    return _validate_auth_attack(events, name="auth_no_scope_escalation", attack="escalation")
+
+
+def validate_auth_cascading_revocation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack 2: revoking a parent must invalidate every descendant token.
+
+    Fails if any staged use-after-revoke attack was accepted. ``jwt`` revokes by
+    exact token string, so a separately-held child survives (accepted);
+    ``delegatable`` checks every ancestor ``tid`` on verify (blocked).
+
+    Example::
+
+        results = validate_auth_cascading_revocation(events)
+    """
+    return _validate_auth_attack(events, name="auth_cascading_revocation", attack="revoke")
+
+
+def validate_auth_audience_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attack 3: a token must only be usable by its declared audience.
+
+    Fails if any staged audience-confusion attack was accepted. ``jwt`` has no
+    audience concept, so any holder passes (accepted); ``delegatable`` binds the
+    leaf ``aud`` and rejects a mismatched presenter (blocked).
+
+    Example::
+
+        results = validate_auth_audience_binding(events)
+    """
+    return _validate_auth_attack(events, name="auth_audience_binding", attack="audience")
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
 
 VALIDATORS: dict[str, list[Any]] = {
+    "delegated_auth": [
+        validate_auth_no_scope_escalation,
+        validate_auth_cascading_revocation,
+        validate_auth_audience_binding,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,

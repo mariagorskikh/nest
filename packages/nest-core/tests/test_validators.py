@@ -13,6 +13,9 @@ from nest_core.validators import (
     validate_auction_all_notified,
     validate_auction_single_winner,
     validate_auction_winner_highest,
+    validate_auth_audience_binding,
+    validate_auth_cascading_revocation,
+    validate_auth_no_scope_escalation,
     validate_consensus_agreement,
     validate_consensus_no_conflict,
     validate_consensus_validity,
@@ -1974,6 +1977,44 @@ class TestRogueTrustedAgentValidators:
         assert not validate_rogue_trusted_agent_reputation([])[0].passed
 
 
+class TestDelegatedAuthValidators:
+    """The delegated-auth validators fail when any staged attack is accepted."""
+
+    @staticmethod
+    def _attack(kind: str, agent: str, outcome: str) -> dict[str, object]:
+        return {"kind": "send", "msg": f"attack:{kind}:{agent}:{outcome}"}
+
+    def test_escalation_all_blocked_passes(self) -> None:
+        events = [self._attack("escalation", f"leaf-{i}", "blocked") for i in range(4)]
+        result = validate_auth_no_scope_escalation(events)[0]
+        assert result.passed
+        assert "4 escalation attack(s) blocked" in result.detail
+
+    def test_escalation_any_accepted_fails(self) -> None:
+        events = [
+            self._attack("escalation", "leaf-0", "blocked"),
+            self._attack("escalation", "leaf-1", "accepted"),
+        ]
+        result = validate_auth_no_scope_escalation(events)[0]
+        assert not result.passed
+        assert "leaf-1" in result.detail
+
+    def test_revocation_accepted_fails(self) -> None:
+        events = [self._attack("revoke", "leaf-8", "accepted")]
+        result = validate_auth_cascading_revocation(events)[0]
+        assert not result.passed
+
+    def test_audience_all_blocked_passes(self) -> None:
+        events = [self._attack("audience", "intruder", "blocked") for _ in range(3)]
+        assert validate_auth_audience_binding(events)[0].passed
+
+    def test_unexercised_defence_fails(self) -> None:
+        # No staged attack of the relevant kind -> cannot pass by omission.
+        assert not validate_auth_no_scope_escalation([])[0].passed
+        assert not validate_auth_cascading_revocation([])[0].passed
+        assert not validate_auth_audience_binding([])[0].passed
+
+
 class TestValidatorRegistry:
     def test_all_scenario_types_registered(self) -> None:
         expected = {
@@ -1997,6 +2038,7 @@ class TestValidatorRegistry:
             "failure_detection",
             "parc_migration",
             "rogue_trusted_agent",
+            "delegated_auth",
         }
         assert set(VALIDATORS.keys()) == expected
 
