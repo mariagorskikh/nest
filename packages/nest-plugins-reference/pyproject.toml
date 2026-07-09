@@ -56,6 +56,9 @@ cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
 heartbeat = "nest_plugins_reference.failure_detection.heartbeat:HeartbeatFailureDetector"
 phi_accrual = "nest_plugins_reference.failure_detection.phi_accrual:PhiAccrualFailureDetector"
 
+[project.entry-points."nest.plugins.payments"]
+split_settlement = "nest_plugins_reference.payments.split_settlement:SplitSettlement"
+
 [project.entry-points."nest.plugins.trust"]
 parc = "nest_plugins_reference.trust.parc:ParcTrust"
 aae_permit_gate = "nest_plugins_reference.trust.aae_permit_gate:AAEPermitGate"
