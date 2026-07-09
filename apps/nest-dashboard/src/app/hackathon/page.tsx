@@ -11,6 +11,7 @@ import Link from "next/link";
 import { formatLinesAdded, loadDataset } from "@/lib/hackathon";
 import { EmptyState, SubmissionCard } from "@/components/hackathon-card";
 import { HackathonFaq } from "@/components/hackathon-faq";
+import { HackathonPhases } from "@/components/hackathon-phases";
 import { hackathonEvent, hackathonFaqs } from "@/lib/hackathon-event";
 
 export const revalidate = 300;
@@ -62,11 +63,6 @@ export default async function HackathonLandingPage() {
       {/* Header */}
       <section className="paper-texture border-b border-cream-400/70">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-16">
-          <div className="flex items-center gap-3 mb-10 animate-fade-in">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-rust animate-pulse-dot" />
-            <span className="eyebrow">Hackathon &middot; open submissions</span>
-          </div>
-
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-start">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.6rem,6vw,5rem)] leading-[1.02] tracking-tight text-ink-900">
               The marketplace
@@ -94,14 +90,6 @@ export default async function HackathonLandingPage() {
               Browse by layer
             </Link>
             <a
-              href={hackathonEvent.lumaUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-secondary"
-            >
-              Info session &middot; Jul 7 on Luma
-            </a>
-            <a
               href={hackathonEvent.officialUrl}
               target="_blank"
               rel="noopener noreferrer"
@@ -121,6 +109,13 @@ export default async function HackathonLandingPage() {
               FAQs
             </a>
           </div>
+        </div>
+      </section>
+
+      {/* Two phases to join */}
+      <section className="border-b border-cream-400/70 bg-cream-50">
+        <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-14">
+          <HackathonPhases />
         </div>
       </section>
 
@@ -161,27 +156,14 @@ export default async function HackathonLandingPage() {
                 <span className="italic text-ink-700">demo</span> in Boston.
               </h2>
             </div>
-            <a
-              href={hackathonEvent.lumaUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hidden sm:inline-flex font-mono text-[11px] uppercase tracking-[0.18em] text-ink-500 hover:text-ink-900"
-            >
-              Register on Luma →
-            </a>
           </div>
 
-          <div className="grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2 lg:grid-cols-3">
             {[
               {
                 label: "Virtual hackathon",
                 date: hackathonEvent.virtualWindow,
                 body: "Build agentic AI apps in the Nanda Town sandbox from anywhere. No Luma registration needed to participate virtually.",
-              },
-              {
-                label: "Info session",
-                date: "Mon, July 7",
-                body: "Virtual webinar: format, participation options, requirements, judging criteria, and how to get started. Register on Luma.",
               },
               {
                 label: "Submissions due",
@@ -293,16 +275,7 @@ export default async function HackathonLandingPage() {
             </h2>
             <p className="mt-5 max-w-xs text-[0.95rem] leading-[1.6] text-ink-500">
               The short version: yes, your team can do the whole thing
-              virtually. Details below, and in the{" "}
-              <a
-                href={hackathonEvent.lumaUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline underline-offset-4 decoration-cream-400 hover:text-ink-900"
-              >
-                July 7 info session
-              </a>
-              .
+              virtually. Details below.
             </p>
           </div>
           <HackathonFaq entries={hackathonFaqs} />

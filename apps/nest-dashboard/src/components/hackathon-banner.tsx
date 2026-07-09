@@ -18,14 +18,6 @@ export function HackathonBanner() {
           </span>
         </span>
         <span className="flex items-center gap-4">
-          <a
-            href={hackathonEvent.lumaUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium underline underline-offset-4 decoration-cream-200/50 hover:decoration-cream-50 transition-colors"
-          >
-            Info session Jul 7
-          </a>
           <Link
             href="/hackathon"
             className="font-medium underline underline-offset-4 decoration-cream-200/50 hover:decoration-cream-50 transition-colors"

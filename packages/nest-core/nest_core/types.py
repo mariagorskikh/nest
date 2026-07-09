@@ -548,6 +548,32 @@ class AccessGrant(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Failure detection
+# ---------------------------------------------------------------------------
+
+
+class Suspicion(BaseModel):
+    """A failure detector's verdict about a single peer at a point in time.
+
+    ``phi`` is the accrual suspicion level (higher means more suspicious); for
+    a fixed-timeout detector it is the elapsed/timeout ratio.  ``suspected`` is
+    the thresholded boolean verdict.  ``last_heartbeat`` is the logical time of
+    the most recent heartbeat observed from the peer, or ``None`` if none has
+    been seen yet.
+
+    Example::
+
+        s = Suspicion(peer=AgentId("peer-1"), suspected=True, phi=8.5)
+    """
+
+    peer: AgentId
+    suspected: bool
+    phi: float
+    last_heartbeat: float | None = None
+    observed_at: float = 0.0
+
+
+# ---------------------------------------------------------------------------
 # Transport capabilities
 # ---------------------------------------------------------------------------
 
