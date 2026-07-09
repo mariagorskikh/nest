@@ -5,7 +5,84 @@
 **Persona:** `stripe-engineer`
 **Layer:** payments
 **Difficulty:** easy
-**PR:** https://github.com/projnanda/nandatown/pull/116
+**Phase 1 PR:** https://github.com/projnanda/nandatown/pull/116
+**Phase 2 Service:** StreamPay API (see `streampay/`)
+**Deadline:** July 10, 2026 @ 12:00 PM EDT
+
+---
+
+## Submission Architecture
+
+```
+nandatown/                                    # repo root (fork: stanleyoz/nandatown)
+│
+├── hackathon.md                              # THIS FILE: project concept, design, judging
+├── README.md                                 # modified: our submission section added
+│
+├── streampay/                                # ★ PHASE 2: hosted service (80% of score)
+│   ├── main.py                               #   FastAPI app (8 endpoints, idempotent)
+│   ├── requirements.txt                      #   fastapi, uvicorn, pydantic
+│   ├── nandatown_skill.md                   #   SKILL.md for agent discovery
+│   ├── render.yaml                           #   Render Blueprint deploy config
+│   └── README.md                             #   service docs + deploy instructions
+│
+├── docs/
+│   ├── hackathon/                            # hackathon briefs (upstream)
+│   │   ├── charter.md                        #   participant rules
+│   │   ├── judging.md                        #   scoring dimensions & rubric
+│   │   ├── scores.json                       #   live leaderboard
+│   │   └── problems/
+│   │       └── 03-payments-streaming-x402.md #   OUR PROBLEM: streaming payments spec
+│   └── layers/
+│       └── payments.md                       # ★ MODIFIED (Phase 1): added streaming tradeoffs
+│
+├── scenarios/
+│   ├── streaming_payments.yaml               # existing: 5 buyers/5 sellers, 5% drop
+│   └── streaming_payments_partition.yaml     # existing: over-bill-on-partition test
+│
+├── packages/
+│   ├── nest-core/nest_core/
+│   │   ├── layers/payments.py                # Payments Protocol interface
+│   │   ├── plugins.py                        # _BUILTINS: ("payments","streaming")
+│   │   ├── types.py                          # AgentId, Money, PaymentRef, PaymentStatus
+│   │   ├── scenarios.py                      # ★ MODIFIED (Phase 1): registered factory
+│   │   ├── validators.py                     # ★ MODIFIED (Phase 1): +4 validators
+│   │   └── scenarios_builtin/
+│   │       └── streaming_payments.py         # ★ NEW (Phase 1): buyer/seller tick-drain agent
+│   │
+│   └── nest-plugins-reference/
+│       ├── nest_plugins_reference/payments/
+│       │   ├── prepaid_credits.py            # default one-shot debit/credit (adversary)
+│       │   └── streaming.py                  # ★ MODIFIED (Phase 1): our plugin (+313 lines)
+│       └── tests/
+│           ├── test_streaming_payments.py    # ★ MODIFIED (Phase 1): 27 example-based tests
+│           └── test_streaming_properties.py  # ★ NEW (Phase 1): 18 Hypothesis property tests
+│
+└── scripts/judge/                            # automated LLM judge panel
+    ├── rubric.md                             #   6-dimension scoring anchor descriptions
+    ├── judge_pr.py                           #   scores one PR with N parallel judges
+    └── run_all.py                            #   regenerates scores.json after each merge
+```
+
+**Files changed/added by our submission:**
+
+| # | File | Phase | Status | Lines |
+|---|------|-------|--------|-------|
+| 1 | `packages/.../payments/streaming.py` | 1 | Modified | +313 |
+| 2 | `packages/.../tests/test_streaming_payments.py` | 1 | Modified | +237 |
+| 3 | `packages/.../tests/test_streaming_properties.py` | 1 | **New** | 493 |
+| 4 | `packages/nest-core/nest_core/validators.py` | 1 | Modified | +222 |
+| 5 | `packages/nest-core/nest_core/scenarios_builtin/streaming_payments.py` | 1 | **New** | 267 |
+| 6 | `packages/nest-core/nest_core/scenarios.py` | 1 | Modified | +6 |
+| 7 | `docs/layers/payments.md` | 1 | Modified | +10 |
+| 8 | `streampay/main.py` | 2 | **New** | 309 |
+| 9 | `streampay/requirements.txt` | 2 | **New** | 3 |
+| 10 | `streampay/nandatown_skill.md` | 2 | **New** | 79 |
+| 11 | `streampay/render.yaml` | 2 | **New** | 7 |
+| 12 | `streampay/README.md` | 2 | **New** | 62 |
+| 13 | `hackathon.md` | — | **New** | 675 |
+| 14 | `README.md` | — | Modified | +13 |
+| **Total** | | | | **+2,698 / −116** |
 
 ---
 
@@ -666,7 +743,114 @@ Additional (beyond requirements):
 
 ---
 
-## 8. References
+## 8. Phase 2: StreamPay API (80% of Score)
+
+### 8.1 Concept
+
+A hosted REST API that lets AI agents open, drain, close, refund, and
+verify **rate-limited streaming payment contracts** between each other.
+This extends the Phase 1 plugin's validated semantics into a live
+service that OpenClaw agents can discover and call.
+
+**Differentiation:** Every other payments/escrow submission on the skills
+page does one-shot escrow (lock → release/refund). Ours does **per-tick
+metered streaming** — the billing model for LLM inference, compute
+rental, bandwidth, and advisory sessions. No competing submission
+targets this shape of payment.
+
+### 8.2 API Endpoints
+
+| Method | Path | Purpose | Idempotent? |
+|--------|------|---------|-------------|
+| `GET` | `/health` | Liveness check | n/a |
+| `GET` | `/skill.md` | Serve SKILL.md for agent discovery | n/a |
+| `POST` | `/streams` | Open stream (body: `stream_id`, `payer`, `payee`, `rate_per_tick`, `max_total`) | Yes (by `stream_id`) |
+| `POST` | `/streams/{id}/tick` | Drain one tick (body: `{"tick": N}`) | Yes (same tick) |
+| `POST` | `/streams/{id}/close` | Close stream → receipt | Yes |
+| `GET` | `/streams/{id}` | Stream state (is_open, total_debited, remaining) | n/a |
+| `GET` | `/streams/{id}/receipt` | Get receipt for closed stream | n/a |
+| `POST` | `/streams/{id}/refund` | Refund closed stream (funds back to payer) | Yes |
+| `GET` | `/streams` | List streams by agent (`?agent=agent_id`) | n/a |
+
+### 8.3 Request/Response Flow
+
+```
+Agent A (Payer)                     StreamPay API                      Agent B (Payee)
+     │                                    │                                    │
+     │  POST /streams                     │                                    │
+     │  {stream_id, payer, payee,         │                                    │
+     │   rate_per_tick, max_total}        │                                    │
+     │ ──────────────────────────────►    │  First tick drained immediately    │
+     │  201 {total_debited:10,            │                                    │
+     │       is_open:true}                │                                    │
+     │                                    │                                    │
+     │  POST /streams/s-1/tick           │                                    │
+     │  {tick:1}                          │                                    │
+     │ ──────────────────────────────►    │  Drain rate_per_tick (10)          │
+     │  200 {total_debited:20,            │                                    │
+     │       is_open:true}                │                                    │
+     │                                    │                                    │
+     │  ... repeat ticks ...              │                                    │
+     │                                    │                                    │
+     │  POST /streams/s-1/close          │                                    │
+     │ ──────────────────────────────►    │                                    │
+     │  200 {receipt: {amount:500,        │  Stream sealed                     │
+     │       status:"closed"}}            │                                    │
+     │                                    │                                    │
+     │  GET /streams/s-1/receipt         │                                    │
+     │ ──────────────────────────────►    │  Agent B can also call this        │
+     │  200 {payer, payee, amount,        │                                    │
+     │       status:"closed"}             │                                    │
+```
+
+### 8.4 Deployment
+
+**Platform:** Render (https://render.com)
+
+**Configuration:**
+- **Runtime:** Python 3
+- **Root Directory:** `streampay`
+- **Build Command:** `pip install -r requirements.txt`
+- **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+
+**Deploy steps:**
+1. Go to [render.com](https://render.com) → New → Web Service
+2. Connect repo: `stanleyoz/nandatown`
+3. Set root directory: `streampay`
+4. Set build/start commands as above
+5. Deploy → get URL (e.g. `https://streampay.onrender.com`)
+6. Update `SKILL_BASE_URL` env var with the real URL
+
+### 8.5 SKILL.md
+
+The SKILL.md is served at `GET /skill.md` for agent discovery and also
+available at `streampay/nandatown_skill.md` in the repo. It follows the
+Nanda Town SkillMD format with:
+
+- **Base URL** pointing to the Render deployment
+- **Every endpoint** documented with example curl command and response
+- **Step-by-step agent workflow**: how to hire, bill, close, refund
+- **Idempotency note**: retries are safe, repeat calls return original results
+
+### 8.6 Phase 2 Submission Checklist
+
+- [ ] Deploy service to Render → get live URL
+- [ ] Test all 9 endpoints with curl (verified locally)
+- [ ] Fill in real Render URL in `streampay/nandatown_skill.md`
+- [ ] Submit SKILL.md at https://nandatown.projectnanda.org/skills
+  - Skill name: "StreamPay — Metered Streaming Payments for AI Agents"
+  - GitHub username: `stanleyoz`
+  - Submit type: GitHub repo → `stanleyoz/nandatown/tree/hackathon/stripe-engineer-streaming-payments/streampay/nandatown_skill.md`
+  - Endpoints: list all 9 URLs
+  - Tags: `payments`, `streaming`, `idempotency`, `agents`
+- [ ] Submit project on https://nandahack.devpost.com
+  - Link to Phase 1 PR #116
+  - Link to Phase 2 SKILL.md on skills page
+  - Description from this document
+
+---
+
+## 9. References
 
 - Kamvar, S. D., Schlosser, M. T., & Garcia-Molina, H. (2003). *The EigenTrust algorithm for reputation management in P2P networks*. WWW 2003.
 - Sablier Finance (2020). *Streaming money by the second*. https://docs.sablier.com
