@@ -196,6 +196,11 @@ def test_short_description_skips_headings_and_blockquotes() -> None:
     assert short_description(body) == "The real first line of prose."
 
 
+def test_short_description_skips_leading_markdown_lists() -> None:
+    body = "- Added a new validator\n- Improved docs\n\nThe real first line of prose."
+    assert short_description(body) == "The real first line of prose."
+
+
 def test_short_description_truncates_long_paragraphs() -> None:
     long = "Sentence one is short. " + ("word " * 200)
     out = short_description(long, max_len=80)

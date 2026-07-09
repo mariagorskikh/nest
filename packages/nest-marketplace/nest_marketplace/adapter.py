@@ -210,8 +210,9 @@ def classify_layer(theme: str | None, title: str = "", body: str = "") -> str:
 def short_description(body: str, max_len: int = 240) -> str:
     """Pull a short blurb out of a PR body.
 
-    Skips markdown heading lines and pull-quotes, then truncates at the
-    first sentence boundary or `max_len`.
+    We skip markdown scaffolding (headings, pull-quotes, code fences, and
+    leading bullet lists) and return the first substantive prose line.
+    Truncation still happens at the first sentence boundary or `max_len`.
     """
 
     if not body:
@@ -225,6 +226,10 @@ def short_description(body: str, max_len: int = 240) -> str:
         if line.startswith(">"):
             continue
         if line.startswith("```"):
+            continue
+        # PR templates often begin with bullet lists or checklist items.
+        # Skip those so the marketplace card uses the actual explanation.
+        if re.match(r"^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?", line):
             continue
         # Drop bold markers and inline code backticks for the blurb.
         cleaned = line.replace("**", "").replace("`", "")
