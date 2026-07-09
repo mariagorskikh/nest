@@ -204,8 +204,88 @@ class TestMalformedState:
         with pytest.raises(CrdtStateError):
             await LwwRegisterMemory("a").merge("k", b'{"crdt": "lww_register"}')
 
+    @pytest.mark.asyncio
+    async def test_merge_rejects_invalid_base64_payload(self) -> None:
+        with pytest.raises(CrdtStateError):
+            await LwwRegisterMemory("a").merge(
+                "k",
+                b'{"crdt": "lww_register", "payload": "@@@", "lamport": 1, "node": "a"}',
+            )
+
+    @pytest.mark.asyncio
+    async def test_merge_rejects_non_string_payload(self) -> None:
+        with pytest.raises(CrdtStateError):
+            await LwwRegisterMemory("a").merge(
+                "k",
+                b'{"crdt": "lww_register", "payload": 123, "lamport": 1, "node": "a"}',
+            )
+
+    @pytest.mark.asyncio
+    async def test_merge_rejects_negative_lamport(self) -> None:
+        with pytest.raises(CrdtStateError):
+            await LwwRegisterMemory("a").merge(
+                "k",
+                b'{"crdt": "lww_register", "payload": "eA==", "lamport": -1, "node": "a"}',
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("lamport", [b"2.9", b'"7"', b"true", b"1e400"])
+    async def test_merge_rejects_non_integer_lamport(self, lamport: bytes) -> None:
+        with pytest.raises(CrdtStateError):
+            await LwwRegisterMemory("a").merge(
+                "k",
+                b'{"crdt": "lww_register", "payload": "eA==", "lamport": '
+                + lamport
+                + b', "node": "a"}',
+            )
+
+    @pytest.mark.asyncio
+    async def test_merge_rejects_empty_node_id(self) -> None:
+        with pytest.raises(CrdtStateError):
+            await LwwRegisterMemory("a").merge(
+                "k",
+                b'{"crdt": "lww_register", "payload": "eA==", "lamport": 1, "node": ""}',
+            )
+
+    @pytest.mark.asyncio
+    async def test_merge_rejects_non_string_node_id(self) -> None:
+        with pytest.raises(CrdtStateError):
+            await LwwRegisterMemory("a").merge(
+                "k",
+                b'{"crdt": "lww_register", "payload": "eA==", "lamport": 1, "node": 123}',
+            )
+
+    @pytest.mark.asyncio
+    async def test_malformed_merge_does_not_poison_existing_value(self) -> None:
+        mem = LwwRegisterMemory("a")
+        await mem.write("k", b"trusted")
+        before = mem.export("k")
+
+        with pytest.raises(CrdtStateError):
+            await mem.merge(
+                "k",
+                b'{"crdt": "lww_register", "payload": "@@@", "lamport": 99, "node": "evil"}',
+            )
+
+        assert await mem.read("k") == b"trusted"
+        assert mem.export("k") == before
+
     def test_crdt_state_error_is_value_error(self) -> None:
         assert issubclass(CrdtStateError, ValueError)
+
+    @settings(max_examples=80, deadline=None)
+    @given(state=st.binary(max_size=128))
+    @pytest.mark.asyncio
+    async def test_failed_merge_never_mutates_existing_state(self, state: bytes) -> None:
+        mem = LwwRegisterMemory("a")
+        await mem.write("k", b"trusted")
+        before = mem.export("k")
+
+        try:
+            await mem.merge("k", state)
+        except CrdtStateError:
+            assert await mem.read("k") == b"trusted"
+            assert mem.export("k") == before
 
 
 # ---------------------------------------------------------------------------
@@ -342,3 +422,15 @@ class TestScenario:
                     assert results, "validator produced no results"
                     assert all(r.passed for r in results), [r.detail for r in results]
         assert traces[0] == traces[1], "trace not byte-identical under same seed"
+
+    @pytest.mark.asyncio
+    async def test_byzantine_state_scenario_rejects_malformed_gossip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = ScenarioConfig.from_yaml("scenarios/memory_byzantine_state.yaml")
+            out = Path(tmp) / "memory-byzantine-state.jsonl"
+            config.output.trace = str(out)
+            trace_path = await ScenarioRunner(config).run()
+
+            results = validate_trace(trace_path, "memory_byzantine_state")
+            assert results, "validator produced no results"
+            assert all(r.passed for r in results), [r.detail for r in results]

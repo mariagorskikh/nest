@@ -109,6 +109,12 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("memory_concurrent_writers", memory_concurrent_writers_factory)
+    elif name == "memory_byzantine_state":
+        from nest_core.scenarios_builtin.memory_byzantine_state import (
+            memory_byzantine_state_factory,
+        )
+
+        register_scenario("memory_byzantine_state", memory_byzantine_state_factory)
     elif name == "comms_versioning":
         from nest_core.scenarios_builtin.comms_versioning import comms_versioning_factory
 

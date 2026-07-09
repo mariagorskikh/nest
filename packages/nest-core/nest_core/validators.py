@@ -1244,6 +1244,108 @@ def validate_memory_convergence(
     return results
 
 
+def validate_memory_byzantine_state_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: malformed byzantine CRDT state is rejected.
+
+    The ``memory_byzantine_state`` scenario emits one ``attack:<json>``
+    broadcast. Honest replicas must answer with ``rejected:<attacker>`` and
+    must not emit ``accepted:<attacker>``. Final CRDT states must also avoid
+    the attacker's ``node`` id and empty payload, so a pre-fix decoder that
+    accepts ``payload:"@@@"`` with a high Lamport clock is caught even if the
+    poisoned state later converges.
+
+    Example::
+
+        results = validate_memory_byzantine_state_rejected(events)
+    """
+    attacks: list[str] = []
+    rejected: set[str] = set()
+    accepted: set[str] = set()
+    poisoned: list[str] = []
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        msg = str(ev.get("msg", ""))
+        if msg.startswith("attack:"):
+            attacks.append(agent)
+        elif msg.startswith("rejected:"):
+            rejected.add(agent)
+        elif msg.startswith("accepted:"):
+            accepted.add(agent)
+        elif msg.startswith("final:"):
+            body = msg[len("final:") :]
+            with contextlib.suppress(ValueError, TypeError):
+                parsed = json.loads(body)
+                if parsed.get("node") == "evil" or parsed.get("payload") == "":
+                    poisoned.append(agent)
+
+    results: list[ValidationResult] = []
+    if not attacks:
+        results.append(
+            ValidationResult(
+                "memory_byzantine_state_attack_present",
+                False,
+                "no malformed attack state was observed",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "memory_byzantine_state_attack_present",
+                True,
+                f"{len(attacks)} malformed attack broadcast(s) observed",
+            )
+        )
+
+    if accepted:
+        results.append(
+            ValidationResult(
+                "memory_byzantine_state_rejected",
+                False,
+                f"malformed state accepted by {sorted(accepted)}",
+            )
+        )
+    elif rejected:
+        results.append(
+            ValidationResult(
+                "memory_byzantine_state_rejected",
+                True,
+                f"{len(rejected)} honest replica(s) rejected malformed state",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "memory_byzantine_state_rejected",
+                False,
+                "no honest replica rejection records found",
+            )
+        )
+
+    if poisoned:
+        results.append(
+            ValidationResult(
+                "memory_byzantine_state_not_poisoned",
+                False,
+                f"poisoned final state observed at {sorted(poisoned)}",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                "memory_byzantine_state_not_poisoned",
+                True,
+                "no final replica state used the malformed attack register",
+            )
+        )
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Streaming payments validators
 # ---------------------------------------------------------------------------
@@ -4976,6 +5078,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "memory_concurrent_writers": [
         validate_memory_convergence,
         validate_memory_liveness,
+    ],
+    "memory_byzantine_state": [
+        validate_memory_convergence,
+        validate_memory_liveness,
+        validate_memory_byzantine_state_rejected,
     ],
     "streaming_payments": [
         validate_streaming_conservation,

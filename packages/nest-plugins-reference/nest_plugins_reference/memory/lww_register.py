@@ -384,11 +384,29 @@ class LwwRegisterMemory:
 
     @staticmethod
     def _register_from_fields(fields: dict[str, Any]) -> Register:
+        raw_payload = fields.get("payload")
+        raw_lamport = fields.get("lamport")
+        raw_node = fields.get("node")
+        if not isinstance(raw_payload, str):
+            msg = f"payload must be a base64 string: {fields!r}"
+            raise CrdtStateError(msg)
+        if not isinstance(raw_lamport, int) or isinstance(raw_lamport, bool):
+            msg = f"lamport clock must be an integer: {fields!r}"
+            raise CrdtStateError(msg)
+        if not isinstance(raw_node, str):
+            msg = f"node id must be a string: {fields!r}"
+            raise CrdtStateError(msg)
         try:
-            payload = base64.b64decode(fields["payload"])
-            lamport = int(fields["lamport"])
-            node = str(fields["node"])
-        except (KeyError, ValueError, TypeError) as exc:
+            payload = base64.b64decode(raw_payload, validate=True)
+        except (ValueError, TypeError) as exc:
             msg = f"malformed register fields: {fields!r}"
             raise CrdtStateError(msg) from exc
+        lamport = raw_lamport
+        node = raw_node
+        if lamport < 0:
+            msg = f"lamport clock must be non-negative: {fields!r}"
+            raise CrdtStateError(msg)
+        if not node:
+            msg = f"node id must be non-empty: {fields!r}"
+            raise CrdtStateError(msg)
         return Register(payload=payload, lamport=lamport, node=node)
