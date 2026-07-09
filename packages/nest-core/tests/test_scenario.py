@@ -2,10 +2,12 @@
 """Tests for scenario loading, plugin resolution, and end-to-end marketplace run."""
 
 from __future__ import annotations
+
 import json
 import random
 from pathlib import Path
 from typing import Any
+
 import pytest
 from nest_core.plugins import PluginRegistry
 from nest_core.runner import ScenarioRunner

@@ -2,7 +2,9 @@
 """Latency middleware — deterministic per-hop delivery delay."""
 
 from __future__ import annotations
+
 from typing import Any
+
 from nest_core.sim.middleware import MessageContext, MessageMiddleware
 
 

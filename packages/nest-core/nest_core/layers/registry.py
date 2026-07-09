@@ -7,8 +7,10 @@ Example::
 """
 
 from __future__ import annotations
+
 from collections.abc import AsyncGenerator
 from typing import Protocol, runtime_checkable
+
 from nest_core.types import AgentCard, AgentId, Query
 
 

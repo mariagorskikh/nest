@@ -6,7 +6,9 @@ Example::
 """
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
+
 from nest_core.types import AgentId, CorrelationId, TransportCapabilities
 
 if TYPE_CHECKING:

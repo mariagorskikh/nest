@@ -37,8 +37,10 @@ Example::
 """
 
 from __future__ import annotations
+
 import inspect
 from typing import Any, cast
+
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, DatasetMetadata

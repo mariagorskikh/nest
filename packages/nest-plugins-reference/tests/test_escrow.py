@@ -5,6 +5,7 @@ state-machine guards, the ``Payments`` protocol shortcut, and conservation.
 """
 
 from __future__ import annotations
+
 import pytest
 from nest_core.types import AgentId, Money, PaymentRef, PaymentStatus, ServiceRef
 from nest_plugins_reference.payments.escrow import (

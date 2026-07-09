@@ -10,11 +10,13 @@ Example::
 """
 
 from __future__ import annotations
+
 import asyncio
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
 from nest_core.log import LazyLogger
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.sim.clock import VirtualClock

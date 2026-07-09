@@ -2,9 +2,11 @@
 """Run one worker partition of a distributed scenario."""
 
 from __future__ import annotations
+
 import asyncio
 import time
 from typing import Any, cast
+
 from nest_core.middleware_registry import MiddlewareRegistry
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.network_runner import RoutedTransport, WorkerHttpBridge, check_health

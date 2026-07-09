@@ -7,9 +7,11 @@ Example::
 """
 
 from __future__ import annotations
+
 import heapq
 from dataclasses import dataclass, field
 from typing import Any
+
 from nest_core.types import AgentId, CorrelationId
 
 

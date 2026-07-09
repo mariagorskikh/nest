@@ -2,6 +2,7 @@
 """Conformance tests for all 12 reference plugins."""
 
 from __future__ import annotations
+
 import pytest
 from nest_core.types import (
     AgentCard,
@@ -22,6 +23,7 @@ from nest_core.types import (
     Terms,
     Witness,
 )
+
 # ---------------------------------------------------------------------------
 # 1. Transport: in_memory
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 """HTTP bridge for cross-worker message delivery in distributed simulations."""
 
 from __future__ import annotations
+
 import asyncio
 import base64
 import json
@@ -9,6 +10,7 @@ import os
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
+
 from nest_core.log import get_logger
 from nest_core.sim.events import Event
 from nest_core.sim.http_config import (

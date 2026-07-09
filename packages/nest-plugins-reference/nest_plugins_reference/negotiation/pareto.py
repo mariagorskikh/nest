@@ -16,7 +16,9 @@ Example::
 """
 
 from __future__ import annotations
+
 from typing import Literal
+
 from nest_core.types import (
     AgentId,
     Agreement,

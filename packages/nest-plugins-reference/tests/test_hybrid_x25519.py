@@ -18,6 +18,7 @@ Example::
 """
 
 from __future__ import annotations
+
 import pytest
 from nest_core.types import AgentId, Statement, Witness
 from nest_plugins_reference.privacy.hybrid_x25519 import (

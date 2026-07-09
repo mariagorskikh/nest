@@ -22,10 +22,13 @@ Example::
 """
 
 from __future__ import annotations
+
 from collections.abc import Sequence
 from typing import Any
+
 from nest_plugins_reference.coordination import hotstuff_wire
 from nest_plugins_reference.coordination.hotstuff_wire import QuorumCert, VoteRecord
+
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, Signature

@@ -46,11 +46,13 @@ Example::
 """
 
 from __future__ import annotations
+
 import json
 import random
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
 from nest_core.types import AgentCard, AgentId, Query
 
 if TYPE_CHECKING:

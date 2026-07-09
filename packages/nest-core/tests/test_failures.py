@@ -2,9 +2,11 @@
 """Tests for failure injection: message drops, byzantine agents, partitions."""
 
 from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any
+
 import pytest
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig

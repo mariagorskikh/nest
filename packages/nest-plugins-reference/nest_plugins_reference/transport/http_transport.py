@@ -9,6 +9,7 @@ Example::
 """
 
 from __future__ import annotations
+
 from nest_core.sim.network_runner import HttpNetwork, HttpTransport
 
 __all__ = ["HttpNetwork", "HttpTransport"]

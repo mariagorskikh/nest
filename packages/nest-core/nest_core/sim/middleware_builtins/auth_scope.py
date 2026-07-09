@@ -2,9 +2,11 @@
 """Auth scope middleware — enforce bearer tokens on inbound messages."""
 
 from __future__ import annotations
+
 import base64
 import json
 from typing import Any, cast
+
 from nest_core.sim.middleware import MessageContext, MessageMiddleware
 from nest_core.types import Token
 

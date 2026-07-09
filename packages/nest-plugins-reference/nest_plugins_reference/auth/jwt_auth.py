@@ -7,6 +7,7 @@ Example::
 """
 
 from __future__ import annotations
+
 import hashlib
 import hmac
 import json
@@ -14,6 +15,7 @@ import time
 import warnings
 from collections import OrderedDict
 from collections.abc import Callable
+
 from nest_core.types import AgentId, AuthContext, Token
 
 # Publicly documented weak default — never use in production.

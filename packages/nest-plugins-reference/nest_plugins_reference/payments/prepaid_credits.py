@@ -6,7 +6,9 @@ Example::
 """
 
 from __future__ import annotations
+
 import threading
+
 from nest_core.types import (
     AgentId,
     Money,

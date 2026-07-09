@@ -12,6 +12,7 @@ Example::
 """
 
 from __future__ import annotations
+
 import contextlib
 import json
 from collections import defaultdict

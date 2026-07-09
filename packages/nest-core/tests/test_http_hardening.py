@@ -2,6 +2,7 @@
 """Tests for HTTP config hardening and JwtAuth virtual clock."""
 
 from __future__ import annotations
+
 import pytest
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.http_config import (

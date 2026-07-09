@@ -2,7 +2,9 @@
 """Tests for opt-in parallel simulation mode."""
 
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.sim.simulator import Simulator

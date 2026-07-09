@@ -18,7 +18,9 @@ Example::
 """
 
 from __future__ import annotations
+
 from typing import Any
+
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, Money, PaymentRef

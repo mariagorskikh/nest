@@ -30,8 +30,10 @@ Example::
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Literal
+
 from nest_core.types import (
     AgentId,
     Money,

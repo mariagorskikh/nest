@@ -2,8 +2,10 @@
 """Tests for HTTP transport, trace merge, and distributed workers."""
 
 from __future__ import annotations
+
 import asyncio
 from pathlib import Path
+
 import pytest
 from nest_core.runner import ScenarioRunner, build_routes
 from nest_core.scenario import ScenarioConfig

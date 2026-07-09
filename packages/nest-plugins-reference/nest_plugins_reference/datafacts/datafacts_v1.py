@@ -7,7 +7,9 @@ Example::
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 from nest_core.types import AccessGrant, AgentId, DataFactsUrl, DatasetMetadata
 
 

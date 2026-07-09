@@ -10,10 +10,12 @@ Example::
 """
 
 from __future__ import annotations
+
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
+
 from nest_core.types import AgentId, CorrelationId
 
 

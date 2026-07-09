@@ -2,10 +2,12 @@
 """Tests for metrics computation and HTML report generation."""
 
 from __future__ import annotations
+
 import html
 import json
 import math
 from pathlib import Path
+
 import pytest
 from nest_core.metrics import (
     ALL_METRICS,

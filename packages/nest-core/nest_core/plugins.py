@@ -7,8 +7,10 @@ Example::
 """
 
 from __future__ import annotations
+
 import importlib.metadata
 from typing import Any, Literal, TypeVar, overload
+
 from nest_core.layers.comms import CommsProtocol
 from nest_core.layers.coordination import Coordination
 from nest_core.layers.datafacts import DataFacts

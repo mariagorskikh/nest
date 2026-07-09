@@ -2,9 +2,11 @@
 """Tests for optional structured logging (NEST_LOG)."""
 
 from __future__ import annotations
+
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
+
 import pytest
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.sim.simulator import Simulator

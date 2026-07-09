@@ -2,8 +2,10 @@
 """Tests for distributed trace merge."""
 
 from __future__ import annotations
+
 import json
 from pathlib import Path
+
 from nest_core.sim.trace_merge import merge_traces
 
 

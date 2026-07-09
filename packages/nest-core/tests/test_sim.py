@@ -4,9 +4,11 @@ Covers: clock, event queue, agent lifecycle, determinism, and performance.
 """
 
 from __future__ import annotations
+
 import json
 import time
 from pathlib import Path
+
 import pytest
 from nest_core.sim import (
     EventQueue,
@@ -17,6 +19,7 @@ from nest_core.sim import (
 from nest_core.sim.agent import AgentContext
 from nest_core.sim.events import Event
 from nest_core.types import AgentId
+
 # ---------------------------------------------------------------------------
 # Clock tests
 # ---------------------------------------------------------------------------

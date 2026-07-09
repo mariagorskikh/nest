@@ -19,12 +19,16 @@ const GITHUB_URL = "https://github.com/projnanda/nandatown";
 
 export function Navbar() {
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
 
-  // Close the mobile menu whenever the route changes.
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
+  return (
+    <nav className="sticky top-0 z-50 border-b border-cream-400/60 bg-cream-100/85 backdrop-blur-xl">
+      <NavbarChrome key={pathname} pathname={pathname} />
+    </nav>
+  );
+}
+
+function NavbarChrome({ pathname }: { pathname: string }) {
+  const [open, setOpen] = useState(false);
 
   // Close on Escape for keyboard users.
   useEffect(() => {
@@ -37,7 +41,7 @@ export function Navbar() {
   }, [open]);
 
   return (
-    <nav className="sticky top-0 z-50 border-b border-cream-400/60 bg-cream-100/85 backdrop-blur-xl">
+    <>
       <div className="mx-auto flex h-16 max-w-[1240px] items-center justify-between px-6 sm:px-10">
         {/* Wordmark — Nanda Town icon + Nanda Town + "by Project NANDA" + NANDA dots */}
         <Link
@@ -166,6 +170,6 @@ export function Navbar() {
           </div>
         </div>
       )}
-    </nav>
+    </>
   );
 }

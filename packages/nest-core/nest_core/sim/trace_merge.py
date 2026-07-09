@@ -5,10 +5,12 @@ Example::
 """
 
 from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
 from typing import Any
+
 from nest_core.log import LazyLogger
 
 log = LazyLogger(__name__)

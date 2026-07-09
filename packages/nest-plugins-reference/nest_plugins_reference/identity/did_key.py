@@ -10,10 +10,12 @@ Example::
 """
 
 from __future__ import annotations
+
 import hashlib
 import json
 import math
 import warnings
+
 from nest_core.types import AgentId, AgentIdentity, Signature
 
 

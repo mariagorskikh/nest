@@ -6,12 +6,14 @@ Example::
 """
 
 from __future__ import annotations
+
 import asyncio
 import json
 import sys
 import time
 from pathlib import Path
 from typing import Any, cast
+
 from nest_core.log import get_logger
 from nest_core.middleware_registry import MiddlewareRegistry
 from nest_core.plugins import PluginRegistry
@@ -281,6 +283,7 @@ class ScenarioRunner:
         registry_url: str | None = None
         if self._config.distributed.shared_registry:
             from nest_plugins_reference.registry.in_memory import InMemoryRegistry
+
             from nest_core.sim.plugin_rpc import RegistryRpcServer
 
             registry_server = RegistryRpcServer(InMemoryRegistry())

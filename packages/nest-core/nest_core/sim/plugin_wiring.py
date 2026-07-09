@@ -2,6 +2,7 @@
 """Wire live plugin instances to the simulation runtime (virtual clock, secrets)."""
 
 from __future__ import annotations
+
 import os
 from collections.abc import Callable
 from typing import Any

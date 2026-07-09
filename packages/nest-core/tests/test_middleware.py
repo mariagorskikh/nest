@@ -2,9 +2,11 @@
 """Tests for message middleware and the middleware registry."""
 
 from __future__ import annotations
+
 import json
 import random
 from pathlib import Path
+
 import pytest
 from nest_core.middleware_registry import MiddlewareRegistry
 from nest_core.scenario import ScenarioConfig

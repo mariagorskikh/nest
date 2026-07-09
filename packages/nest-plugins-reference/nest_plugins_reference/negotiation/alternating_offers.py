@@ -6,7 +6,9 @@ Example::
 """
 
 from __future__ import annotations
+
 import uuid
+
 from nest_core.types import (
     AgentId,
     Agreement,

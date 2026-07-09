@@ -31,9 +31,11 @@ Example::
 """
 
 from __future__ import annotations
+
 import hashlib
 import json
 from typing import Any, cast
+
 from nest_core.layers.identity import Identity
 from nest_core.types import AccessGrant, AgentId, DataFactsUrl, DatasetMetadata, Signature
 from pydantic import BaseModel
