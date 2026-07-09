@@ -787,15 +787,31 @@ def validate_supply_chain_no_lost(
 def validate_reputation_scoring(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Reputation scores decrease for agents that cheat."""
-    # Track scores: agent -> score
+    """Reputation scores decrease for agents that cheat.
+
+    Verifies two properties:
+    1. Agents that sent cheat: messages receive report:...:bad messages.
+    2. Agents with bad reports have net-negative scores (bad reports outweigh good ones).
+
+    Example::
+
+        # Agent cheats, gets reported, ends with negative score
+        events = [
+            {"kind": "send", "msg": "cheat:1:agent-5"},
+            {"kind": "send", "msg": "report:1:agent-5:bad"},
+        ]
+        assert validate_reputation_scoring(events)[0].passed is True
+    """
+    # Track scores: agent -> score (good: +1, bad: -2)
     scores: dict[str, int] = defaultdict(int)
-    cheaters: set[str] = set()
+    agents_with_bad_reports: set[str] = set()
+    agents_who_cheated: set[str] = set()
 
     for ev in events:
         if ev.get("kind") != "send":
             continue
         msg = _message_body(ev)
+
         if msg.startswith("report:"):
             parts = msg.split(":")
             if len(parts) >= 4:
@@ -805,44 +821,46 @@ def validate_reputation_scoring(
                     scores[agent_str] += 1
                 elif outcome == "bad":
                     scores[agent_str] -= 2
-                    cheaters.add(agent_str)
+                    agents_with_bad_reports.add(agent_str)
 
-    violations: list[str] = []
-    for cheater in cheaters:
-        if scores[cheater] >= 0:
-            # If a cheater has never had their score go negative from cheating
-            # that's fine — they might have enough good trades.  We check that
-            # at least one bad report actually decremented the score.
-            pass
-
-    # The core invariant: agents with bad reports should have lower scores
-    # than they would without those reports.  We verify that at least one
-    # "bad" report exists for every cheater.
-    bad_agents_with_reports: set[str] = set()
-    for ev in events:
-        if ev.get("kind") != "send":
-            continue
-        msg = _message_body(ev)
-        if msg.startswith("cheat:"):
+        elif msg.startswith("cheat:"):
             parts = msg.split(":")
             if len(parts) >= 3:
                 cheater_id = parts[2]
-                bad_agents_with_reports.add(cheater_id)
+                agents_who_cheated.add(cheater_id)
 
-    # Check: if someone cheated, they should have a bad report
-    unreported = bad_agents_with_reports - cheaters
-    # cheaters is set of agents that got "bad" reports, bad_agents_with_reports
-    # is set of agents that sent cheat messages
-    if unreported:
-        violations.append(f"cheaters not reported: {unreported}")
+    violations: list[str] = []
+
+    # Property 1: Agents who cheated must have at least one bad report
+    unreported_cheaters = agents_who_cheated - agents_with_bad_reports
+    if unreported_cheaters:
+        violations.append(f"cheaters not reported: {sorted(unreported_cheaters)}")
+
+    # Property 2: Agents with bad reports must have net-negative scores
+    # (bad reports should outweigh any good reports they accumulated)
+    agents_with_positive_score_despite_bad_reports: list[str] = []
+    for agent in agents_with_bad_reports:
+        if scores[agent] >= 0:
+            agents_with_positive_score_despite_bad_reports.append(agent)
+
+    if agents_with_positive_score_despite_bad_reports:
+        violations.append(
+            f"agents with bad reports have non-negative scores: "
+            f"{sorted(agents_with_positive_score_despite_bad_reports)} "
+            f"(scores: "
+            f"{[f'{a}={scores[a]}' for a in agents_with_positive_score_despite_bad_reports]})"
+        )
 
     if violations:
         return [ValidationResult("reputation_scoring", False, "; ".join(violations))]
+
     return [
         ValidationResult(
             "reputation_scoring",
             True,
-            f"checked {len(cheaters)} cheaters, {len(scores)} agents scored",
+            f"checked {len(agents_who_cheated)} cheaters, "
+            f"{len(agents_with_bad_reports)} agents with bad reports, "
+            f"{len(scores)} agents scored",
         )
     ]
 
