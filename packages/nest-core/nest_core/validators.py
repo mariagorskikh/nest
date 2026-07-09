@@ -4793,6 +4793,120 @@ def validate_attested_sybil_quarantined(
 
 
 # ---------------------------------------------------------------------------
+# Intent-gated datafacts validators
+# ---------------------------------------------------------------------------
+
+
+def _intent_field_msg(events: list[dict[str, Any]], prefix: str) -> list[list[str]]:
+    """Collect ``|``-delimited fields from every send whose message starts with *prefix*.
+
+    Example::
+
+        rows = _intent_field_msg(events, "publish_ok|")
+    """
+    rows: list[list[str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith(prefix):
+            rows.append(msg.split("|"))
+    return rows
+
+
+def validate_intent_no_surprise_publication(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every successful publish must be backed by a previously declared intent.
+
+    Reads the trace in order: an ``intent_registered|role|name|agent`` message
+    records a live intent for ``(agent, name)``; a ``publish_ok|role|name|agent|url``
+    message must find that pair already registered. A gated plugin
+    (``intent_facts``) declares intent before every honest publish and blocks the
+    attacker outright, so every ``publish_ok`` is backed. A plugin with no gate
+    (``datafacts_v1``) skips registration and lets every publish through, so the
+    surprise publications are unbacked and this validator fails.
+
+    Example::
+
+        results = validate_intent_no_surprise_publication(events)
+    """
+    registered: set[tuple[str, str]] = set()
+    unbacked: list[str] = []
+    publishes = 0
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith("intent_registered|"):
+            parts = msg.split("|")
+            if len(parts) >= 4:
+                registered.add((parts[3], parts[2]))
+        elif msg.startswith("publish_ok|"):
+            parts = msg.split("|")
+            if len(parts) >= 4:
+                publishes += 1
+                if (parts[3], parts[2]) not in registered:
+                    unbacked.append(f"{parts[3]} published {parts[2]!r} with no declared intent")
+    if publishes == 0:
+        return [
+            ValidationResult(
+                "intent_no_surprise_publication", False, "no successful publication recorded"
+            )
+        ]
+    if unbacked:
+        return [ValidationResult("intent_no_surprise_publication", False, "; ".join(unbacked))]
+    return [
+        ValidationResult(
+            "intent_no_surprise_publication",
+            True,
+            f"all {publishes} publications were backed by a declared intent",
+        )
+    ]
+
+
+def validate_intent_gate_blocks_attacker(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The attacker's un-declared publish must be blocked, never succeed.
+
+    A gated plugin (``intent_facts``) raises on the attacker's intent-less
+    publish, recorded as ``publish_blocked|attacker|...`` and never as
+    ``publish_ok|attacker|...``. A plugin with no gate (``datafacts_v1``) lets the
+    surprise land, producing ``publish_ok|attacker|...`` and no block -- which
+    this validator fails on.
+
+    Example::
+
+        results = validate_intent_gate_blocks_attacker(events)
+    """
+    slipped = _intent_field_msg(events, "publish_ok|attacker|")
+    blocked = _intent_field_msg(events, "publish_blocked|attacker|")
+    if slipped:
+        name = slipped[0][2] if len(slipped[0]) >= 3 else "?"
+        return [
+            ValidationResult(
+                "intent_gate_blocks_attacker",
+                False,
+                f"attacker published {name!r} with no declared intent",
+            )
+        ]
+    if not blocked:
+        return [
+            ValidationResult(
+                "intent_gate_blocks_attacker", False, "no attacker publish attempt recorded"
+            )
+        ]
+    return [
+        ValidationResult(
+            "intent_gate_blocks_attacker",
+            True,
+            "attacker's intent-less publish was blocked by the gate",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -5038,5 +5152,9 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "intent_gated_datafacts": [
+        validate_intent_no_surprise_publication,
+        validate_intent_gate_blocks_attacker,
     ],
 }

@@ -175,3 +175,9 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.sybil_bond import sybil_bond_factory
 
         register_scenario("sybil_bond", sybil_bond_factory)
+    elif name == "intent_gated_datafacts":
+        from nest_core.scenarios_builtin.intent_gated_datafacts import (
+            intent_gated_datafacts_factory,
+        )
+
+        register_scenario("intent_gated_datafacts", intent_gated_datafacts_factory)
