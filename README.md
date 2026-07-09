@@ -62,6 +62,19 @@ Every submission is scored by an automated judge panel along six
 dimensions (correctness, test rigor, API fit, docs, novelty, persona
 fidelity), each on a 1-5 scale.
 
+### Our Submission (stripe-engineer · PR #116)
+
+**Phase 1 (20%)** — Streaming payments plugin for Problem #03:
+production-grade idempotency-keyed streaming with 7 validators,
+18 Hypothesis property tests, and adversarial attack coverage.
+[View PR →](https://github.com/projnanda/nandatown/pull/116)
+
+**Phase 2 (80%)** — [StreamPay API](streampay/): hosted REST service
+for metered streaming payments between AI agents. Deployed on Render.
+[View Service →](streampay/) · [SKILL.md →](streampay/nandatown_skill.md)
+
+Full project documentation: [`hackathon.md`](hackathon.md)
+
 - [Charter](docs/hackathon/charter.md) — the participant brief: what
   to build, the rules, branch naming.
 - [Problems](docs/hackathon/problems/) — the 10 open problems, each
