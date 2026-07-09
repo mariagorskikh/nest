@@ -16,6 +16,11 @@ Example::
 
 from __future__ import annotations
 
+from nest_plugins_reference.validators.auth_delegation_validators import (
+    check_audience_confusion_rejected,
+    check_scope_escalation_rejected,
+    check_stale_parent_rejected,
+)
 from nest_plugins_reference.validators.gossip_validators import (
     ConvergenceFailureError,
     PartitionLeakError,
@@ -35,11 +40,14 @@ __all__ = [
     "ConvergenceFailureError",
     "PartitionLeakError",
     "ValidatorReport",
+    "check_audience_confusion_rejected",
     "check_converged",
     "check_eavesdropper_blocked",
     "check_field_injection_rejected",
     "check_no_partition_view_leak",
     "check_replay_rejected",
+    "check_scope_escalation_rejected",
+    "check_stale_parent_rejected",
     "check_stale_revocation_blocked",
     "corrupt_proof",
 ]

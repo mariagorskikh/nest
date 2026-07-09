@@ -145,3 +145,7 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("rogue_trusted_agent", rogue_trusted_agent_factory)
+    elif name == "delegation_tree":
+        from nest_core.scenarios_builtin.delegation_tree import delegation_tree_factory
+
+        register_scenario("delegation_tree", delegation_tree_factory)
