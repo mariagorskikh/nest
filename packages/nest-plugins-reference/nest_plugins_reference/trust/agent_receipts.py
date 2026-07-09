@@ -640,6 +640,11 @@ class AgentReceiptsTrust:
             if _verify_receipt(evidence.receipt):
                 self._ledger.append(evidence.receipt)
                 return
+            # Receipt present but failed verification. Use heuristic fallback
+            # rather than trying detail field — if caller provided receipt,
+            # falling back to detail would be a security downgrade (accept
+            # potentially malicious unverified data when verified data was
+            # explicitly provided but invalid).
             logger.warning(
                 "report: receipt field present but failed verification "
                 "for agent=%s; using heuristic fallback",
