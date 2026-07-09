@@ -149,3 +149,10 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.sybil_bond import sybil_bond_factory
 
         register_scenario("sybil_bond", sybil_bond_factory)
+    elif name in ("streaming_payments", "streaming_payments_partition"):
+        from nest_core.scenarios_builtin.streaming_payments import (
+            streaming_payments_factory,
+        )
+
+        register_scenario("streaming_payments", streaming_payments_factory)
+        register_scenario("streaming_payments_partition", streaming_payments_factory)
