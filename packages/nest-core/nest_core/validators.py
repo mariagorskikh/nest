@@ -3232,6 +3232,220 @@ def validate_escrow_no_payout_without_delivery(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Split-settlement (weighted fan-out) validators
+#
+# The split_settlement scenario broadcasts two structured events per round:
+#   split:opened:ref=..:payer=..:weights=payee~weight;...   (declared weights)
+#   split:settled:ref=..:amount=..:alloc=payee~credit;...   (actual credits)
+# They catch two attacks the default prepaid_credits plugin cannot even express
+# and that a buggy splitter would silently commit:
+#   1. penny-shaving  -- credited total != debited amount (floored dust kept);
+#   2. weight tampering -- credits deviate from the largest-remainder split of
+#      the *declared* weights (mid-flight reweight / self-dealing).
+# The canonical allocation is recomputed independently below; these validators
+# never import the plugin, so a compromised plugin cannot subvert its own audit.
+# ---------------------------------------------------------------------------
+
+
+def _parse_pairs(raw: str) -> list[tuple[str, int]]:
+    """Parse a ``payee~int;payee~int`` value into ordered ``(payee, int)`` pairs.
+
+    Malformed entries are skipped; a non-integer amount maps to the sentinel
+    ``-1`` so the conservation check flags it rather than crashing.
+    """
+    pairs: list[tuple[str, int]] = []
+    for piece in raw.split(";"):
+        if "~" not in piece:
+            continue
+        name, _, value = piece.partition("~")
+        try:
+            pairs.append((name, int(value)))
+        except ValueError:
+            pairs.append((name, -1))
+    return pairs
+
+
+def _parse_split_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Parse trace broadcasts of the form ``split:<kind>:k=v:...``.
+
+    Only sender-recorded broadcasts are inspected, so the per-recipient delivery
+    copies of the same payload do not multiply each settlement.
+    """
+    out: list[dict[str, str]] = []
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("split:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 2:
+            continue
+        parsed: dict[str, str] = {"kind": parts[1], "agent": str(ev.get("agent", ""))}
+        for piece in parts[2:]:
+            if "=" in piece:
+                key, _, value = piece.partition("=")
+                parsed[key] = value
+        out.append(parsed)
+    return out
+
+
+def _expected_split_allocation(
+    amount: int,
+    weights: list[tuple[str, int]],
+) -> list[tuple[str, int]] | None:
+    """Recompute the canonical largest-remainder allocation, independent of the plugin.
+
+    Mirrors ``nest_plugins_reference.payments.split_settlement.allocate_by_weight``
+    exactly -- floor of each quota, then the remainder handed out one unit at a
+    time by descending fractional part with a stable tie-break by payee id then
+    index.  Returns ``None`` if the declared weight vector is not a valid positive
+    vector, which the caller reports as a tampered ``opened`` event.
+    """
+    total = sum(weight for _, weight in weights)
+    if total <= 0 or amount < 0 or not weights:
+        return None
+    base: list[int] = []
+    ranking: list[tuple[int, str, int]] = []
+    for index, (payee, weight) in enumerate(weights):
+        if weight <= 0:
+            return None
+        scaled = amount * weight
+        base.append(scaled // total)
+        ranking.append((scaled % total, payee, index))
+    dust = amount - sum(base)
+    ranking.sort(key=lambda item: (-item[0], item[1], item[2]))
+    for rank in range(dust):
+        base[ranking[rank][2]] += 1
+    return [(weights[i][0], base[i]) for i in range(len(weights))]
+
+
+def validate_split_conservation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every settlement credits its payees exactly the amount that was debited.
+
+    Sums the per-payee credits in each ``split:settled`` event and compares
+    against the settled amount.  Catches penny-shaving: a splitter that floors
+    every share and pockets the indivisible dust credits strictly less than it
+    debits, and this check fails on the shortfall.  Also fails when no settlement
+    events appear at all -- the signature of a plugin with no fan-out protocol.
+
+    Example::
+
+        results = validate_trace(Path("trace.jsonl"), "split_settlement")
+        assert results[0].passed
+    """
+    parsed = _parse_split_events(events)
+    violations: list[str] = []
+    settled = 0
+    for ev in parsed:
+        if ev["kind"] != "settled":
+            continue
+        settled += 1
+        ref = ev.get("ref", "")
+        try:
+            amount = int(ev.get("amount", ""))
+        except ValueError:
+            violations.append(f"ref={ref!r}: non-integer amount {ev.get('amount', '')!r}")
+            continue
+        alloc = _parse_pairs(ev.get("alloc", ""))
+        if any(credit < 0 for _, credit in alloc):
+            violations.append(f"ref={ref!r}: negative credit in allocation {alloc}")
+            continue
+        credited = sum(credit for _, credit in alloc)
+        if credited != amount:
+            violations.append(
+                f"ref={ref!r}: credited {credited} != debited {amount} "
+                f"(dust leak of {amount - credited})"
+            )
+    if violations:
+        return [ValidationResult("split_conservation", False, "; ".join(violations))]
+    if not settled:
+        return [
+            ValidationResult(
+                "split_conservation",
+                False,
+                "no split settlements observed in trace -- plugin lacks fan-out settlement",
+            )
+        ]
+    return [
+        ValidationResult(
+            "split_conservation",
+            True,
+            f"{settled} settlements conserved value exactly (sum of credits == amount)",
+        )
+    ]
+
+
+def validate_split_weight_fidelity(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every settlement matches the largest-remainder split of its declared weights.
+
+    Recomputes the canonical allocation from the weights named in the matching
+    ``split:opened`` event and compares it, payee by payee, to the credits in the
+    ``split:settled`` event.  Catches weight tampering: a splitter that reweights
+    mid-flight, drops or injects a payee, or routes dust to itself produces an
+    allocation that will not match the independent recomputation, and this check
+    fails.  A settlement with no matching ``opened`` contract is itself a
+    violation.
+
+    Example::
+
+        results = validate_trace(Path("trace.jsonl"), "split_settlement")
+        assert results[1].passed
+    """
+    parsed = _parse_split_events(events)
+    declared: dict[str, list[tuple[str, int]]] = {}
+    for ev in parsed:
+        if ev["kind"] == "opened":
+            declared[ev.get("ref", "")] = _parse_pairs(ev.get("weights", ""))
+    violations: list[str] = []
+    checked = 0
+    for ev in parsed:
+        if ev["kind"] != "settled":
+            continue
+        ref = ev.get("ref", "")
+        weights = declared.get(ref)
+        if weights is None:
+            violations.append(f"ref={ref!r}: settled without a matching opened contract")
+            continue
+        try:
+            amount = int(ev.get("amount", ""))
+        except ValueError:
+            violations.append(f"ref={ref!r}: non-integer amount {ev.get('amount', '')!r}")
+            continue
+        checked += 1
+        expected = _expected_split_allocation(amount, weights)
+        if expected is None:
+            violations.append(f"ref={ref!r}: declared weights are not a valid positive vector")
+            continue
+        reported = _parse_pairs(ev.get("alloc", ""))
+        if reported != expected:
+            violations.append(
+                f"ref={ref!r}: allocation {reported} != canonical {expected} for declared weights"
+            )
+    if violations:
+        return [ValidationResult("split_weight_fidelity", False, "; ".join(violations))]
+    if not checked:
+        return [
+            ValidationResult(
+                "split_weight_fidelity",
+                False,
+                "no split settlements observed in trace -- plugin lacks fan-out settlement",
+            )
+        ]
+    return [
+        ValidationResult(
+            "split_weight_fidelity",
+            True,
+            f"{checked} settlements matched the largest-remainder split of their declared weights",
+        )
+    ]
+
+
 def validate_receipt_reputation_ring_severed(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -5409,5 +5623,9 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "split_settlement": [
+        validate_split_conservation,
+        validate_split_weight_fidelity,
     ],
 }
