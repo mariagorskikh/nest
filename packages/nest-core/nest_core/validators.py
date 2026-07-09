@@ -808,12 +808,6 @@ def validate_reputation_scoring(
                     cheaters.add(agent_str)
 
     violations: list[str] = []
-    for cheater in cheaters:
-        if scores[cheater] >= 0:
-            # If a cheater has never had their score go negative from cheating
-            # that's fine — they might have enough good trades.  We check that
-            # at least one bad report actually decremented the score.
-            pass
 
     # The core invariant: agents with bad reports should have lower scores
     # than they would without those reports.  We verify that at least one
