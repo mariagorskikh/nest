@@ -197,7 +197,7 @@ Response: {{"streams": [...], "count": 3}}
 @app.get("/skill.md", response_class=PlainTextResponse)
 async def skill_md() -> str:
     """Serve the SKILL.md for agent discovery."""
-    base = os.environ.get("SKILL_BASE_URL", "https://streampay.onrender.com")
+    base = os.environ.get("SKILL_BASE_URL", "https://steamplay.onrender.com")
     return _SKILL_MD_TEMPLATE.format(BASE_URL=base)
 
 
