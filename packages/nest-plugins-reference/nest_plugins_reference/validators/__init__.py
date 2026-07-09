@@ -42,6 +42,13 @@ from nest_plugins_reference.validators.privacy_validators import (
     check_stale_revocation_blocked,
     corrupt_proof,
 )
+from nest_plugins_reference.validators.trust_gate_validators import (
+    check_denial_receipt_auditable,
+    check_gate_tamper_rejected,
+    check_low_trust_blocked,
+    check_partial_redaction_enforced,
+    forge_tier_upgrade,
+)
 
 __all__ = [
     "BftValidationResult",
@@ -50,13 +57,18 @@ __all__ = [
     "ValidatorReport",
     "build_equivocation_certificate",
     "check_converged",
+    "check_denial_receipt_auditable",
     "check_eavesdropper_blocked",
     "check_field_injection_rejected",
+    "check_gate_tamper_rejected",
+    "check_low_trust_blocked",
     "check_no_partition_view_leak",
+    "check_partial_redaction_enforced",
     "check_replay_rejected",
     "check_stale_revocation_blocked",
     "collect_equivocation_certificates",
     "corrupt_proof",
+    "forge_tier_upgrade",
     "validate_bft_liveness_view_progress",
     "validate_bft_no_conflicting_commits",
     "validate_bft_no_equivocation",
