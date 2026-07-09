@@ -1342,6 +1342,76 @@ def validate_streaming_no_drain_after_close(
     ]
 
 
+def validate_streaming_no_debit_without_ack(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Adversarial: every payment_debited must be preceded by a delivered tick_ack.
+
+    This validator catches the drain-after-close attack in a stronger form:
+    a buggy plugin (or driver) that emits ``payment_debited`` without a
+    matching ``tick_ack`` received first is billing for service never
+    delivered.  A correct driver only debits after the seller's ack arrives
+    in the trace as a ``receive`` event with ``msg`` starting ``tick_ack:``.
+
+    Passes vacuously when no ``payment_debited`` events appear.
+
+    Example::
+
+        events = [
+            {"kind": "receive", "agent": "buyer-0", "msg": "tick_ack:s-1:0", "ts": 1},
+            {"kind": "payment_debited", "stream_ref": "s-1", "agent": "buyer-0", "tick": 1},
+        ]
+        results = validate_streaming_no_debit_without_ack(events)
+        assert results[0].passed
+    """
+    # Build set of (buyer, stream_ref) pairs that received at least one ack
+    # before each debit tick.  We track the running count of acks per
+    # (buyer, ref) up to each point in the event stream.
+    ack_counts: dict[tuple[str, str], int] = defaultdict(int)
+    violations: list[str] = []
+
+    for ev in events:
+        kind = ev.get("kind", "")
+
+        if kind == "receive":
+            msg = str(ev.get("msg", ""))
+            if msg.startswith("tick_ack:"):
+                parts = msg.split(":", 2)
+                if len(parts) >= 2:
+                    ref_str = parts[1]
+                    buyer = str(ev.get("agent", ""))
+                    ack_counts[(buyer, ref_str)] += 1
+
+        elif kind == "payment_debited":
+            ref_str = str(ev.get("stream_ref", ""))
+            buyer = str(ev.get("agent", ""))
+            tick = ev.get("tick", "?")
+            if ack_counts[(buyer, ref_str)] == 0:
+                violations.append(
+                    f"stream {ref_str}: buyer={buyer} debited at tick {tick} "
+                    f"with no preceding tick_ack in trace"
+                )
+            else:
+                # Consume one ack credit per debit
+                ack_counts[(buyer, ref_str)] -= 1
+
+    if violations:
+        return [
+            ValidationResult(
+                "streaming_no_debit_without_ack",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "streaming_no_debit_without_ack",
+            True,
+            "every payment_debited preceded by a tick_ack",
+        )
+    ]
+
+
 def validate_streaming_no_overbill_on_partition(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -4793,6 +4863,13 @@ VALIDATORS: dict[str, list[Any]] = {
     "streaming_payments": [
         validate_streaming_conservation,
         validate_streaming_no_drain_after_close,
+        validate_streaming_no_debit_without_ack,
+        validate_streaming_no_overbill_on_partition,
+    ],
+    "streaming_payments_partition": [
+        validate_streaming_conservation,
+        validate_streaming_no_drain_after_close,
+        validate_streaming_no_debit_without_ack,
         validate_streaming_no_overbill_on_partition,
     ],
     "empic_payments": [
