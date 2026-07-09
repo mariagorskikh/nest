@@ -8,6 +8,31 @@ function s(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+async function checkReachable(url: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: { "user-agent": "NandaTown-SkillMD-Checker" },
+    });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * GET /api/skills
  * Returns every submitted SkillMD as JSON. An OpenClaw agent can call this to
@@ -58,11 +83,22 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
+  if ((sourceType === "url" || sourceType === "github") && !isValidHttpUrl(sourceUrl)) {
+    return Response.json(
+      { error: "source_url must be a valid http(s) URL" },
+      { status: 400 },
+    );
+  }
   if (sourceType === "content" && content.trim().length < 20) {
     return Response.json(
       { error: "content is required (and must be the full SkillMD)" },
       { status: 400 },
     );
+  }
+
+  let reachable: boolean | null = null;
+  if (sourceType === "url" || sourceType === "github") {
+    reachable = await checkReachable(sourceUrl);
   }
 
   try {
@@ -75,7 +111,7 @@ export async function POST(request: NextRequest) {
       content: sourceType === "content" ? content : null,
       endpoints: s(body.endpoints) || null,
       tags: s(body.tags) || null,
-      reachable: null,
+      reachable,
       email: email || null,
       github_username: githubUsername || null,
       submitter_ip: submitterIp,
