@@ -30,16 +30,16 @@ from nest_plugins_reference.validators.privacy_validators import (
     check_stale_revocation_blocked,
     corrupt_proof,
 )
+from nest_plugins_reference.validators.replay_validators import (
+    check_replay_rejected_in_trace,
+    check_sequence_rollback_rejected_in_trace,
+)
 from nest_plugins_reference.validators.trust_gate_validators import (
     check_denial_receipt_auditable,
     check_gate_tamper_rejected,
     check_low_trust_blocked,
     check_partial_redaction_enforced,
     forge_tier_upgrade,
-)
-from nest_plugins_reference.validators.replay_validators import (
-    check_comms_replay_rejected,
-    check_comms_sequence_rollback_rejected,
 )
 
 __all__ = [
@@ -52,12 +52,12 @@ __all__ = [
     "check_field_injection_rejected",
     "check_gate_tamper_rejected",
     "check_low_trust_blocked",
-    "check_replay_rejected",
     "check_no_partition_view_leak",
     "check_partial_redaction_enforced",
+    "check_replay_rejected",
+    "check_replay_rejected_in_trace",
+    "check_sequence_rollback_rejected_in_trace",
     "check_stale_revocation_blocked",
     "corrupt_proof",
     "forge_tier_upgrade",
-    "check_comms_replay_rejected",
-    "check_comms_sequence_rollback_rejected",
 ]

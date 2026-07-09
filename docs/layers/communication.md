@@ -58,6 +58,27 @@ channel key. Key exchange (the pre-shared secret stands in for an ECDH session
 key) and replay of verbatim envelopes are out of scope — bind a nonce into
 `metadata` to close replay separately.
 
+### `replay_safe`
+Extends `authenticated` with replay attack detection via per-peer monotonic sequence numbers.
+
+**Features:**
+- Rejects verbatim replays of captured envelopes
+- Sliding window buffer for out-of-order delivery (WINDOW_SIZE=10)
+- Per-peer sequence tracking (independent counters for each sender-receiver pair)
+- Strict superset of `authenticated` (inherits all tamper-evidence features)
+
+**When to use:**
+- Financial transactions or state mutations where replay is a concern
+- Scenarios requiring message ordering guarantees
+- Production systems needing both tamper-evidence AND replay protection
+
+**Trade-offs:**
+- Slightly larger envelope size (adds `sequence` field)
+- Requires state tracking (per-peer sequence counters)
+- Does not handle crash recovery (sequences reset on restart)
+- Cross-peer ordering not enforced (sequences are per-pair)
+
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

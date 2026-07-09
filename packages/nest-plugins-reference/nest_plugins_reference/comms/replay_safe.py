@@ -15,13 +15,12 @@ Threat model:
 from __future__ import annotations
 
 import base64
-import hashlib
 import hmac
 import json
 from collections import defaultdict
 from typing import Any, cast
 
-from nest_core.types import AgentCard, AgentId, Message, MessageId, Query, Response
+from nest_core.types import AgentId, Message, MessageId, Response
 
 from nest_plugins_reference.comms.authenticated import (
     AUTH_TAG_FIELD,
@@ -32,12 +31,19 @@ from nest_plugins_reference.comms.authenticated import (
     AuthenticatedComms,
     DowngradeError,
     UnsupportedSchemaError,
-    _parse_major,
     expected_auth_tag,
 )
 
 SEQUENCE_FIELD = "sequence"
 WINDOW_SIZE = 10
+
+
+def _parse_major(version: str) -> int:
+    """Parse major version from 'major.minor' string."""
+    try:
+        return int(version.split(".")[0])
+    except (ValueError, IndexError):
+        return 1
 
 
 class ReplayError(DowngradeError):
@@ -65,12 +71,15 @@ class ReplaySafeComms(AuthenticatedComms):
         require_auth: bool = False,
     ) -> None:
         super().__init__(
-            agent_id, transport, registry,
-            channel_secret=channel_secret, require_auth=require_auth,
+            agent_id,
+            transport,
+            registry,
+            channel_secret=channel_secret,
+            require_auth=require_auth,
         )
         self._outgoing_sequences: dict[tuple[str, str], int] = {}
         self._incoming_sequences: dict[tuple[str, str], int] = {}
-        self._out_of_order_buffer: dict[tuple[str, str], dict[int, bytes]] = defaultdict(dict)
+        self._out_of_order_buffer: dict[tuple[str, str], dict[int, Any]] = defaultdict(dict)
 
     def serialize(self, msg: Message) -> bytes:
         meta: dict[str, Any] = dict(msg.metadata)
@@ -83,11 +92,15 @@ class ReplaySafeComms(AuthenticatedComms):
         self._outgoing_sequences[pair_key] = seq + 1
 
         envelope: dict[str, Any] = {
-            "schema_version": version, "kind": kind, "id": str(msg.id),
-            "sender": str(msg.sender), "receiver": str(msg.receiver),
+            "schema_version": version,
+            "kind": kind,
+            "id": str(msg.id),
+            "sender": str(msg.sender),
+            "receiver": str(msg.receiver),
             "payload": base64.b64encode(msg.payload).decode("ascii"),
             "correlation_id": str(msg.correlation_id) if msg.correlation_id else None,
-            "timestamp": msg.timestamp, "metadata": meta,
+            "timestamp": msg.timestamp,
+            "metadata": meta,
             SEQUENCE_FIELD: seq,
         }
         for key, value in unknown.items():
@@ -110,12 +123,14 @@ class ReplaySafeComms(AuthenticatedComms):
         version = str(data.get("schema_version", "1.0"))
 
         if _parse_major(version) > SCHEMA_MAJOR:
-            raise UnsupportedSchemaError(version, f"this build speaks major {SCHEMA_MAJOR}")
+            raise UnsupportedSchemaError(
+                version, f"this build speaks major {SCHEMA_MAJOR}"
+            )
 
         self._verify_tag(data, version)
         return self._process_sequence_and_build(data, version)
 
-    def _process_sequence_and_build(self, data: dict, version: str) -> Message:
+    def _process_sequence_and_build(self, data: dict[str, Any], version: str) -> Message:
         sender = str(data.get("sender", ""))
         receiver = str(data.get("receiver", ""))
         seq = data.get(SEQUENCE_FIELD)
@@ -124,11 +139,14 @@ class ReplaySafeComms(AuthenticatedComms):
         if seq is None:
             if not self._require_auth:
                 return self._build_message(data)
-            raise ReplayError(version, "missing_sequence", "envelope has no sequence number")
+            raise ReplayError(
+                version, "missing_sequence", "envelope has no sequence number"
+            )
 
         if not isinstance(seq, int) or seq < 0:
             raise ReplayError(
-                version, "invalid_sequence",
+                version,
+                "invalid_sequence",
                 "sequence must be a non-negative integer",
             )
 
@@ -144,20 +162,23 @@ class ReplaySafeComms(AuthenticatedComms):
         if last_seen + 1 < seq <= last_seen + WINDOW_SIZE:
             self._out_of_order_buffer[pair_key][seq] = data
             raise ReplayError(
-                version, "out_of_order_buffered",
+                version,
+                "out_of_order_buffered",
                 f"message {seq} buffered, waiting for {last_seen + 1}",
             )
 
         # Stale — replay.
         if seq <= last_seen:
             raise ReplayError(
-                version, "stale_sequence",
+                version,
+                "stale_sequence",
                 f"sequence {seq} <= last seen {last_seen}",
             )
 
         # Beyond the window — cannot safely buffer.
         raise ReplayError(
-            version, "sequence_gap_too_large",
+            version,
+            "sequence_gap_too_large",
             f"sequence {seq} is beyond window {last_seen + WINDOW_SIZE}",
         )
 
@@ -169,8 +190,12 @@ class ReplaySafeComms(AuthenticatedComms):
             self._incoming_sequences[pair_key] = next_expected
             next_expected += 1
 
-    def _build_message(self, data: dict) -> Message:
-        unknown = {k: v for k, v in data.items() if k not in KNOWN_FIELDS and k != SEQUENCE_FIELD}
+    def _build_message(self, data: dict[str, Any]) -> Message:
+        unknown = {
+            k: v
+            for k, v in data.items()
+            if k not in KNOWN_FIELDS and k != SEQUENCE_FIELD
+        }
         meta: dict[str, Any] = dict(data.get("metadata") or {})
         meta["schema_version"] = str(data.get("schema_version", "1.0"))
         meta["kind"] = str(data.get("kind", "message"))
@@ -179,13 +204,16 @@ class ReplaySafeComms(AuthenticatedComms):
             meta["_unknown"] = unknown
 
         return Message(
-            id=MessageId(data["id"]), sender=AgentId(data["sender"]),
-            receiver=AgentId(data["receiver"]), payload=base64.b64decode(data["payload"]),
-            correlation_id=data.get("correlation_id"), timestamp=data.get("timestamp"),
+            id=MessageId(data["id"]),
+            sender=AgentId(data["sender"]),
+            receiver=AgentId(data["receiver"]),
+            payload=base64.b64decode(data["payload"]),
+            correlation_id=data.get("correlation_id"),
+            timestamp=data.get("timestamp"),
             metadata=meta,
         )
 
-    def _verify_tag(self, data: dict, version: str) -> None:
+    def _verify_tag(self, data: dict[str, Any], version: str) -> None:
         tag = data.pop(AUTH_TAG_FIELD, None)
         expected = expected_auth_tag(data, self._channel_secret)
         if tag is None or not hmac.compare_digest(str(tag), str(expected)):
