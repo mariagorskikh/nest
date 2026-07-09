@@ -57,7 +57,7 @@ from typing import TYPE_CHECKING, Literal
 
 from nest_core.types import DataFactsUrl, DatasetMetadata
 
-from nest_plugins_reference.datafacts.cid_facts import CidFacts
+from nest_plugins_reference.datafacts.cid_facts import CidFacts, FreshnessProof, SharedClock
 
 if TYPE_CHECKING:
     from nest_core.layers.identity import Identity
@@ -104,9 +104,18 @@ class IntentGatedFacts(CidFacts):
         identity: Identity,
         *,
         intent_ttl: float = 10.0,
-        **kwargs: object,
+        datasets: dict[DataFactsUrl, DatasetMetadata] | None = None,
+        proofs: dict[DataFactsUrl, FreshnessProof] | None = None,
+        clock: SharedClock | None = None,
+        freshness_window: float = 1.0,
     ) -> None:
-        super().__init__(identity, **kwargs)
+        super().__init__(
+            identity,
+            datasets=datasets,
+            proofs=proofs,
+            clock=clock,
+            freshness_window=freshness_window,
+        )
         self._intent_ttl = intent_ttl
         # Cache agent_id string — DidKeyIdentity stores it as _agent_id.
         self._owner_str: str = str(identity._agent_id)  # type: ignore[attr-defined]
@@ -173,9 +182,7 @@ class IntentGatedFacts(CidFacts):
         del self._pending_intents[key]
         self._mark_log_fulfilled(agent_str, dataset_name, now)
 
-    def _mark_log_fulfilled(
-        self, agent_str: str, dataset_name: str, tick: float
-    ) -> None:
+    def _mark_log_fulfilled(self, agent_str: str, dataset_name: str, tick: float) -> None:
         for record in reversed(self._intent_log):
             if (
                 record.agent_id == agent_str

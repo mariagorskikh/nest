@@ -23,12 +23,17 @@ from nest_core.layers.datafacts import DataFacts
 from nest_core.plugins import PluginRegistry
 from nest_core.types import AgentId, DatasetMetadata
 from nest_plugins_reference.datafacts.cid_facts import SharedClock
-from nest_plugins_reference.datafacts.intent_facts import IntentError, IntentGatedFacts
+from nest_plugins_reference.datafacts.intent_facts import (
+    IntentError,
+    IntentGatedFacts,
+    IntentRecord,
+)
 from nest_plugins_reference.identity.did_key import DidKeyIdentity
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_facts(
     agent_id: str = "a1",
@@ -42,6 +47,7 @@ def _make_facts(
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
+
 
 class TestProtocolConformance:
     def test_isinstance_datafacts(self) -> None:
@@ -58,6 +64,7 @@ class TestProtocolConformance:
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
+
 
 class TestHappyPath:
     @pytest.mark.asyncio
@@ -126,6 +133,7 @@ class TestHappyPath:
 # Surprise-publication attack — the core adversarial scenario
 # ---------------------------------------------------------------------------
 
+
 class TestSurprisePublicationAttack:
     @pytest.mark.asyncio
     async def test_publish_without_intent_raises_intent_error(self) -> None:
@@ -149,14 +157,13 @@ class TestSurprisePublicationAttack:
         facts.register_publish_intent("data")
         await facts.publish(DatasetMetadata(name="data", owner=AgentId("a1")))
         with pytest.raises(IntentError, match="no registered intent"):
-            await facts.publish(
-                DatasetMetadata(name="data", owner=AgentId("a1"), description="v2")
-            )
+            await facts.publish(DatasetMetadata(name="data", owner=AgentId("a1"), description="v2"))
 
 
 # ---------------------------------------------------------------------------
 # Expired-intent replay attack
 # ---------------------------------------------------------------------------
+
 
 class TestExpiredIntentAttack:
     @pytest.mark.asyncio
@@ -198,6 +205,7 @@ class TestExpiredIntentAttack:
 # Intent-hijack across separate instances (shared clock, shared state)
 # ---------------------------------------------------------------------------
 
+
 class TestIntentHijackAttack:
     @pytest.mark.asyncio
     async def test_agent_b_cannot_use_agent_a_intent(self) -> None:
@@ -225,6 +233,7 @@ class TestIntentHijackAttack:
 # ---------------------------------------------------------------------------
 # Inherited CidFacts behaviour still works
 # ---------------------------------------------------------------------------
+
 
 class TestInheritedCidFacts:
     @pytest.mark.asyncio
@@ -306,6 +315,7 @@ class TestInheritedCidFacts:
 # the attack and checks the publish does NOT raise.
 # ---------------------------------------------------------------------------
 
+
 class TestAdversarialValidator:
     @pytest.mark.asyncio
     async def test_validator_passes_clean_trace(self) -> None:
@@ -343,7 +353,7 @@ class TestAdversarialValidator:
 
 
 def _no_surprise_publications(
-    intent_log: list,
+    intent_log: list[IntentRecord],
     *,
     published_names: list[str],
 ) -> bool:
