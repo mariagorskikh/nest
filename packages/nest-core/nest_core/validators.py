@@ -4614,7 +4614,138 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 # ---------------------------------------------------------------------------
 
 
+_SYBIL_FLOOR = 0.0
+"""Untrusted-floor score an unbonded identity may not exceed."""
+
+
+def _trustscores(events: list[dict[str, Any]]) -> dict[str, float]:
+    """Extract ``{agent: score}`` from ``trustscore:<agent>:<score>`` events.
+
+    The ``sybil_bond`` observer broadcasts one such event per agent after driving
+    the configured trust plugin, so these scores are the plugin's own verdict.
+    """
+    scores: dict[str, float] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("trustscore:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 3:
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+    return scores
+
+
+def validate_sybil_bond_no_free_trust(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No unbonded Sybil identity obtains trust above the untrusted floor.
+
+    FAILs on ``score_average`` (the clique's mutual endorsements promote it) and
+    PASSes on ``bonded_trust`` (free-minted identities stay inert).
+
+    Example::
+
+        results = validate_sybil_bond_no_free_trust(events)
+    """
+    scores = _trustscores(events)
+    escaped = {a: s for a, s in scores.items() if a.startswith("sybil-") and s > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils bought trust without bonding: {escaped}"
+        return [ValidationResult("sybil_bond_no_free_trust", False, detail)]
+    n_sybil = sum(1 for a in scores if a.startswith("sybil-"))
+    return [
+        ValidationResult(
+            "sybil_bond_no_free_trust",
+            True,
+            f"all {n_sybil} Sybils pinned at the untrusted floor",
+        )
+    ]
+
+
+def validate_sybil_bond_honest_trusted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Bonded honest traders rank strictly above every Sybil.
+
+    Guards against a degenerate trust layer that trivially passes the first check
+    by scoring *everyone* at the floor: honest bonded traders must actually rise.
+
+    Example::
+
+        results = validate_sybil_bond_honest_trusted(events)
+    """
+    scores = _trustscores(events)
+    honest = {a: s for a, s in scores.items() if a.startswith("honest-")}
+    if not honest:
+        return [ValidationResult("sybil_bond_honest_trusted", False, "no honest scores in trace")]
+    max_sybil = max((s for a, s in scores.items() if a.startswith("sybil-")), default=0.0)
+    laggards = {a: s for a, s in honest.items() if s <= max_sybil}
+    if laggards:
+        detail = f"honest traders not above Sybil ceiling {max_sybil}: {laggards}"
+        return [ValidationResult("sybil_bond_honest_trusted", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_honest_trusted",
+            True,
+            f"{len(honest)} honest traders trusted above Sybil ceiling {max_sybil}",
+        )
+    ]
+
+
+def validate_sybil_bond_attempts_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sybils *bid* for a bond yet stay at the floor — the ledger rejected them.
+
+    This is the enforcement check: it proves the defense is active (bond requests
+    denied), not merely assumed (Sybils declining to bond). It requires the trace
+    to contain Sybil ``bond:`` attempts, and that none of those bidders escaped
+    the untrusted floor.
+
+    Example::
+
+        results = validate_sybil_bond_attempts_rejected(events)
+    """
+    scores = _trustscores(events)
+    bidders: set[str] = set()
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        if agent.startswith("sybil-") and _message_body(ev).startswith("bond:"):
+            bidders.add(agent)
+    if not bidders:
+        return [
+            ValidationResult(
+                "sybil_bond_attempts_rejected",
+                False,
+                "no Sybil bond attempts in trace — cannot prove enforcement",
+            )
+        ]
+    escaped = {a: scores.get(a, 0.0) for a in bidders if scores.get(a, 0.0) > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils that bid for a bond escaped the floor: {escaped}"
+        return [ValidationResult("sybil_bond_attempts_rejected", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_attempts_rejected",
+            True,
+            f"{len(bidders)} Sybils bid for a bond and were all rejected to the floor",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "sybil_bond": [
+        validate_sybil_bond_no_free_trust,
+        validate_sybil_bond_honest_trusted,
+        validate_sybil_bond_attempts_rejected,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,

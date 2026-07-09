@@ -53,6 +53,7 @@ phi_accrual = "nest_plugins_reference.failure_detection.phi_accrual:PhiAccrualFa
 [project.entry-points."nest.plugins.trust"]
 parc = "nest_plugins_reference.trust.parc:ParcTrust"
 aae_permit_gate = "nest_plugins_reference.trust.aae_permit_gate:AAEPermitGate"
+bonded_trust = "nest_plugins_reference.trust.bonded_trust:BondedTrust"
 
 [build-system]
 requires = ["hatchling"]
