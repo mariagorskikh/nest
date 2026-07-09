@@ -7,6 +7,7 @@ import pytest
 from nest_core.types import (
     AgentCard,
     AgentId,
+    Claim,
     DatasetMetadata,
     Evidence,
     Message,
@@ -272,6 +273,72 @@ class TestScoreAverageTrust:
 
         score = await trust.score(AgentId("a1"))
         assert score.score == 0.5
+
+    @pytest.mark.asyncio
+    async def test_report_rejects_subject_mismatch_without_mutation(self) -> None:
+        from nest_plugins_reference.trust.score_average import ScoreAverageTrust
+
+        trust = ScoreAverageTrust()
+        evidence = Evidence(
+            reporter=AgentId("attacker"),
+            subject=AgentId("victim"),
+            kind="negative",
+        )
+
+        with pytest.raises(ValueError, match="must match evidence subject"):
+            await trust.report(AgentId("innocent"), evidence)
+
+        score = await trust.score(AgentId("innocent"))
+        assert score.score == 0.5
+        assert score.confidence == 0.0
+        assert score.sample_count == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_evidence_kind_cannot_inflate_confidence(self) -> None:
+        from nest_plugins_reference.trust.score_average import ScoreAverageTrust
+
+        trust = ScoreAverageTrust()
+        evidence = Evidence(
+            reporter=AgentId("reporter"),
+            subject=AgentId("subject"),
+            kind="unknown",
+        )
+
+        with pytest.raises(ValueError, match="unsupported evidence kind"):
+            await trust.report(AgentId("subject"), evidence)
+
+        score = await trust.score(AgentId("subject"))
+        assert score.confidence == 0.0
+        assert score.sample_count == 0
+
+    @pytest.mark.asyncio
+    async def test_attest_rejects_claim_subject_mismatch(self) -> None:
+        from nest_plugins_reference.trust.score_average import ScoreAverageTrust
+
+        trust = ScoreAverageTrust()
+        claim = Claim(subject=AgentId("victim"), predicate="completed", value="task-1")
+
+        with pytest.raises(ValueError, match="must match claim subject"):
+            await trust.attest(AgentId("innocent"), claim)
+
+    @pytest.mark.asyncio
+    async def test_identity_signed_attestation_binds_issuer_to_signer(self) -> None:
+        from nest_plugins_reference.identity.did_key import DidKeyIdentity
+        from nest_plugins_reference.trust.score_average import ScoreAverageTrust
+
+        identity = DidKeyIdentity(AgentId("issuer"), seed=b"trust-test")
+        trust = ScoreAverageTrust(identity)
+        claim = Claim(subject=AgentId("subject"), predicate="completed", value="task-1")
+
+        attestation = await trust.attest(AgentId("subject"), claim)
+
+        assert attestation.issuer == AgentId("issuer")
+        assert attestation.signature.signer == AgentId("issuer")
+        assert identity.verify(
+            claim.model_dump_json().encode(),
+            attestation.signature,
+            attestation.issuer,
+        )
 
 
 # ---------------------------------------------------------------------------

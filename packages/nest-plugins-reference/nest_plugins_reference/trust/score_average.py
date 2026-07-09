@@ -58,29 +58,43 @@ class ScoreAverageTrust:
     async def attest(self, agent: AgentId, claim: Claim) -> Attestation:
         """Create an attestation about an agent.
 
+        The requested agent must match the claim subject. When an identity
+        signs the claim, the signature signer is also recorded as the issuer.
+
         Example::
 
             att = await trust.attest(AgentId("a1"), claim)
         """
+        if agent != claim.subject:
+            msg = "attestation agent must match claim subject"
+            raise ValueError(msg)
         sig = Signature(signer=AgentId("system"), value=b"attestation", algorithm="none")
         if self._identity is not None:
             sig = self._identity.sign(claim.model_dump_json().encode())
-        return Attestation(issuer=AgentId("system"), claim=claim, signature=sig)
+        return Attestation(issuer=sig.signer, claim=claim, signature=sig)
 
     async def report(self, agent: AgentId, evidence: Evidence) -> None:
         """Report evidence, updating the agent's score.
 
-        Evidence kind 'positive' adds 1.0, 'negative' adds 0.0, 'byzantine' adds 0.0.
+        The requested agent must match the evidence subject. Evidence kind
+        'positive' adds 1.0; 'negative' and 'byzantine' add 0.0. Other kinds
+        are rejected so they cannot inflate sample count or confidence.
 
         Example::
 
             await trust.report(AgentId("a1"), Evidence(reporter=..., subject=..., kind="negative"))
         """
-        score_val = 0.5
+        if agent != evidence.subject:
+            msg = "reported agent must match evidence subject"
+            raise ValueError(msg)
+        score_val: float
         if evidence.kind == "positive":
             score_val = 1.0
         elif evidence.kind in ("negative", "byzantine"):
             score_val = 0.0
+        else:
+            msg = f"unsupported evidence kind: {evidence.kind}"
+            raise ValueError(msg)
         self._scores.setdefault(agent, []).append(score_val)
 
     async def stake(self, agent: AgentId, amount: int) -> None:
