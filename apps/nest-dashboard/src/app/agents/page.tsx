@@ -468,11 +468,6 @@ export default function AgentsPage() {
       {/* Header */}
       <section className="paper-texture border-b border-cream-400/70">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-16">
-          <div className="flex items-center gap-3 mb-10 animate-fade-in">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-rust animate-pulse-dot" />
-            <span className="eyebrow">Live demo &middot; synthetic feed</span>
-          </div>
-
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-start">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.6rem,6vw,5rem)] leading-[1.02] tracking-tight text-ink-900">
               The agent
