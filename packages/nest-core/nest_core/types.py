@@ -299,11 +299,24 @@ class Attestation(BaseModel):
 class Evidence(BaseModel):
     """Evidence of misbehavior for trust reporting.
 
+    The ``receipt`` field (added in v0.2.0) carries structured evidence such as
+    cross-signed receipts or cryptographic proofs. When present, trust plugins
+    prefer it over parsing ``detail`` as JSON. The ``detail`` field remains for
+    backward compatibility and plain-text evidence.
+
     Example::
 
+        # Plain text evidence (legacy)
         ev = Evidence(
             reporter=AgentId("a1"), subject=AgentId("a2"),
             kind="byzantine", detail="sent garbage",
+        )
+
+        # Structured receipt evidence (preferred)
+        ev = Evidence(
+            reporter=AgentId("a1"), subject=AgentId("a2"),
+            kind="positive",
+            receipt={"action": "delivered", "signature": "0xabc..."},
         )
     """
 
@@ -311,6 +324,7 @@ class Evidence(BaseModel):
     subject: AgentId
     kind: str
     detail: str = ""
+    receipt: dict[str, Any] | None = None
     timestamp: float | None = None
 
 

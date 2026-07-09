@@ -613,7 +613,9 @@ class AgentReceiptsTrust:
     async def report(self, agent: AgentId, evidence: Evidence) -> None:
         """Report evidence — a cross-signed receipt, or a stock heuristic.
 
-        ``evidence.detail`` is tried as JSON. If it decodes to a dict that passes
+        ``evidence.receipt`` (if present) is used as structured evidence.
+        Otherwise, ``evidence.detail`` is tried as JSON for backward
+        compatibility. If it decodes to a dict that passes
         :func:`_verify_receipt`, it enters the global ledger. A decoded dict that
         fails verification is logged (never silently dropped) and falls through
         to the heuristic. A plain-string ``detail`` (stock scenarios) uses the
@@ -621,9 +623,32 @@ class AgentReceiptsTrust:
 
         Example::
 
-            await trust.report(AgentId("a1"), Evidence(reporter=r, subject=s,
-                kind="positive", detail=json.dumps(receipt)))
+            # Preferred: structured receipt field
+            await trust.report(AgentId("a1"), Evidence(
+                reporter=r, subject=s, kind="positive",
+                receipt={"action": "delivered", "signature": "0xabc..."}
+            ))
+
+            # Legacy: JSON in detail field (still supported)
+            await trust.report(AgentId("a1"), Evidence(
+                reporter=r, subject=s, kind="positive",
+                detail=json.dumps(receipt)
+            ))
         """
+        # Prefer structured receipt field
+        if evidence.receipt is not None:
+            if _verify_receipt(evidence.receipt):
+                self._ledger.append(evidence.receipt)
+                return
+            logger.warning(
+                "report: receipt field present but failed verification "
+                "for agent=%s; using heuristic fallback",
+                agent,
+            )
+            self._record_fallback(agent, evidence)
+            return
+
+        # Fallback: try parsing detail as JSON (backward compatibility)
         try:
             parsed: object = json.loads(evidence.detail)
         except (json.JSONDecodeError, TypeError):
