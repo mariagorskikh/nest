@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { hackathonEvent } from '@/lib/hackathon-event';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -13,6 +14,8 @@ interface TocItem {
 
 const TOC: TocItem[] = [
   { id: 'overview', label: 'Overview' },
+  { id: 'hackathon', label: 'Join the hackathon' },
+  { id: 'startups', label: 'For startups & companies' },
   { id: 'tiers', label: 'Tier 1 vs Tier 2' },
   { id: 'installation', label: 'Installation' },
   { id: 'first-experiment', label: 'Your first experiment' },
@@ -375,6 +378,157 @@ export default function DocsPage() {
                   </p>
                 </div>
               ))}
+            </div>
+          </Section>
+
+          <div className="h-px bg-cream-400/70" />
+
+          {/* Hackathon */}
+          <Section id="hackathon" eyebrow={hackathonEvent.name} title="Join the hackathon">
+            <p className="mb-5 text-[1.05rem] leading-[1.7] text-ink-500">
+              {hackathonEvent.name} is an agentic-AI hackathon by Project NANDA,
+              HCLTech, and the MIT Media Lab. You build an agentic AI app inside
+              the Nanda Town sandbox using the <InlineCode>SKILL.md</InlineCode>{' '}
+              framework, then submit it as a GitHub pull request. It runs entirely
+              online, so anyone can take part from anywhere &mdash; no travel and
+              no ticket required.
+            </p>
+
+            <div className="mb-8 grid gap-3 sm:grid-cols-2">
+              {[
+                { k: 'Build window', v: hackathonEvent.virtualWindow, note: 'Virtual — build from anywhere.' },
+                { k: 'Submissions due', v: hackathonEvent.submissionDeadline, note: 'Hard deadline, wherever you build.' },
+                { k: 'Finale', v: hackathonEvent.finale, note: 'Optional. Does not affect your score.' },
+              ].map((d) => (
+                <div key={d.k} className="rounded-xl bg-cream-200 p-6">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-400">
+                    {d.k}
+                  </p>
+                  <p className="mt-2 font-display text-[1.15rem] leading-tight text-ink-900">
+                    {d.v}
+                  </p>
+                  <p className="mt-1 text-[0.88rem] leading-[1.55] text-ink-500">
+                    {d.note}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <p className="mb-4 text-[1.05rem] leading-[1.7] text-ink-900">
+              <strong>How to enter, in three steps</strong>
+            </p>
+            <ol className="mb-6 ml-5 list-decimal space-y-3 text-[1.02rem] leading-[1.7] text-ink-500 marker:font-mono marker:text-ink-300">
+              <li>
+                <strong className="text-ink-900">Build in the sandbox.</strong>{' '}
+                Pick one or more of the twelve layers and build a protocol or
+                plugin &mdash; or wire in your own live service. The repo README
+                walks you through setup.
+              </li>
+              <li>
+                <strong className="text-ink-900">Write a SKILL.md.</strong> A
+                short Markdown file with your service&rsquo;s name, what it does,
+                its web address, its endpoints, and the steps to call them. The{' '}
+                <a href="/skills" className="text-rust hover:text-rust/80 underline underline-offset-2">
+                  Skills page
+                </a>{' '}
+                shows the format and lets you register it.
+              </li>
+              <li>
+                <strong className="text-ink-900">Open a pull request.</strong>{' '}
+                Push a branch named{' '}
+                <InlineCode>hackathon/&lt;handle&gt;-&lt;theme&gt;</InlineCode> and
+                open a PR against the repo. That PR is your entry.
+              </li>
+            </ol>
+
+            <CodeBlock title="Open your submission PR">{`git checkout -b hackathon/<your-handle>-<theme>
+git add .
+git commit -m "My NandaHack submission"
+git push origin hackathon/<your-handle>-<theme>
+# then open the PR at ${hackathonEvent.repoUrl}/pulls`}</CodeBlock>
+
+            <p className="mt-6 mb-5 text-[1.05rem] leading-[1.7] text-ink-500">
+              A judge panel scores every submission on correctness, realism,
+              design, and documentation. At the finale, judging runs 9:30&nbsp;AM
+              to noon to select the top&nbsp;10 teams, with demos and sessions
+              from 2 to 5&nbsp;PM.
+            </p>
+
+            <div className="rounded-2xl border border-rust/30 bg-rust/5 p-5">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-rust mb-2">
+                Links
+              </p>
+              <p className="text-[0.95rem] leading-[1.65] text-ink-600">
+                Official site:{' '}
+                <a href={hackathonEvent.officialUrl} target="_blank" rel="noopener noreferrer" className="text-rust hover:text-rust/80 underline underline-offset-2">
+                  nandahack.media.mit.edu
+                </a>
+                . Browse current submissions by layer on the{' '}
+                <a href="/hackathon" className="text-rust hover:text-rust/80 underline underline-offset-2">
+                  Hackathon page
+                </a>
+                , or see every open PR on{' '}
+                <a href={hackathonEvent.githubPRsUrl} target="_blank" rel="noopener noreferrer" className="text-rust hover:text-rust/80 underline underline-offset-2">
+                  GitHub
+                </a>
+                .
+              </p>
+            </div>
+          </Section>
+
+          <div className="h-px bg-cream-400/70" />
+
+          {/* For startups & companies */}
+          <Section id="startups" eyebrow="Get involved" title="For startups & companies">
+            <p className="mb-5 text-[1.05rem] leading-[1.7] text-ink-500">
+              Already run a product with an API &mdash; payments, identity,
+              routing, data, anything? You can let Nanda Town agents use it
+              without open-sourcing a single line. You expose one endpoint an
+              agent can call and describe it in a{' '}
+              <InlineCode>SKILL.md</InlineCode>; your implementation stays
+              private.
+            </p>
+
+            <p className="mb-4 text-[1.05rem] leading-[1.7] text-ink-900">
+              <strong>Two steps</strong>
+            </p>
+            <ol className="mb-6 ml-5 list-decimal space-y-3 text-[1.02rem] leading-[1.7] text-ink-500 marker:font-mono marker:text-ink-300">
+              <li>
+                <strong className="text-ink-900">Expose an open hook.</strong> A
+                live endpoint &mdash; an API route or an SDK call &mdash; that an
+                agent can hit. Keep it public and keep it simple.
+              </li>
+              <li>
+                <strong className="text-ink-900">Register a SKILL.md.</strong>{' '}
+                Describe that endpoint &mdash; name, what it does, URL, endpoints,
+                and steps &mdash; then register it on the{' '}
+                <a href="/skills" className="text-rust hover:text-rust/80 underline underline-offset-2">
+                  Skills page
+                </a>
+                . Agents discover your service there and start calling it.
+              </li>
+            </ol>
+
+            <p className="mb-5 text-[1.05rem] leading-[1.7] text-ink-500">
+              Only the SKILL.md is public &mdash; the name, the address, and how
+              to call it. Your code, your infrastructure, and your data stay
+              yours.
+            </p>
+
+            <div className="rounded-2xl border border-rust/30 bg-rust/5 p-5">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-rust mb-2">
+                Two ways to register
+              </p>
+              <p className="text-[0.95rem] leading-[1.65] text-ink-600">
+                Use the form on the{' '}
+                <a href="/skills" className="text-rust hover:text-rust/80 underline underline-offset-2">
+                  Skills page
+                </a>
+                , or POST it from code to <InlineCode>/api/skills</InlineCode>. A
+                startup can enter the hackathon the same way: register a SKILL.md
+                and open a{' '}
+                <InlineCode>hackathon/&lt;handle&gt;-&lt;theme&gt;</InlineCode> PR.
+              </p>
             </div>
           </Section>
 

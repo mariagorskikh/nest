@@ -129,6 +129,7 @@ class TestPluginRegistry:
         reg = PluginRegistry()
         plugins = reg.list_plugins("payments")
         assert ("payments", "prepaid_credits") in plugins
+        assert ("payments", "empic_escrow") in plugins
 
 
 # ---------------------------------------------------------------------------
@@ -242,3 +243,48 @@ class TestMarketplaceScenario:
 
         assert traces[0] == traces[1]
         assert len(traces[0]) > 0
+
+
+class TestEmpicPaymentsScenario:
+    """End-to-end checks for the EMPIC payments scenario."""
+
+    @pytest.mark.asyncio
+    async def test_empic_payments_yaml(self, tmp_path: Path) -> None:
+        """Run the EMPIC weather market and validate escrow invariants."""
+        yaml_path = Path(__file__).parent.parent.parent.parent / "scenarios" / "empic_payments.yaml"
+        config = ScenarioConfig.from_yaml(yaml_path)
+        config.output.trace = str(tmp_path / "empic_payments.jsonl")
+        config.duration = "ticks: 2000"
+
+        runner = ScenarioRunner(config)
+        result_path = await runner.run()
+
+        assert result_path.exists()
+        validations = validate_trace(result_path, "empic_payments")
+        assert all(r.passed for r in validations), validations
+
+        payments = runner.resolved_plugins["payments"]
+        assert len(payments._payments) == 6  # noqa: SLF001
+        assert payments.balance(AgentId("empic-escrow")) == 0
+        assert payments.balance(AgentId("provider-0")) > 1000
+        assert payments.balance(AgentId("provider-1")) == 1000
+        assert payments.balance(AgentId("provider-4")) > 1000
+        assert payments.balance(AgentId("provider-5")) == 1000
+
+    @pytest.mark.asyncio
+    async def test_empic_payments_partition_yaml(self, tmp_path: Path) -> None:
+        """Run the partition variant and confirm overbilling does not occur."""
+        yaml_path = (
+            Path(__file__).parent.parent.parent.parent
+            / "scenarios"
+            / "empic_payments_partition.yaml"
+        )
+        config = ScenarioConfig.from_yaml(yaml_path)
+        config.output.trace = str(tmp_path / "empic_payments_partition.jsonl")
+        config.duration = "ticks: 2000"
+
+        runner = ScenarioRunner(config)
+        result_path = await runner.run()
+
+        validations = validate_trace(result_path, "empic_payments")
+        assert all(r.passed for r in validations), validations

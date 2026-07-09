@@ -21,10 +21,24 @@ quotes, raises on insufficient balance, supports refund by `PaymentRef`.
 
 Source: [`nest_plugins_reference/payments/prepaid_credits.py`](../../packages/nest-plugins-reference/nest_plugins_reference/payments/prepaid_credits.py).
 
-## Also available
+## Additional reference plugins
 
-- `streaming` — per-tick metered payments (`scenarios/streaming_payments.yaml`)
-- `escrow` — three-phase escrow with arbiter (`scenarios/escrow_marketplace.yaml`)
+`streaming` — bilateral per-tick streams with mid-stream cancellation.
+Scenario: `scenarios/streaming_payments.yaml`.
+
+`escrow` — three-phase escrow with arbiter (`scenarios/escrow_marketplace.yaml`).
+
+`empic_escrow` — EMPIC-shaped escrow for service providers and
+consumers. Pull mode locks one request payment until accepted data is
+delivered; pubsub mode pre-funds a maximum stream amount, releases one
+tick for each accepted delivery, and refunds unused escrow on close.
+The bundled `empic_payments` scenario demonstrates provider service
+registration, consumer acceptance policy, pull refunds, and pubsub
+overbilling protection. Its adversarial validators also check consumer /
+provider / service binding by payment reference and reject traces that leak
+private keys, API keys, bearer tokens, wallet secrets, or other live rail
+secrets.
+
 
 ## Writing your own
 
