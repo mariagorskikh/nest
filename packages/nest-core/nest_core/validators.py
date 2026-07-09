@@ -2509,6 +2509,44 @@ def validate_memory_liveness(
     ]
 
 
+def validate_identity_post_rotation_forgery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Ensure post-rotation forgeries (using old keys for new times) are rejected."""
+    failures: list[str] = []
+    attempts = 0
+    for ev in events:
+        if ev.get("kind") == "verify_result" and ev.get("attack") == "post_rotation":
+            attempts += 1
+            if ev.get("success"):
+                failures.append(f"Post-rotation forgery accepted by {ev.get('agent')}")
+    if failures:
+        return [ValidationResult("identity_post_rotation_forgery", False, "; ".join(failures))]
+    if attempts == 0:
+        return [ValidationResult("identity_post_rotation_forgery", False, "No attempts made")]
+    return [
+        ValidationResult("identity_post_rotation_forgery", True, f"Blocked {attempts} attempts")
+    ]
+
+
+def validate_identity_backdating_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Ensure backdated forgeries (using new keys for old times) are rejected."""
+    failures: list[str] = []
+    attempts = 0
+    for ev in events:
+        if ev.get("kind") == "verify_result" and ev.get("attack") == "backdating":
+            attempts += 1
+            if ev.get("success"):
+                failures.append(f"Backdating forgery accepted by {ev.get('agent')}")
+    if failures:
+        return [ValidationResult("identity_backdating_rejected", False, "; ".join(failures))]
+    if attempts == 0:
+        return [ValidationResult("identity_backdating_rejected", False, "No attempts made")]
+    return [ValidationResult("identity_backdating_rejected", True, f"Blocked {attempts} attempts")]
+
+
 def validate_identity_rotation_occurred(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
