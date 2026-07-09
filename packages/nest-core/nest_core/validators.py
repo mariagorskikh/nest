@@ -1,22 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Protocol invariant validators for Nanda Town scenarios.
-
 Validators analyze trace files and verify that protocol-specific
 correctness properties hold -- not just that messages flowed.
-
 Each validator function takes a list of events (dicts parsed from JSONL)
 and returns a list of ``ValidationResult``.  Events are expected to include
 a ``"msg"`` field containing the decoded payload text for send/receive events.
-
 Example::
-
     results = validate_trace(Path("trace.jsonl"), "marketplace")
     for r in results:
         print(f"{'PASS' if r.passed else 'FAIL'}: {r.name} - {r.detail}")
 """
 
 from __future__ import annotations
-
 import contextlib
 import json
 from collections import defaultdict
@@ -53,9 +48,7 @@ def validate_trace(
     scenario_type: str,
 ) -> list[ValidationResult]:
     """Run all validators for a scenario type against a trace.
-
     Example::
-
         results = validate_trace(Path("trace.jsonl"), "marketplace")
     """
     events = _load_events(trace_path)
@@ -67,9 +60,7 @@ def validate_events(
     scenario_type: str,
 ) -> list[ValidationResult]:
     """Run all validators for a scenario type against in-memory events.
-
     Example::
-
         results = validate_events(event_list, "auction")
     """
     validators = VALIDATORS.get(scenario_type, [])
@@ -93,13 +84,11 @@ def validate_marketplace_no_double_sell(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """No seller sells the same product to two buyers in the same round.
-
     A ``sold:product:price`` message from the same seller for the same product
     to different buyers is a violation.
     """
     # Track (seller, product) -> set of buyers
     sales: dict[tuple[str, str], set[str]] = defaultdict(set)
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -113,7 +102,6 @@ def validate_marketplace_no_double_sell(
         product = parts[1]
         buyer = ev.get("to", "")
         sales[(seller, product)].add(buyer)
-
     violations = [(k, buyers) for k, buyers in sales.items() if len(buyers) > 1]
     if violations:
         detail = "; ".join(f"{s} sold {p} to {buyers}" for (s, p), buyers in violations)
@@ -134,7 +122,6 @@ def validate_marketplace_responses(
     # Collect buy requests as (buyer, seller, product)
     buy_requests: set[tuple[str, str, str]] = set()
     responses: set[tuple[str, str, str]] = set()
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -153,7 +140,6 @@ def validate_marketplace_responses(
                 buyer = ev.get("to", "")
                 product = parts[1]
                 responses.add((buyer, seller, product))
-
     unanswered = buy_requests - responses
     if unanswered:
         detail = f"{len(unanswered)} unanswered buy requests"
@@ -174,7 +160,6 @@ def validate_marketplace_price_agreement(
     # Track valid prices per (buyer, seller, product)
     offered_prices: dict[tuple[str, str, str], set[int]] = defaultdict(set)
     mismatches: list[str] = []
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -220,7 +205,6 @@ def validate_marketplace_price_agreement(
                     mismatches.append(
                         f"{seller} sold {product} to {buyer} at {sold_price}, valid prices: {valid}"
                     )
-
     if mismatches:
         return [
             ValidationResult(
@@ -245,7 +229,6 @@ def validate_auction_winner_highest(
     bids: dict[str, list[tuple[str, int]]] = defaultdict(list)
     # Collect winners per item: item -> (bidder, amount)
     winners: dict[str, tuple[str, int]] = {}
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -270,7 +253,6 @@ def validate_auction_winner_highest(
                     continue
                 bidder = ev.get("to", "")
                 winners[item] = (bidder, amount)
-
     violations: list[str] = []
     for item, (_winner, winning_amount) in winners.items():
         for bidder, amount in bids.get(item, []):
@@ -279,7 +261,6 @@ def validate_auction_winner_highest(
                     f"item {item}: winner bid {winning_amount} but {bidder} bid {amount}"
                 )
                 break
-
     if violations:
         return [ValidationResult("auction_winner_highest", False, "; ".join(violations))]
     return [
@@ -297,7 +278,6 @@ def validate_auction_single_winner(
     """Each item is awarded to exactly one bidder."""
     # item -> set of winners
     winners: dict[str, set[str]] = defaultdict(set)
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -308,7 +288,6 @@ def validate_auction_single_winner(
                 item = parts[1]
                 bidder = ev.get("to", "")
                 winners[item].add(bidder)
-
     multi = {item: w for item, w in winners.items() if len(w) > 1}
     if multi:
         detail = "; ".join(f"{item}: {w}" for item, w in multi.items())
@@ -330,7 +309,6 @@ def validate_auction_all_notified(
     bidders_per_item: dict[str, set[str]] = defaultdict(set)
     # item -> set of bidders notified
     notified_per_item: dict[str, set[str]] = defaultdict(set)
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -347,14 +325,12 @@ def validate_auction_all_notified(
                 item = parts[1]
                 bidder = ev.get("to", "")
                 notified_per_item[item].add(bidder)
-
     missing: list[str] = []
     for item, bidders in bidders_per_item.items():
         notified = notified_per_item.get(item, set())
         diff = bidders - notified
         if diff:
             missing.append(f"item {item}: {diff} not notified")
-
     if missing:
         return [ValidationResult("auction_all_notified", False, "; ".join(missing))]
     return [
@@ -379,7 +355,6 @@ def validate_voting_tally(
     votes: dict[str, list[str]] = defaultdict(list)
     # round -> (result_str, yes_count, total)
     results: dict[str, tuple[str, int, int]] = {}
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -403,7 +378,6 @@ def validate_voting_tally(
                     except ValueError:
                         continue
                     results[rnd] = (result_str, yes, total)
-
     mismatches: list[str] = []
     for rnd, (_result_str, reported_yes, reported_total) in results.items():
         actual_votes = votes.get(rnd, [])
@@ -414,7 +388,6 @@ def validate_voting_tally(
                 f"round {rnd}: reported {reported_yes}/{reported_total} "
                 f"but actual {actual_yes}/{actual_total}"
             )
-
     if mismatches:
         return [ValidationResult("voting_tally_correct", False, "; ".join(mismatches))]
     return [
@@ -433,7 +406,6 @@ def validate_voting_all_counted(
     # round -> set of voters
     voters: dict[str, set[str]] = defaultdict(set)
     tallied_total: dict[str, int] = {}
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -456,13 +428,11 @@ def validate_voting_all_counted(
                 if len(tally_parts) == 2:
                     with contextlib.suppress(ValueError):
                         tallied_total[rnd] = int(tally_parts[1])
-
     uncounted: list[str] = []
     for rnd, voter_set in voters.items():
         total = tallied_total.get(rnd)
         if total is not None and len(voter_set) != total:
             uncounted.append(f"round {rnd}: {len(voter_set)} voted but tally says {total}")
-
     if uncounted:
         return [ValidationResult("voting_all_counted", False, "; ".join(uncounted))]
     return [ValidationResult("voting_all_counted", True)]
@@ -474,7 +444,6 @@ def validate_voting_no_double_vote(
     """Each voter votes at most once per round."""
     # (round, voter) -> count
     vote_counts: dict[tuple[str, str], int] = defaultdict(int)
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -491,7 +460,6 @@ def validate_voting_no_double_vote(
         else:
             continue
         vote_counts[(rnd, voter)] += 1
-
     doubles = {k: c for k, c in vote_counts.items() if c > 1}
     if doubles:
         detail = "; ".join(f"round {r}: {v} voted {c} times" for (r, v), c in doubles.items())
@@ -518,7 +486,6 @@ def validate_consensus_agreement(
     votes: dict[str, list[str]] = defaultdict(list)
     # round -> result
     committed_rounds: dict[str, tuple[int, int]] = {}
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -543,7 +510,6 @@ def validate_consensus_agreement(
                         except ValueError:
                             continue
                         committed_rounds[rnd] = (accepts, total)
-
     violations: list[str] = []
     for rnd, (accepts, total) in committed_rounds.items():
         actual_votes = votes.get(rnd, [])
@@ -562,7 +528,6 @@ def validate_consensus_agreement(
             violations.append(
                 f"round {rnd}: committed with only {actual_accepts}/{actual_total} accepts"
             )
-
     if violations:
         return [ValidationResult("consensus_agreement", False, "; ".join(violations))]
     return [
@@ -584,7 +549,6 @@ def validate_consensus_validity(
     committed_rounds: set[str] = set()
     # round -> value from result (if encoded in the result)
     result_details: dict[str, str] = {}
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -604,22 +568,18 @@ def validate_consensus_validity(
                     committed_rounds.add(rnd)
                     if len(parts) >= 5:
                         result_details[rnd] = parts[4]
-
     violations: list[str] = []
     for rnd, values in proposed.items():
         if len(values) > 1:
             violations.append(f"round {rnd}: conflicting proposals {values}")
-
     for rnd in committed_rounds:
         if rnd not in proposed:
             violations.append(f"round {rnd}: committed but no proposal found")
-
     # Also check that result values match proposals if present
     for rnd, val in result_details.items():
         prop = proposed.get(rnd, set())
         if prop and val not in prop:
             violations.append(f"round {rnd}: committed value {val!r} not in proposed {prop!r}")
-
     if violations:
         return [ValidationResult("consensus_validity", False, "; ".join(violations))]
     return [
@@ -637,7 +597,6 @@ def validate_consensus_no_conflict(
     """At most one value is committed per round."""
     # round -> set of committed outcomes
     commits: dict[str, set[str]] = defaultdict(set)
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -651,7 +610,6 @@ def validate_consensus_no_conflict(
             if outcome == "committed":
                 committed_value = parts[4] if len(parts) >= 5 else parts[3]
                 commits[rnd].add(committed_value)
-
     conflicts = {rnd: tallies for rnd, tallies in commits.items() if len(tallies) > 1}
     if conflicts:
         detail = "; ".join(f"round {r}: {t}" for r, t in conflicts.items())
@@ -674,7 +632,6 @@ def validate_supply_chain_pipeline(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every delivered product traces back through all 4 hops.
-
     The pipeline is: supplier (material:) -> manufacturer (product:) ->
     distributor (shipment:) -> retailer (delivered:).
     """
@@ -682,7 +639,6 @@ def validate_supply_chain_pipeline(
     products: set[tuple[str, str]] = set()
     shipments: set[tuple[str, str]] = set()
     deliveries: set[tuple[str, str]] = set()
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -703,7 +659,6 @@ def validate_supply_chain_pipeline(
             parts = msg.split(":")
             if len(parts) >= 3:
                 deliveries.add((parts[1], parts[2]))
-
     missing: list[str] = []
     for rnd, product in sorted(deliveries):
         if rnd not in material_rounds:
@@ -712,7 +667,6 @@ def validate_supply_chain_pipeline(
             missing.append(f"{rnd}/{product}: product")
         if (rnd, product) not in shipments:
             missing.append(f"{rnd}/{product}: shipment")
-
     if missing:
         return [
             ValidationResult(
@@ -721,7 +675,6 @@ def validate_supply_chain_pipeline(
                 f"delivered without matching: {', '.join(missing)}",
             )
         ]
-
     return [ValidationResult("supply_chain_pipeline", True, "all hops present")]
 
 
@@ -731,7 +684,6 @@ def validate_supply_chain_no_lost(
     """Every material sent eventually results in a delivery or explicit failure."""
     materials_by_round: dict[str, int] = defaultdict(int)
     delivered_by_round: dict[str, int] = defaultdict(int)
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -744,7 +696,6 @@ def validate_supply_chain_no_lost(
             parts = msg.split(":")
             if len(parts) >= 2:
                 delivered_by_round[parts[1]] += 1
-
     materials_sent = sum(materials_by_round.values())
     delivered = sum(delivered_by_round.values())
     if materials_sent > 0 and delivered == 0:
@@ -760,7 +711,6 @@ def validate_supply_chain_no_lost(
         got = delivered_by_round.get(rnd, 0)
         if got < sent:
             losses.append(f"round {rnd}: {sent - got} of {sent}")
-
     if losses:
         lost = materials_sent - delivered
         return [
@@ -791,7 +741,6 @@ def validate_reputation_scoring(
     # Track scores: agent -> score
     scores: dict[str, int] = defaultdict(int)
     cheaters: set[str] = set()
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -806,7 +755,6 @@ def validate_reputation_scoring(
                 elif outcome == "bad":
                     scores[agent_str] -= 2
                     cheaters.add(agent_str)
-
     violations: list[str] = []
     for cheater in cheaters:
         if scores[cheater] >= 0:
@@ -814,7 +762,6 @@ def validate_reputation_scoring(
             # that's fine — they might have enough good trades.  We check that
             # at least one bad report actually decremented the score.
             pass
-
     # The core invariant: agents with bad reports should have lower scores
     # than they would without those reports.  We verify that at least one
     # "bad" report exists for every cheater.
@@ -828,14 +775,12 @@ def validate_reputation_scoring(
             if len(parts) >= 3:
                 cheater_id = parts[2]
                 bad_agents_with_reports.add(cheater_id)
-
     # Check: if someone cheated, they should have a bad report
     unreported = bad_agents_with_reports - cheaters
     # cheaters is set of agents that got "bad" reports, bad_agents_with_reports
     # is set of agents that sent cheat messages
     if unreported:
         violations.append(f"cheaters not reported: {unreported}")
-
     if violations:
         return [ValidationResult("reputation_scoring", False, "; ".join(violations))]
     return [
@@ -853,7 +798,6 @@ def validate_reputation_warnings(
     """Agents with score <= -3 get warned."""
     scores: dict[str, int] = defaultdict(int)
     warned: set[str] = set()
-
     for ev in events:
         if ev.get("kind") != "send" and ev.get("kind") != "broadcast":
             continue
@@ -872,7 +816,6 @@ def validate_reputation_warnings(
             if len(parts) >= 3:
                 agent_str = parts[2]
                 warned.add(agent_str)
-
     should_warn = {a for a, s in scores.items() if s <= -3}
     missing_warnings = should_warn - warned
     if missing_warnings:
@@ -890,15 +833,12 @@ def validate_reputation_warnings(
 # ---------------------------------------------------------------------------
 # Identity key-rotation validators
 # ---------------------------------------------------------------------------
-
 _INF = float("inf")
 
 
 class _KeyWindow:
     """Validity window ``[issued_at, rotated_out)`` for one signing key.
-
     Example::
-
         w = _KeyWindow(issued_at=0.0)
         assert w.contains(0.0) and not w.contains(w.rotated_out)
     """
@@ -909,9 +849,7 @@ class _KeyWindow:
 
     def contains(self, tick: float) -> bool:
         """Return whether *tick* falls inside the half-open window.
-
         Example::
-
             assert _KeyWindow(0.0, 10.0).contains(5.0)
         """
         return self.issued_at <= tick < self.rotated_out
@@ -919,13 +857,10 @@ class _KeyWindow:
 
 def _parse_tick(raw: str) -> float | None:
     """Parse a trace tick token to ``float``; ``None`` if unparseable.
-
     ``did_key`` emits ``None`` for ``signed_at`` (it has no rotation concept),
     so this never raises — it returns ``None`` and the caller treats the
     signature as window-invalid.
-
     Example::
-
         assert _parse_tick("3.0") == 3.0 and _parse_tick("None") is None
     """
     try:
@@ -936,16 +871,13 @@ def _parse_tick(raw: str) -> float | None:
 
 def _build_key_windows(events: list[dict[str, Any]]) -> dict[str, _KeyWindow]:
     """Reconstruct per-key validity windows from ``rotate:`` trace lines.
-
     A line ``rotate:<agent>:<old_key_id>:<new_key_id>:<rotate_tick>`` closes the
     old key's window at ``rotate_tick`` and opens the new key's window there.
     Keys never named in a rotation but seen signing (e.g. an agent's first key)
     are seeded lazily by :func:`validate_identity_rotation_signatures` with an
     open window from tick 0. ``key_id`` is a ``sha256`` digest, so keying the
     map by ``key_id`` alone is unambiguous across agents.
-
     Example::
-
         windows = _build_key_windows(events)
     """
     windows: dict[str, _KeyWindow] = {}
@@ -972,12 +904,10 @@ def validate_identity_rotation_signatures(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Honest signatures verify and *both* attacks are rejected as-of the trace.
-
     The scenario emits ``signed:<agent>:<key_id>:<claimed_tick>:<verdict>`` lines
     where ``verdict`` is ``ok`` (honest), ``forge`` (post-rotation forgery with a
     rotated-out key), or ``backdate`` (a new-key signature whose claimed tick is
     moved back into the old key's window).
-
     A signature is **window-valid** iff the window of its ``key_id`` contains
     **both** the externally observed event tick (``ev["ts"]``) *and* the claimed
     ``signed_at`` tick. Anchoring to the observed tick defeats post-rotation
@@ -985,14 +915,11 @@ def validate_identity_rotation_signatures(
     land in the same window defeats backdating (the new key's window does not
     contain the backdated old tick). The verifier never trusts the claimed tick
     as the *authority* — it is one of two coordinates both of which must agree.
-
     The protocol holds iff every honest ``ok`` line is window-valid **and** every
     ``forge``/``backdate`` line is window-invalid. ``did_key`` cannot satisfy
     this: it emits no ``rotate:`` lines and a ``None`` ``key_id``, so honest
     signatures resolve to no window and the check fails (without crashing).
-
     Example::
-
         results = validate_identity_rotation_signatures(events)
     """
     windows = _build_key_windows(events)
@@ -1000,7 +927,6 @@ def validate_identity_rotation_signatures(
     attacks_accepted: list[str] = []
     ok_count = 0
     attack_count = 0
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -1013,14 +939,12 @@ def validate_identity_rotation_signatures(
         agent, key_id, claimed_raw, verdict = parts[1], parts[2], parts[3], parts[4]
         observed_tick = _parse_tick(str(ev.get("ts")))
         claimed_tick = _parse_tick(claimed_raw)
-
         window = windows.get(key_id)
         # A key with no rotation history but seen signing is its agent's first,
         # still-open key; seed an open window from tick 0 so honest pre-rotation
         # signatures resolve. did_key's ``None`` key_id never matches this path.
         if window is None and key_id and key_id != "None" and verdict == "ok":
             window = windows.setdefault(key_id, _KeyWindow(issued_at=0.0))
-
         window_valid = (
             window is not None
             and observed_tick is not None
@@ -1028,7 +952,6 @@ def validate_identity_rotation_signatures(
             and window.contains(observed_tick)
             and window.contains(claimed_tick)
         )
-
         if verdict == "ok":
             ok_count += 1
             if not window_valid:
@@ -1043,7 +966,6 @@ def validate_identity_rotation_signatures(
                     f"{agent} {verdict} sig key={key_id[:8]} "
                     f"observed={observed_tick} claimed={claimed_tick} accepted"
                 )
-
     problems = honest_invalid + attacks_accepted
     if problems:
         return [
@@ -1075,7 +997,6 @@ async def validate_crdt_convergence(
     key: str = "k",
 ) -> list[ValidationResult]:
     """Adversarial convergence check for a CRDT memory plugin.
-
     This is the discriminating validator the memory-CRDT problem asks for: it
     drives ``len(delivery_orders)`` replicas through the *same* multiset of
     writes but delivers those writes to each replica in a **different order**,
@@ -1083,21 +1004,17 @@ async def validate_crdt_convergence(
     plugin passes for any orders; an order-dependent plugin such as
     ``blackboard`` fails the moment two replicas see the writes in different
     orders.
-
     The replication channel is chosen by capability: if the plugin exposes
     ``export`` / ``merge`` (a CvRDT), gossip is delivered through them; if not
     (e.g. ``blackboard``), the raw payload is delivered through ``write``, so
     last-writer-wins divergence is exposed faithfully.
-
     Args:
         make_replica: factory ``node_id -> plugin instance``.
         writes: ``(origin_replica_index, payload)`` pairs applied at origin.
         delivery_orders: one permutation of ``range(len(writes))`` per replica;
             its length is the replica count.
         key: the shared key all writes target.
-
     Example::
-
         from nest_plugins_reference.memory.lww_register import LwwRegisterMemory
         results = await validate_crdt_convergence(
             LwwRegisterMemory,
@@ -1109,7 +1026,6 @@ async def validate_crdt_convergence(
     replica_count = len(delivery_orders)
     replicas = [make_replica(f"node-{i}") for i in range(replica_count)]
     has_crdt = all(hasattr(r, "export") and hasattr(r, "merge") for r in replicas)
-
     # Phase 1: apply each write at its origin and capture the gossip payload.
     gossip: list[bytes] = []
     for origin, payload in writes:
@@ -1119,7 +1035,6 @@ async def validate_crdt_convergence(
             gossip.append(state if state is not None else payload)
         else:
             gossip.append(payload)
-
     # Phase 2: deliver every non-local write to each replica in its own order.
     for r_idx, order in enumerate(delivery_orders):
         for w_idx in order:
@@ -1129,7 +1044,6 @@ async def validate_crdt_convergence(
                 await replicas[r_idx].merge(key, gossip[w_idx])
             else:
                 await replicas[r_idx].write(key, gossip[w_idx])
-
     finals = [await r.read(key) for r in replicas]
     converged = len(set(finals)) == 1 and finals[0] is not None
     if converged:
@@ -1155,7 +1069,6 @@ def validate_memory_convergence(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Trace validator: every replica's final CRDT state agrees.
-
     The ``memory_concurrent_writers`` scenario has each agent broadcast its
     terminal register as a ``final:<json>`` record on stop. This validator
     confirms every agent emitted exactly one such record and that all of them
@@ -1164,7 +1077,6 @@ def validate_memory_convergence(
     finals: dict[str, str] = {}
     duplicates: set[str] = set()
     malformed: list[str] = []
-
     for ev in events:
         if ev.get("kind") not in ("send", "broadcast"):
             continue
@@ -1182,9 +1094,7 @@ def validate_memory_convergence(
         if agent in finals:
             duplicates.add(agent)
         finals[agent] = canonical
-
     results: list[ValidationResult] = []
-
     if malformed:
         results.append(
             ValidationResult(
@@ -1193,7 +1103,6 @@ def validate_memory_convergence(
                 f"{len(malformed)} malformed final record(s): {sorted(set(malformed))}",
             )
         )
-
     if not finals:
         results.append(
             ValidationResult(
@@ -1203,7 +1112,6 @@ def validate_memory_convergence(
             )
         )
         return results
-
     distinct = set(finals.values())
     if len(distinct) == 1:
         results.append(
@@ -1221,7 +1129,6 @@ def validate_memory_convergence(
                 f"{len(finals)} replicas hold {len(distinct)} distinct final states",
             )
         )
-
     if duplicates:
         results.append(
             ValidationResult(
@@ -1230,7 +1137,6 @@ def validate_memory_convergence(
                 f"agents emitted multiple final records: {sorted(duplicates)}",
             )
         )
-
     return results
 
 
@@ -1243,36 +1149,29 @@ def validate_streaming_conservation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Conservation invariant: total debited == total credited at every tick.
-
     Scans the trace for payment events and verifies that cumulative funds
     debited from payers equals cumulative funds credited to payees.
     """
     cumulative_debited: dict[str, int] = defaultdict(int)
     cumulative_credited: dict[str, int] = defaultdict(int)
-
     for ev in events:
         if ev.get("kind") not in ("payment_debited", "payment_credited"):
             continue
-
         agent = ev.get("agent", "")
         amount = ev.get("amount", 0)
-
         if ev.get("kind") == "payment_debited":
             cumulative_debited[agent] += amount
         elif ev.get("kind") == "payment_credited":
             cumulative_credited[agent] += amount
-
     # Check conservation: sum of all debited == sum of all credited
     total_debited = sum(cumulative_debited.values())
     total_credited = sum(cumulative_credited.values())
-
     if total_debited != total_credited:
         detail = (
             f"conservation violation: total debited={total_debited} "
             f"!= total credited={total_credited}"
         )
         return [ValidationResult("streaming_conservation", False, detail)]
-
     return [
         ValidationResult(
             "streaming_conservation",
@@ -1286,43 +1185,35 @@ def validate_streaming_no_drain_after_close(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Attack: closed streams must not drain after closure.
-
     Tracks open_stream -> close_stream for each ref, verifies no
     payment_debited events occur after close for that stream ref.
     """
     open_times: dict[str, int] = {}  # PaymentRef -> tick
     close_times: dict[str, int] = {}  # PaymentRef -> tick
     stream_debits: dict[str, list[int]] = defaultdict(lambda: [])  # PaymentRef -> [ticks]
-
     for ev in events:
         tick = ev.get("tick", 0)
-
         if ev.get("event_type") == "stream_opened":
             ref = ev.get("stream_ref", "")
             if ref:
                 open_times[ref] = tick
-
         elif ev.get("event_type") == "stream_closed":
             ref = ev.get("stream_ref", "")
             if ref:
                 close_times[ref] = tick
-
         elif ev.get("kind") == "payment_debited":
             ref = ev.get("stream_ref", "")
             if ref:
                 assert isinstance(stream_debits[ref], list)
                 stream_debits[ref].append(tick)
-
     # Check: no debit after close
     violations: list[str] = []
     for ref, close_tick in close_times.items():
         debits_after = [t for t in stream_debits.get(ref, []) if t > close_tick]
         if debits_after:
             violations.append(f"stream {ref} debited after close at {close_tick}: {debits_after}")
-
     if violations:
         return [ValidationResult("streaming_no_drain_after_close", False, "; ".join(violations))]
-
     return [
         ValidationResult(
             "streaming_no_drain_after_close",
@@ -1336,11 +1227,9 @@ def validate_streaming_no_overbill_on_partition(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Attack: payer must not keep billing when partitioned from payee.
-
     When the simulator drops messages between a payer and payee (network
     partition), any ``payment_debited`` after that point is billing for
     service the payee cannot deliver — an over-bill on partition.
-
     Tracks (payer, payee) pairs from ``stream_opened`` events, then scans
     for ``dropped`` events between those pairs.  Any debit that lands at or
     after a drop-tick between the same payer and payee is a violation.
@@ -1350,17 +1239,14 @@ def validate_streaming_no_overbill_on_partition(
     # (payer, payee) -> first tick where drop was observed
     partition_start: dict[tuple[str, str], int] = {}
     violations: list[str] = []
-
     for ev in events:
         tick = ev.get("tick", 0)
-
         if ev.get("event_type") == "stream_opened":
             ref = ev.get("stream_ref", "")
             payer = ev.get("agent", "")
             payee = ev.get("to", "")
             if ref and payer and payee:
                 stream_parties[ref] = (payer, payee)
-
         elif ev.get("kind") == "dropped":
             sender = ev.get("from", "")
             receiver = ev.get("agent", "")
@@ -1373,7 +1259,6 @@ def validate_streaming_no_overbill_on_partition(
                 rev_key = (receiver, sender)
                 if rev_key not in partition_start or tick < partition_start[rev_key]:
                     partition_start[rev_key] = tick
-
         elif ev.get("kind") == "payment_debited":
             ref = ev.get("stream_ref", "")
             if ref not in stream_parties:
@@ -1385,7 +1270,6 @@ def validate_streaming_no_overbill_on_partition(
                     f"stream {ref}: payer={payer} debited at tick {tick} "
                     f"but partitioned from payee={payee} since tick {drop_tick}"
                 )
-
     if violations:
         return [
             ValidationResult(
@@ -1491,13 +1375,10 @@ def validate_empic_escrow_conservation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every escrowed credit is either released or refunded per payment.
-
     This checks the EMPIC shadow ledger from audit messages by ``payment_ref``:
     consumer debits into escrow must equal provider releases plus consumer
     refunds for each funded payment, not only globally.
-
     Example::
-
         result = validate_empic_escrow_conservation(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -1536,9 +1417,7 @@ def validate_empic_no_release_without_accepted_delivery(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Provider payment release requires accepted delivery evidence.
-
     Example::
-
         result = validate_empic_no_release_without_accepted_delivery(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -1560,7 +1439,6 @@ def validate_empic_no_release_without_accepted_delivery(
             violations.append(
                 f"release ref={ref or '<missing>'} delivery={delivery_id or '<missing>'}"
             )
-
     if violations:
         return [
             ValidationResult(
@@ -1582,9 +1460,7 @@ def validate_empic_invalid_delivery_not_paid(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Rejected delivery evidence must not be credited to a provider.
-
     Example::
-
         result = validate_empic_invalid_delivery_not_paid(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -1625,9 +1501,7 @@ def validate_empic_delivery_policy_integrity(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Consumer acceptance must match delivery payload and declared policy.
-
     Example::
-
         result = validate_empic_delivery_policy_integrity(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -1643,7 +1517,6 @@ def validate_empic_delivery_policy_integrity(
     }
     checked = 0
     violations: list[str] = []
-
     for ev in audit:
         if ev.get("event_type") != "empic_delivery_evaluated":
             continue
@@ -1660,7 +1533,6 @@ def validate_empic_delivery_policy_integrity(
         if policy_event is None:
             violations.append(f"{ref}/{delivery_id}: acceptance policy not found")
             continue
-
         expected, reason = _empic_policy_accepts(delivery, policy_event, _event_tick(ev))
         observed = ev.get("accepted") is True
         checked += 1
@@ -1669,7 +1541,6 @@ def validate_empic_delivery_policy_integrity(
                 f"{ref}/{delivery_id}: observed accepted={observed}, "
                 f"policy accepted={expected} ({reason})"
             )
-
     if violations:
         return [ValidationResult("empic_delivery_policy_integrity", False, "; ".join(violations))]
     return [
@@ -1685,9 +1556,7 @@ def validate_empic_pubsub_billing_caps(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Pubsub releases must respect rate-per-tick, max-total, and accepted evidence.
-
     Example::
-
         result = validate_empic_pubsub_billing_caps(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -1696,7 +1565,6 @@ def validate_empic_pubsub_billing_caps(
     accepted: dict[str, set[str]] = defaultdict(set)
     released: dict[str, int] = defaultdict(int)
     violations: list[str] = []
-
     for ev in audit:
         event_type = ev.get("event_type")
         ref = _empic_ref(ev)
@@ -1711,7 +1579,6 @@ def validate_empic_pubsub_billing_caps(
             else:
                 streams[ref] = (rate, max_total)
             continue
-
         is_pubsub_ref = ref in stream_refs or ev.get("mode") == "pubsub"
         if (
             event_type == "empic_delivery_evaluated"
@@ -1734,7 +1601,6 @@ def validate_empic_pubsub_billing_caps(
                     f"{ref}/{delivery_id or '<missing>'}: release {amount} > rate {rate}"
                 )
             released[ref] += amount
-
     for ref, (rate, max_total) in streams.items():
         released_total = released.get(ref, 0)
         accepted_cap = rate * len(accepted.get(ref, set()))
@@ -1744,7 +1610,6 @@ def validate_empic_pubsub_billing_caps(
             violations.append(
                 f"{ref}: released {released_total} > accepted delivery cap {accepted_cap}"
             )
-
     if violations:
         return [ValidationResult("empic_pubsub_billing_caps", False, "; ".join(violations))]
     return [
@@ -1760,15 +1625,12 @@ def validate_empic_max_spend_enforced(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Funded escrow amount must not exceed the consumer's declared budget.
-
     Example::
-
         result = validate_empic_max_spend_enforced(events)[0]
     """
     audit = _empic_audit_events(events)
     max_spend_by_ref: dict[str, int] = {}
     violations: list[str] = []
-
     for ev in audit:
         if ev.get("event_type") != "empic_acceptance_policy":
             continue
@@ -1781,7 +1643,6 @@ def validate_empic_max_spend_enforced(
             max_spend = _optional_amount(cast("dict[str, Any]", policy_raw).get("max_spend"))
         if max_spend is not None:
             max_spend_by_ref[ref] = max_spend
-
     for ev in audit:
         event_type = ev.get("event_type")
         if event_type not in {"empic_escrow_debited", "empic_stream_opened"}:
@@ -1793,7 +1654,6 @@ def validate_empic_max_spend_enforced(
         amount = _safe_amount(ev.get("max_total") or ev.get("amount"))
         if amount > max_spend:
             violations.append(f"{ref}: funded {amount} exceeds declared max_spend {max_spend}")
-
     if violations:
         return [ValidationResult("empic_max_spend_enforced", False, "; ".join(violations))]
     return [
@@ -1809,9 +1669,7 @@ def validate_empic_all_escrows_terminal(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every funded escrow must finish with complete release/refund accounting.
-
     Example::
-
         result = validate_empic_all_escrows_terminal(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -1829,7 +1687,6 @@ def validate_empic_all_escrows_terminal(
         if ev.get("event_type") == "empic_stream_closed" and _empic_ref(ev)
     }
     violations: list[str] = []
-
     for ref, debit in sorted(debited.items()):
         release = released.get(ref, 0)
         refund = refunded.get(ref, 0)
@@ -1841,7 +1698,6 @@ def validate_empic_all_escrows_terminal(
             violations.append(f"{ref}: pubsub refund without stream close")
         if ref not in stream_refs and release == 0 and refund == 0:
             violations.append(f"{ref}: pull escrow has no release or refund")
-
     if violations:
         return [ValidationResult("empic_all_escrows_terminal", False, "; ".join(violations))]
     return [
@@ -1857,9 +1713,7 @@ def validate_empic_no_duplicate_settlement(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Payment refs and delivery evidence must not be replayed for settlement.
-
     Example::
-
         result = validate_empic_no_duplicate_settlement(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -1868,7 +1722,6 @@ def validate_empic_no_duplicate_settlement(
     refunds: dict[str, int] = defaultdict(int)
     evaluations: dict[tuple[str, str], int] = defaultdict(int)
     violations: list[str] = []
-
     for ev in audit:
         ref = _empic_ref(ev)
         event_type = ev.get("event_type")
@@ -1887,7 +1740,6 @@ def validate_empic_no_duplicate_settlement(
             delivery_id = _empic_delivery_id(ev)
             if ref and delivery_id:
                 evaluations[(ref, delivery_id)] += 1
-
     violations.extend(
         f"{ref}: duplicate escrow debit" for ref, count in debits.items() if count > 1
     )
@@ -1902,7 +1754,6 @@ def validate_empic_no_duplicate_settlement(
         for (ref, delivery_id), count in evaluations.items()
         if count > 1
     )
-
     if violations:
         return [ValidationResult("empic_no_duplicate_settlement", False, "; ".join(violations))]
     return [
@@ -1918,16 +1769,13 @@ def validate_empic_provider_service_binding(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Payments and releases must bind to the provider registered for the service.
-
     Example::
-
         result = validate_empic_provider_service_binding(events)[0]
     """
     audit = _empic_audit_events(events)
     service_provider: dict[str, str] = {}
     payment_binding: dict[str, tuple[str, str]] = {}
     violations: list[str] = []
-
     for ev in audit:
         if ev.get("event_type") != "empic_service_registered":
             continue
@@ -1935,7 +1783,6 @@ def validate_empic_provider_service_binding(
         provider = _safe_text(ev.get("provider"))
         if service_id and provider:
             service_provider[service_id] = provider
-
     for ev in audit:
         if ev.get("event_type") not in {"empic_escrow_debited", "empic_stream_opened"}:
             continue
@@ -1958,7 +1805,6 @@ def validate_empic_provider_service_binding(
                 f"{ref}: inconsistent payment binding {old} vs {(service_id, provider)}"
             )
         payment_binding[ref] = (service_id, provider)
-
     for ev in audit:
         if ev.get("event_type") != "empic_escrow_released":
             continue
@@ -1973,7 +1819,6 @@ def validate_empic_provider_service_binding(
             violations.append(
                 f"{ref}: release binding {(service_id, provider)} does not match {expected}"
             )
-
     if violations:
         return [ValidationResult("empic_provider_service_binding", False, "; ".join(violations))]
     return [
@@ -1989,9 +1834,7 @@ def validate_empic_payment_participant_binding(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Payment refs must not change consumer, provider, service, or mode.
-
     Example::
-
         result = validate_empic_payment_participant_binding(events)[0]
     """
     audit = _empic_audit_events(events)
@@ -2007,7 +1850,6 @@ def validate_empic_payment_participant_binding(
     context_by_ref: dict[str, dict[str, str]] = defaultdict(dict)
     checked_refs: set[str] = set()
     violations: list[str] = []
-
     for ev in audit:
         event_type = str(ev.get("event_type") or "")
         if event_type not in tracked_types:
@@ -2017,7 +1859,6 @@ def validate_empic_payment_participant_binding(
             violations.append(f"{event_type}: missing payment_ref")
             continue
         checked_refs.add(ref)
-
         payer = _safe_text(ev.get("payer"))
         consumer_id = _safe_text(ev.get("consumer_id"))
         if payer and consumer_id and payer != consumer_id:
@@ -2026,7 +1867,6 @@ def validate_empic_payment_participant_binding(
             consumer_id = payer
         if consumer_id and not payer:
             payer = consumer_id
-
         observed = {
             "service_id": _safe_text(ev.get("service_id")),
             "payer": payer,
@@ -2045,7 +1885,6 @@ def validate_empic_payment_participant_binding(
             missing = [field for field, value in observed.items() if not value]
             if missing:
                 violations.append(f"{ref}: {event_type} missing {missing}")
-
         context = context_by_ref[ref]
         for field, value in observed.items():
             if not value:
@@ -2055,7 +1894,6 @@ def validate_empic_payment_participant_binding(
                 violations.append(f"{ref}: {field} changed from {existing} to {value}")
             else:
                 context[field] = value
-
     if violations:
         return [
             ValidationResult(
@@ -2087,7 +1925,6 @@ _EMPIC_FORBIDDEN_SECRET_KEYS = {
     "wallet_auth_token",
     "wallet_secret",
 }
-
 _PRIVATE_KEY_SENTINEL = "-----begin " + "private key-----"
 _PAYMENT_SECRET_PREFIXES = ("sk_" + "live_", "sk_" + "test_")
 
@@ -2096,14 +1933,11 @@ def validate_empic_no_secret_material(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """EMPIC traces must contain only replay-safe public metadata.
-
     Example::
-
         result = validate_empic_no_secret_material(events)[0]
     """
     violations: list[str] = []
     checked = 0
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -2117,7 +1951,6 @@ def validate_empic_no_secret_material(
                 continue
             checked += 1
             violations.extend(_empic_secret_violations(body, path=msg_type))
-
     if violations:
         return [
             ValidationResult(
@@ -2139,21 +1972,17 @@ def validate_empic_no_drain_after_close(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Pubsub streams must not release funds after close.
-
     Example::
-
         result = validate_empic_no_drain_after_close(events)[0]
     """
     audit = _empic_audit_events(events)
     close_tick: dict[str, int] = {}
     violations: list[str] = []
-
     for ev in audit:
         if ev.get("event_type") == "empic_stream_closed":
             ref = str(ev.get("payment_ref", ""))
             if ref:
                 close_tick[ref] = _event_tick(ev)
-
     for ev in audit:
         if ev.get("event_type") != "empic_escrow_released":
             continue
@@ -2161,7 +1990,6 @@ def validate_empic_no_drain_after_close(
         closed_at = close_tick.get(ref)
         if closed_at is not None and _event_tick(ev) > closed_at:
             violations.append(f"{ref} released at {_event_tick(ev)} after close at {closed_at}")
-
     if violations:
         return [ValidationResult("empic_no_drain_after_close", False, "; ".join(violations))]
     return [
@@ -2177,16 +2005,13 @@ def validate_empic_no_overbill_on_partition(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Pubsub streams must not release funds after a partitioned delivery edge.
-
     Example::
-
         result = validate_empic_no_overbill_on_partition(events)[0]
     """
     audit = _empic_audit_events(events)
     stream_parties: dict[str, tuple[str, str]] = {}
     partition_start: dict[tuple[str, str], int] = {}
     violations: list[str] = []
-
     for ev in audit:
         if ev.get("event_type") == "empic_stream_opened":
             ref = str(ev.get("payment_ref", ""))
@@ -2194,7 +2019,6 @@ def validate_empic_no_overbill_on_partition(
             provider = str(ev.get("provider", ""))
             if ref and payer and provider:
                 stream_parties[ref] = (payer, provider)
-
     for ev in events:
         if ev.get("kind") != "dropped":
             continue
@@ -2207,7 +2031,6 @@ def validate_empic_no_overbill_on_partition(
             old = partition_start.get(edge)
             if old is None or tick < old:
                 partition_start[edge] = tick
-
     for ev in audit:
         if ev.get("event_type") != "empic_escrow_released":
             continue
@@ -2222,7 +2045,6 @@ def validate_empic_no_overbill_on_partition(
                 f"{ref} released at {_event_tick(ev)} after {payer}<->{provider} "
                 f"partition at {drop_tick}"
             )
-
     if violations:
         return [ValidationResult("empic_no_overbill_on_partition", False, "; ".join(violations))]
     return [
@@ -2243,10 +2065,8 @@ def _empic_policy_accepts(
     if not isinstance(data_raw, dict):
         return False, "missing data object"
     data = cast("dict[str, Any]", data_raw)
-
     policy_raw = policy_event.get("policy")
     policy = cast("dict[str, Any]", policy_raw) if isinstance(policy_raw, dict) else {}
-
     if _policy_flag(policy, "bind_service_id") and _safe_text(
         delivery.get("service_id")
     ) != _safe_text(policy_event.get("service_id")):
@@ -2265,13 +2085,11 @@ def _empic_policy_accepts(
         expected_params = policy_event.get("request_params")
         if delivery.get("request_params") != expected_params:
             return False, "request_params mismatch"
-
     required = policy.get("required_fields", [])
     if isinstance(required, list):
         for field in cast("list[object]", required):
             if isinstance(field, str) and field not in data:
                 return False, f"missing field {field}"
-
     ranges = policy.get("numeric_ranges", {})
     if isinstance(ranges, dict):
         for field_raw, bounds_raw in cast("dict[object, object]", ranges).items():
@@ -2287,14 +2105,12 @@ def _empic_policy_accepts(
                 return False, f"{field_raw} below minimum"
             if max_value is not None and value > max_value:
                 return False, f"{field_raw} above maximum"
-
     max_age = _safe_amount(policy.get("max_age_ticks"))
     data_tick = _safe_amount(data.get("tick"))
     if data_tick > current_tick:
         return False, "delivery tick is in the future"
     if max_age >= 0 and current_tick - data_tick > max_age:
         return False, "delivery stale"
-
     return True, "accepted"
 
 
@@ -2369,7 +2185,6 @@ def _safe_amount(value: Any) -> int:
 # ---------------------------------------------------------------------------
 # Comms schema-versioning validators (adversarial)
 # ---------------------------------------------------------------------------
-
 # The wire contract a versioned comms layer must honour, encoded here
 # independently of any plugin so these checks can judge *any* comms
 # implementation -- including the default ``nest_native``, which fails both.
@@ -2391,11 +2206,8 @@ _COMMS_KNOWN_ENVELOPE_FIELDS = frozenset(
 
 def _parse_comms_envelope(msg: str) -> dict[str, Any] | None:
     """Parse a trace ``msg`` as a comms envelope, or return ``None``.
-
     Receiver acks and non-JSON payloads are not envelopes and yield ``None``.
-
     Example::
-
         env = _parse_comms_envelope('{"id": "m1", "schema_version": "1.1"}')
     """
     if not msg.startswith("{"):
@@ -2411,9 +2223,7 @@ def _parse_comms_envelope(msg: str) -> dict[str, Any] | None:
 
 def _comms_major(version: str) -> int | None:
     """Return the integer major of a SemVer string, or ``None`` if malformed.
-
     Example::
-
         assert _comms_major("2.3") == 2
     """
     try:
@@ -2426,7 +2236,6 @@ def _collect_comms_wire(
     events: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """Map each envelope id to its on-the-wire ``version``/``major``/unknowns.
-
     Reads ground truth from the bytes a receiver actually *received*,
     independent of how it then chose to decode them. Only delivered envelopes
     are judged, so a dropped message never counts as a missing ack.
@@ -2453,7 +2262,6 @@ def _collect_comms_acks(
     events: list[dict[str, Any]],
 ) -> dict[str, tuple[str, set[str]]]:
     """Map each envelope id to the receiver's ``(status, preserved_fields)``.
-
     Receivers emit ``ack:<id>:<status>:<comma-separated preserved fields>``
     where ``status`` is ``accepted`` or ``rejected_major``.
     """
@@ -2477,7 +2285,6 @@ def validate_memory_liveness(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Trace validator: every agent that started reported a final state.
-
     Convergence is only meaningful if no replica silently dropped out. This
     check confirms that every agent with a ``start`` event also emitted a
     ``final:`` record -- i.e. the gossip protocol made progress at every
@@ -2493,7 +2300,6 @@ def validate_memory_liveness(
             "final:"
         ):
             reported.add(agent)
-
     if not started:
         return [ValidationResult("memory_liveness", False, "no agents started in trace")]
     missing = started - reported
@@ -2518,13 +2324,10 @@ def validate_identity_rotation_occurred(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """At least one key rotation happened over the run.
-
     The rotation feature is the whole point of the scenario: a trace with no
     ``rotate:`` line never exercised it. ``did_key`` cannot rotate, so it emits
     none and fails here — the honest demonstration that it lacks the capability.
-
     Example::
-
         results = validate_identity_rotation_occurred(events)
     """
     rotations = 0
@@ -2533,7 +2336,6 @@ def validate_identity_rotation_occurred(
             continue
         if _message_body(ev).startswith("rotate:"):
             rotations += 1
-
     if rotations == 0:
         return [
             ValidationResult(
@@ -2555,13 +2357,10 @@ def validate_comms_reject_unknown_major(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Receivers must reject envelopes whose major version they don't speak.
-
     Catches the *silent-accept* attack: ``nest_native`` ignores
     ``schema_version`` and decodes a breaking v2.0 envelope into a
     plausible-but-wrong message, whereas ``versioned`` rejects it.
-
     Example::
-
         results = validate_comms_reject_unknown_major(events)
     """
     wire = _collect_comms_wire(events)
@@ -2592,13 +2391,10 @@ def validate_comms_no_silent_drop(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Receivers must preserve unknown fields from newer-minor peers.
-
     Catches the *silent-drop* attack: ``nest_native`` reads only the fields it
     knows and discards a field a newer peer added with no trace, whereas
     ``versioned`` preserves it for round-trip re-emission.
-
     Example::
-
         results = validate_comms_no_silent_drop(events)
     """
     wire = _collect_comms_wire(events)
@@ -2645,13 +2441,10 @@ def _collect_downgrade_wire(
     events: list[dict[str, Any]],
 ) -> dict[str, bool]:
     """Map each delivered tagged envelope id to whether its ``auth_tag`` verifies.
-
     Only envelopes that actually carry a tag are judged; untagged legacy traffic
     is out of scope for this check. ``True`` means authentic (tag matches the
     recomputed value), ``False`` means tampered.
-
     Example::
-
         authentic_by_id = _collect_downgrade_wire(events)
     """
     from nest_plugins_reference.comms.authenticated import (
@@ -2676,14 +2469,11 @@ def validate_comms_downgrade_resistance(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Receivers must reject envelopes whose authentication tag no longer covers them.
-
     Catches the *silent-downgrade* attack: an on-path adversary rewrites an
     authentic envelope (rolls ``schema_version`` back, or strips a field) and
     leaves the stale tag in place. ``authenticated`` recomputes the tag and
     refuses the forgery; ``versioned``/``nest_native`` have no tag and accept it.
-
     Example::
-
         results = validate_comms_downgrade_resistance(events)
     """
     authentic = _collect_downgrade_wire(events)
@@ -2717,15 +2507,12 @@ def validate_comms_authentic_delivery(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Receivers must still accept *authentic* envelopes (no false positives).
-
     The liveness counterpart to
     :func:`validate_comms_downgrade_resistance`: a plugin must not "pass" the
     security check by rejecting everything. Every delivered envelope whose tag
     verifies has to be accepted, so tamper-evidence does not break the honest
     rolling-upgrade traffic it rides alongside.
-
     Example::
-
         results = validate_comms_authentic_delivery(events)
     """
     authentic = _collect_downgrade_wire(events)
@@ -2756,7 +2543,6 @@ def validate_comms_authentic_delivery(
 # ---------------------------------------------------------------------------
 # Receipt-reputation (collusion-ring) validators
 # ---------------------------------------------------------------------------
-
 # An effectively-severed reputation is anything at or below this. A severed ring
 # member scores exactly 0.0 under ``agent_receipts``; ``score_average`` rewards
 # the (all-positive) ring to ~1.0, far above this floor.
@@ -2765,14 +2551,11 @@ _RING_SEVERED_MAX = 1e-6
 
 def _collect_scores(events: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]]:
     """Parse ``score:<agent>:<score>:<confidence>:<role>`` lines from the trace.
-
     Returns ``agent -> (score, confidence, role)`` using the *last* score line
     seen for each agent (the finalize pass emits one per agent). The scores are
     produced by the live trust plugin, so this dict differs by configured plugin
     -- which is what lets the validator discriminate.
-
     Example::
-
         scores = _collect_scores(events)
     """
     scores: dict[str, tuple[float, float, str]] = {}
@@ -2810,7 +2593,6 @@ def _parse_escrow_events(
     events: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     """Parse trace broadcasts of the form ``escrow:<kind>:k=v:k=v...``.
-
     Returns one dict per matching event with ``kind`` and parsed ``key=value``
     fields. Non-matching broadcasts are skipped silently.
     """
@@ -2840,13 +2622,10 @@ def validate_escrow_state_machine(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every per-escrow transition sequence is a legal state-machine path.
-
     Legal sequences (per escrow ``ref``):
-
     * ``opened -> delivered -> released``
     * ``opened -> delivered -> disputed -> arbitrated``
     * ``opened -> refunded``
-
     Any transition outside this graph (e.g. ``opened -> released`` with no
     ``delivered``, or two ``released`` for the same ref) is a failure.
     """
@@ -2892,13 +2671,11 @@ def validate_escrow_role_binding(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every state-changing event is broadcast by the role authorized to make it.
-
     * ``opened`` MUST be broadcast by the named ``payer``.
     * ``delivered`` MUST be broadcast by the named ``payee``.
     * ``released``, ``disputed``, ``refunded`` MUST be broadcast by the
       named ``payer`` (from the originating ``opened``).
     * ``arbitrated`` MUST be broadcast by the named ``arbiter``.
-
     Detects forged-actor attacks: a non-payee posting a fake delivery, a
     third party trying to release someone else's escrow, etc.
     """
@@ -2957,7 +2734,6 @@ def validate_escrow_bps_in_range(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every ``arbitrated`` event carries ``payee_bps`` strictly in ``[0, 10000]``.
-
     Catches an arbiter (or a forged arbitrate broadcast) that attempts to
     settle outside the allowed split window -- either negative (paying the
     payee a negative share) or over 10000 (paying more than was escrowed).
@@ -2992,12 +2768,10 @@ def validate_escrow_no_payout_without_delivery(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """No ``released`` or ``arbitrated`` may occur for a ref that wasn't delivered.
-
     The escrow protocol's whole point is that the payee cannot be paid
     until they post a delivery proof. A plugin that ships funds without
     a preceding ``delivered`` event for the same ref bypasses the
     contract.
-
     Also catches the most common ``prepaid_credits`` failure mode in
     this scenario: the plugin has no escrow concept, so the buyer falls
     back to ``pay()``, which credits the payee with no delivery proof
@@ -3045,32 +2819,26 @@ def validate_receipt_reputation_ring_severed(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """The isolated collusion ring is severed while honest agents are retained.
-
     Reads the trust plugin's own ``score:`` lines from the trace (never recomputes
     reputation itself -- the discrimination must come from the configured plugin).
     The protocol holds iff:
-
     * at least one ``ring`` agent and one ``honest`` agent were scored (the
       scenario actually exercised both populations),
     * **every** ``ring`` agent scored ``<= 1e-6`` (its wash-traded reputation was
       severed to ~0), and
     * **every** ``honest`` agent scored ``> 1e-6`` (the honest anchor retained
       its corroborated reputation -- guards against a degenerate all-zero plugin).
-
     ``trust: score_average`` FAILS this: it has no notion of corroboration and
     rewards the ring's all-positive reports to ~1.0. ``trust: agent_receipts``
     PASSES: the ring is an isolated dense SCC that collusion severance voids,
     while the honest cycle is the anchor. A plugin that emits no ``score:`` lines
     (or scores everyone 0) also fails -- without crashing.
-
     Example::
-
         results = validate_receipt_reputation_ring_severed(events)
     """
     scores = _collect_scores(events)
     ring = {a: s for a, (s, _c, role) in scores.items() if role == "ring"}
     honest = {a: s for a, (s, _c, role) in scores.items() if role == "honest"}
-
     if not ring or not honest:
         return [
             ValidationResult(
@@ -3079,10 +2847,8 @@ def validate_receipt_reputation_ring_severed(
                 f"missing populations: {len(ring)} ring, {len(honest)} honest scored",
             )
         ]
-
     rewarded_ring = {a: s for a, s in ring.items() if s > _RING_SEVERED_MAX}
     dropped_honest = {a: s for a, s in honest.items() if s <= _RING_SEVERED_MAX}
-
     problems: list[str] = []
     if rewarded_ring:
         problems.append(
@@ -3094,7 +2860,6 @@ def validate_receipt_reputation_ring_severed(
             "honest not retained: "
             + ", ".join(f"{a}={s:.4f}" for a, s in sorted(dropped_honest.items()))
         )
-
     if problems:
         return [ValidationResult("receipt_reputation_ring_severed", False, "; ".join(problems))]
     return [
@@ -3110,25 +2875,20 @@ def validate_receipt_reputation_honest_confidence(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Honest agents carry positive corroboration confidence; the ring does not.
-
     A second, independent invariant: ``confidence`` (corroboration rate) must be
     positive for every honest agent and zero for every severed ring agent. This
     distinguishes a real collusion-resistant plugin from one that merely zeroes
     the ring's score by accident -- the ring's *confidence* collapsing to 0 is the
     signal that its corroborations were voided, not just its weights.
-
     ``score_average`` reports a non-zero confidence for the ring (it counts
     samples), so it FAILS; ``agent_receipts`` reports ring confidence 0 and
     honest confidence > 0, so it PASSES.
-
     Example::
-
         results = validate_receipt_reputation_honest_confidence(events)
     """
     scores = _collect_scores(events)
     ring_conf = {a: c for a, (_s, c, role) in scores.items() if role == "ring"}
     honest_conf = {a: c for a, (_s, c, role) in scores.items() if role == "honest"}
-
     if not ring_conf or not honest_conf:
         return [
             ValidationResult(
@@ -3137,10 +2897,8 @@ def validate_receipt_reputation_honest_confidence(
                 f"missing populations: {len(ring_conf)} ring, {len(honest_conf)} honest scored",
             )
         ]
-
     ring_corroborated = {a: c for a, c in ring_conf.items() if c > _RING_SEVERED_MAX}
     honest_uncorroborated = {a: c for a, c in honest_conf.items() if c <= _RING_SEVERED_MAX}
-
     problems: list[str] = []
     if ring_corroborated:
         problems.append(
@@ -3152,7 +2910,6 @@ def validate_receipt_reputation_honest_confidence(
             "honest lacks corroboration confidence: "
             + ", ".join(f"{a}={c:.4f}" for a, c in sorted(honest_uncorroborated.items()))
         )
-
     if problems:
         return [
             ValidationResult("receipt_reputation_honest_confidence", False, "; ".join(problems))
@@ -3176,7 +2933,6 @@ def validate_receipt_reputation_honest_confidence(
 # a plugin with a pre-action gate the attempt is refused (``permit:...:denied``
 # + ``blocked:``) and never runs; under a plugin with no gate it ``exec:``s.
 # ---------------------------------------------------------------------------
-
 # The veteran must have executed at least this many in-policy actions before the
 # rogue attempt, so "a high-reputation agent is still refused" is grounded.
 _ROGUE_MIN_REPUTATION = 3
@@ -3184,9 +2940,7 @@ _ROGUE_MIN_REPUTATION = 3
 
 def _rogue_declaration(events: list[dict[str, Any]]) -> tuple[str, str, str] | None:
     """Return the first declared rogue ``(agent, verb, resource)``, or ``None``.
-
     Example::
-
         pair = _rogue_declaration(events)
     """
     for ev in events:
@@ -3203,12 +2957,9 @@ def _rogue_declaration(events: list[dict[str, Any]]) -> tuple[str, str, str] | N
 
 def _rogue_triples(events: list[dict[str, Any]], prefix: str) -> list[tuple[str, str, str]]:
     """Collect ``(agent, verb, resource)`` triples from lines with ``prefix``.
-
     Preserves trace order. Used for ``exec:`` and ``blocked:`` lines and, with a
     trailing field trimmed, for the ``permit:`` lines.
-
     Example::
-
         execs = _rogue_triples(events, "exec:")
     """
     out: list[tuple[str, str, str]] = []
@@ -3226,11 +2977,8 @@ def _rogue_triples(events: list[dict[str, Any]], prefix: str) -> list[tuple[str,
 
 def _rogue_permits(events: list[dict[str, Any]]) -> list[tuple[str, str, str, str]]:
     """Collect ``(agent, verb, resource, outcome)`` from ``permit:`` lines.
-
     ``permit_env:`` lines are excluded — their prefix is not ``permit:``.
-
     Example::
-
         decisions = _rogue_permits(events)
     """
     out: list[tuple[str, str, str, str]] = []
@@ -3250,21 +2998,16 @@ def validate_rogue_trusted_agent_blocked(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """The declared out-of-policy attempt is refused and never executes.
-
     Reads the trace the scenario emits — never a policy table — and holds iff:
-
     * a ``rogue_attempt:`` line declares the veteran's out-of-policy pair,
     * **no** ``exec:`` line runs that pair (it did not execute), and
     * a ``permit:...:denied`` line refused that exact pair.
-
     ``score_average`` FAILS this: with no pre-action gate the veteran acts
     unconditionally, so an ``exec:`` line for the rogue pair is present.
     ``aae_permit_gate`` PASSES: it returns a signed denial and the action is
     blocked. A trace that never declared a rogue attempt also fails — without
     crashing on either layer.
-
     Example::
-
         results = validate_rogue_trusted_agent_blocked(events)
     """
     rogue = _rogue_declaration(events)
@@ -3281,7 +3024,6 @@ def validate_rogue_trusted_agent_blocked(
     denied = any(
         (a, v, r) == rogue and outcome == "denied" for a, v, r, outcome in _rogue_permits(events)
     )
-
     if executed:
         return [
             ValidationResult(
@@ -3313,20 +3055,15 @@ def validate_rogue_trusted_agent_reputation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Reputation was earned first, and no in-policy action was refused.
-
     Two defense-in-depth invariants that ground the demonstration:
-
     * the veteran executed at least ``_ROGUE_MIN_REPUTATION`` in-policy actions
       *before* its rogue attempt — so "a high-reputation agent is still refused"
       is real, not asserted, and
     * every refusal in the trace names the declared rogue pair — a permit gate
       that spuriously denied an in-policy action would be caught here.
-
     Holds under both layers (it does not depend on the rogue being blocked), so
     it corroborates the primary check rather than duplicating it. Never crashes.
-
     Example::
-
         results = validate_rogue_trusted_agent_reputation(events)
     """
     rogue = _rogue_declaration(events)
@@ -3339,7 +3076,6 @@ def validate_rogue_trusted_agent_reputation(
             )
         ]
     veteran, _verb, _resource = rogue
-
     # In-policy executions by the veteran, in trace order, before the rogue pair.
     prior = 0
     for a, v, r in _rogue_triples(events, "exec:"):
@@ -3347,7 +3083,6 @@ def validate_rogue_trusted_agent_reputation(
             break
         if a == veteran:
             prior += 1
-
     problems: list[str] = []
     if prior < _ROGUE_MIN_REPUTATION:
         problems.append(
@@ -3364,7 +3099,6 @@ def validate_rogue_trusted_agent_reputation(
             "in-policy actions spuriously denied: "
             + ", ".join(f"{a}:{v}:{r}" for a, v, r in sorted(set(spurious)))
         )
-
     if problems:
         return [ValidationResult("rogue_trusted_agent_reputation", False, "; ".join(problems))]
     return [
@@ -3379,7 +3113,6 @@ def validate_rogue_trusted_agent_reputation(
 # ---------------------------------------------------------------------------
 # Multi-attribute negotiation (Pareto) validators
 # ---------------------------------------------------------------------------
-
 # Float-noise tolerance for the dominance relation. ">=" is read as ">= -eps"
 # and ">" as "> +eps", so reconstruction rounding (utilities are rebuilt from
 # the 6-dp weights in the trace) never fabricates or hides a violation.
@@ -3388,16 +3121,13 @@ _PARETO_EPS = 1e-9
 
 class _AgentUtility:
     """One agent's additive multi-attribute utility, reconstructed from the trace.
-
     Reproduces the plugin's scoring *verbatim* (Keeney & Raiffa additive MAUT):
     inputs are clamped into the feasible ranges, then each issue's normalized
     value function is weighted and summed. The directional convention matches
     the plugin exactly (the buyer values low price / short deadline, the seller
     high price / long deadline) so a bundle scores identically here and inside
     ``ParetoNegotiation``.
-
     Example::
-
         u = _AgentUtility("buyer", 0.9, 0.1, 50, 150, 1, 30, 0.0)
         u.utility(50, 1)  # 1.0
     """
@@ -3437,13 +3167,10 @@ class _AgentUtility:
 
 class _MarketSession:
     """Everything a single negotiation session contributed to the trace.
-
     ``bundles`` is the set of every (price, deadline) exchanged in the session,
     the trace-observed evidence the dominance frontier is computed from.
     ``buyer``/``seller`` are resolved from the ``side`` tag on the offers.
-
     Example::
-
         sess = _MarketSession()
         sess.bundles.add((55, 30))
     """
@@ -3458,13 +3185,10 @@ class _MarketSession:
 
 def _collect_agent_utilities(events: list[dict[str, Any]]) -> dict[str, _AgentUtility]:
     """Parse ``mautil:`` frames into per-agent utility reconstructors.
-
     Frames are ``mautil:<agent>:<side>:<w_price>:<w_deadline>:<plo>:<phi>:<dlo>:
     <dhi>:<reservation>``. Malformed frames (short split, non-numeric fields,
     unknown side, or a degenerate range that would divide by zero) are skipped.
-
     Example::
-
         utils = _collect_agent_utilities(events)
     """
     utils: dict[str, _AgentUtility] = {}
@@ -3495,9 +3219,7 @@ def _collect_agent_utilities(events: list[dict[str, Any]]) -> dict[str, _AgentUt
 
 def _collect_market_sessions(events: list[dict[str, Any]]) -> dict[str, _MarketSession]:
     """Group ``offer:``/``agree:``/``breakdown:`` frames by session id.
-
     Example::
-
         sessions = _collect_market_sessions(events)
     """
     sessions: dict[str, _MarketSession] = defaultdict(_MarketSession)
@@ -3534,15 +3256,12 @@ def _collect_market_sessions(events: list[dict[str, Any]]) -> dict[str, _MarketS
 
 def _pareto_dominates(ub_x: float, us_x: float, ub_y: float, us_y: float) -> bool:
     """Return whether bundle X Pareto-dominates bundle Y (Zlotkin & Rosenschein Eq.4).
-
     X dominates Y iff X is no worse for *either* party and strictly better for at
     least one (Zlotkin & Rosenschein 1996; Royal Holloway negotiation notes,
     Eq. 4). The ``>=`` comparisons are relaxed by ``_PARETO_EPS`` and the ``>``
     comparisons tightened by it, so float reconstruction noise cannot manufacture
     or mask a violation.
-
     Example::
-
         assert _pareto_dominates(0.9, 0.9, 0.9, 0.8)
     """
     no_worse = ub_x >= ub_y - _PARETO_EPS and us_x >= us_y - _PARETO_EPS
@@ -3554,13 +3273,11 @@ def validate_multi_attribute_pareto_optimal(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """No concluded agreement is Pareto-dominated by another bundle it exchanged.
-
     For every session that reached an ``agree:`` outcome, this reconstructs both
     parties' utilities (from their ``mautil:`` frames) and FAILS if any *other*
     bundle exchanged in the same session dominates the agreement under
     :func:`_pareto_dominates`. A ``breakdown:`` session is **not** a failure: a
     bilateral negotiation can legitimately reach no deal.
-
     Scope is deliberately *trace-evidence-bounded*: the frontier is computed from
     the bundles actually observed on the wire, never from the full feasible grid.
     An agreement this validator passes could in principle still be dominated by a
@@ -3573,17 +3290,13 @@ def validate_multi_attribute_pareto_optimal(
     trips this check. ``ParetoNegotiation`` passes because its trade-off
     counteroffers move along the iso-utility curve toward the opponent's revealed
     preference, settling on a non-dominated logroll.
-
     Guards against a vacuous pass: if no agreement was scorable, it FAILS with
     ``"scenario exercised no negotiation"`` (mirrors the receipt-reputation guard).
-
     Example::
-
         results = validate_multi_attribute_pareto_optimal(events)
     """
     utils = _collect_agent_utilities(events)
     sessions = _collect_market_sessions(events)
-
     scored = 0
     violations: list[str] = []
     for sid in sorted(sessions):
@@ -3594,12 +3307,10 @@ def validate_multi_attribute_pareto_optimal(
         seller_u = utils.get(sess.seller)
         if buyer_u is None or seller_u is None:
             continue
-
         scored += 1
         a_price, a_deadline, _accepting = sess.agreement
         ub_star = buyer_u.utility(a_price, a_deadline)
         us_star = seller_u.utility(a_price, a_deadline)
-
         for xp, xd in sorted(sess.bundles):
             if (xp, xd) == (a_price, a_deadline):
                 continue
@@ -3612,7 +3323,6 @@ def validate_multi_attribute_pareto_optimal(
                     f"({xp},{xd}) u_buyer={ub_x:.6f} u_seller={us_x:.6f}"
                 )
                 break
-
     if scored == 0:
         return [
             ValidationResult(
@@ -3639,13 +3349,10 @@ def validate_multi_attribute_pareto_optimal(
 
 def _provenance_field_msg(events: list[dict[str, Any]], prefix: str) -> list[list[str]]:
     """Collect ``|``-delimited fields from every send carrying ``prefix``.
-
     The ``provenance_supply_chain`` scenario uses ``|`` (not ``:``) as its
     field delimiter, since its payloads are ``df://sha256-<hex>`` URLs that
     already contain a colon.
-
     Example::
-
         rows = _provenance_field_msg(events, "chain_ok|")
     """
     rows: list[list[str]] = []
@@ -3662,9 +3369,7 @@ def validate_provenance_chain_integrity(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """The verifier walks the full parent chain back to the source without a break.
-
     Example::
-
         results = validate_provenance_chain_integrity(events)
     """
     broken = _provenance_field_msg(events, "chain_broken|")
@@ -3688,21 +3393,17 @@ def validate_multi_attribute_individually_rational(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every agreement clears both parties' reservation utility.
-
     Reconstructs each party's utility for the agreed bundle and FAILS if either
     falls below its declared reservation (within ``_PARETO_EPS``). This catches a
     degenerate "agree to anything" plugin that closes a deal one side strictly
     prefers to walk away from. Like the Pareto check it guards against a vacuous
     pass: if no agreement was scorable it FAILS with
     ``"scenario exercised no negotiation"``.
-
     Example::
-
         results = validate_multi_attribute_individually_rational(events)
     """
     utils = _collect_agent_utilities(events)
     sessions = _collect_market_sessions(events)
-
     scored = 0
     offenders: list[str] = []
     for sid in sorted(sessions):
@@ -3713,7 +3414,6 @@ def validate_multi_attribute_individually_rational(
         seller_u = utils.get(sess.seller)
         if buyer_u is None or seller_u is None:
             continue
-
         scored += 1
         a_price, a_deadline, _accepting = sess.agreement
         ub = buyer_u.utility(a_price, a_deadline)
@@ -3726,7 +3426,6 @@ def validate_multi_attribute_individually_rational(
             offenders.append(
                 f"session {sid}: seller u={us:.6f} < reservation {seller_u.reservation:.6f}"
             )
-
     if scored == 0:
         return [
             ValidationResult(
@@ -3752,14 +3451,11 @@ def validate_provenance_substitution_resistant(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """An outsider republishing different content must not land on the source's URL.
-
     Catches the *substitution* attack: a name-addressed registry
     (``datafacts_v1``) lets anyone overwrite ``df://<name>`` with new bytes;
     a content-addressed one (``cid_facts``) cannot alias two different
     contents onto the same URL.
-
     Example::
-
         results = validate_provenance_substitution_resistant(events)
     """
     rows = _provenance_field_msg(events, "attack_substitution|")
@@ -3788,14 +3484,11 @@ def validate_provenance_freshness_unforgeable(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """A freshness claim signed by someone other than the owner must be rejected.
-
     Catches the *stale-claim* attack: an unauthenticated wall-clock check
     (``datafacts_v1``) treats any recent republish as proof of freshness,
     regardless of who did it; a signature-backed check (``cid_facts``) only
     accepts a proof whose signer is the dataset's declared owner.
-
     Example::
-
         results = validate_provenance_freshness_unforgeable(events)
     """
     rows = _provenance_field_msg(events, "attack_forged_freshness|")
@@ -3823,13 +3516,10 @@ def validate_provenance_chain_unforgeable(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """A dataset declaring a never-published parent must be rejected at publish time.
-
     Catches *provenance washing*: a registry with no lineage concept
     (``datafacts_v1``) accepts a "derived" dataset whose claimed parent does
     not exist anywhere in the trace; ``cid_facts`` refuses to publish it.
-
     Example::
-
         results = validate_provenance_chain_unforgeable(events)
     """
     rows = _provenance_field_msg(events, "attack_provenance|")
@@ -3856,7 +3546,6 @@ def validate_provenance_chain_unforgeable(
 # ---------------------------------------------------------------------------
 # BFT HotStuff validators
 # ---------------------------------------------------------------------------
-
 _STUCK_VIEW_K_TICKS = 300
 
 
@@ -3883,7 +3572,6 @@ def validate_bft_no_conflicting_commits(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """No two honest replicas commit conflicting values for the same view.
-
     Reads ``result:<view>:committed:<accepts>/<total>:<block_hash>:<value>``
     lines, each announced independently by the replica that observed the
     commit QC (not just the leader's say-so). Conflicts are keyed on
@@ -3896,9 +3584,7 @@ def validate_bft_no_conflicting_commits(
     ever observed, which is also why this validator FAILS against a
     ``contract_net``-coordinated trace (no ``result:...committed`` lines
     exist at all).
-
     Example::
-
         results = validate_bft_no_conflicting_commits(events)
     """
     commits_by_view: dict[str, dict[str, str]] = defaultdict(dict)
@@ -3913,18 +3599,15 @@ def validate_bft_no_conflicting_commits(
             continue
         view, block_hash_hex = parts[1], parts[4]
         commits_by_view[view][str(ev.get("agent", ""))] = block_hash_hex
-
     if not commits_by_view:
         return [
             ValidationResult("bft_no_conflicting_commits", False, "no commits observed in trace")
         ]
-
     violations: list[str] = []
     for view, by_agent in commits_by_view.items():
         distinct = set(by_agent.values())
         if len(distinct) > 1:
             violations.append(f"view {view}: conflicting commits {by_agent}")
-
     if violations:
         return [ValidationResult("bft_no_conflicting_commits", False, "; ".join(violations))]
     return [
@@ -3940,13 +3623,10 @@ def validate_bft_no_equivocation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """No leader sends two different PREPARE proposals in the same view.
-
     Reads ``prepare:<view>:<block_hash>:<value>:<justify_qc>`` lines, grouped
     by ``(sender, view)``. More than one distinct ``block_hash`` from the
     same sender in the same view means that leader equivocated.
-
     Example::
-
         results = validate_bft_no_equivocation(events)
     """
     hashes_by_leader_view: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -3962,13 +3642,11 @@ def validate_bft_no_equivocation(
         view, block_hash_hex = parts[1], parts[2]
         key = (str(ev.get("agent", "")), view)
         hashes_by_leader_view[key].add(block_hash_hex)
-
     violations = [
         f"leader {leader} view {view}: sent conflicting proposals {hashes}"
         for (leader, view), hashes in hashes_by_leader_view.items()
         if len(hashes) > 1
     ]
-
     if violations:
         return [ValidationResult("bft_no_equivocation", False, "; ".join(violations))]
     return [
@@ -3984,13 +3662,10 @@ def validate_bft_forged_quorum(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every broadcast commit QC is backed by >= 2f+1 distinct signers.
-
     Reads ``qc:<phase>:<view>:<block_hash>:<f>:<voter1>=<sig1>,...`` lines.
     Distinct voter tokens are counted after deduplication, so padding the
     same signer twice to inflate the count is itself caught as a forgery.
-
     Example::
-
         results = validate_bft_forged_quorum(events)
     """
     violations: list[str] = []
@@ -4032,7 +3707,6 @@ def validate_bft_forged_quorum(
                 f"{phase} qc view {view} block {block_hash_hex}: "
                 f"{len(voters)} distinct signers, needed {required_quorum}"
             )
-
     if violations:
         return [ValidationResult("bft_forged_quorum", False, "; ".join(violations))]
     return [
@@ -4048,14 +3722,11 @@ def validate_bft_no_stuck_view(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Commit progress resumes within K ticks of the network healing.
-
     Baseline is the simulator's ``partition_healed`` marker if present,
     else ``ts=0`` (so the same validator also covers the byzantine scenario,
     which has no partition). Fails if no ``result:...committed`` line
     appears within ``_STUCK_VIEW_K_TICKS`` ticks after the baseline.
-
     Example::
-
         results = validate_bft_no_stuck_view(events)
     """
     baseline = 0.0
@@ -4063,7 +3734,6 @@ def validate_bft_no_stuck_view(
         if ev.get("kind") == "partition_healed":
             baseline = float(ev.get("ts", 0.0))
             break
-
     commit_ticks: list[float] = []
     for ev in events:
         if ev.get("kind") != "send":
@@ -4071,10 +3741,8 @@ def validate_bft_no_stuck_view(
         msg = _message_body(ev)
         if msg.startswith("result:") and ":committed:" in msg:
             commit_ticks.append(float(ev.get("ts", 0.0)))
-
     if not commit_ticks:
         return [ValidationResult("bft_no_stuck_view", False, "no commits observed in trace")]
-
     max_ts = max(float(ev.get("ts", 0.0)) for ev in events)
     stuck_window = max(_STUCK_VIEW_K_TICKS, max_ts // 2) if max_ts > 0 else _STUCK_VIEW_K_TICKS
     window_end = baseline + stuck_window
@@ -4103,17 +3771,14 @@ def validate_bft_no_stuck_view(
 
 _MAX_PLAUSIBLE_GAP = 22.0
 """Longest silence (logical time) that a *live* peer can plausibly produce.
-
 Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with ``hb_max == 20`` and
 zero message drop, so consecutive observer receipts from a living peer are at
 most 20 apart.  A 2-unit margin gives 22: if the observer received a heartbeat
 within this window, the peer was provably alive and any suspicion of it is a
 false positive.
 """
-
 _ACCURACY_WARMUP = 100.0
 """Logical time before which suspicions are ignored for the accuracy check.
-
 An accrual detector needs a handful of inter-arrival samples before its score
 is meaningful; this window lets every detector populate its history before its
 verdicts are held against it.
@@ -4122,9 +3787,7 @@ verdicts are held against it.
 
 def _parse_fd_record(ev: dict[str, Any]) -> dict[str, Any] | None:
     """Return the decoded JSON dict if *ev* is an ``fd:*`` broadcast, else ``None``.
-
     Example::
-
         rec = _parse_fd_record(event)
     """
     if ev.get("kind") != "broadcast":
@@ -4246,7 +3909,6 @@ def validate_failure_detection_completeness(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Every peer that truly goes silent is eventually -- and still -- suspected.
-
     For each unreachable segment in the ground-truth ``fd:phase`` markers, the
     detector must report the peer suspected at some status update inside the
     segment and still have it suspected at the last in-segment update.  A trace
@@ -4254,7 +3916,6 @@ def validate_failure_detection_completeness(
     """
     transitions, last_ts = _fd_transitions(events)
     statuses = _fd_statuses(events)
-
     outage_segments: dict[str, list[tuple[float, float]]] = {}
     for peer, peer_transitions in transitions.items():
         downs = [
@@ -4264,7 +3925,6 @@ def validate_failure_detection_completeness(
         ]
         if downs:
             outage_segments[peer] = downs
-
     if not outage_segments:
         return [
             ValidationResult(
@@ -4273,7 +3933,6 @@ def validate_failure_detection_completeness(
                 "no unreachable fd:phase segment found in trace",
             )
         ]
-
     failures: list[str] = []
     checked = 0
     for peer, downs in outage_segments.items():
@@ -4289,7 +3948,6 @@ def validate_failure_detection_completeness(
                 continue
             if not in_window[-1][1]:
                 failures.append(f"{peer}: not suspected at outage end [{u_start}, {u_end}]")
-
     if failures:
         return [ValidationResult("failure_detection_completeness", False, "; ".join(failures))]
     return [
@@ -4316,14 +3974,11 @@ def _collect_admissions(
     events: list[dict[str, Any]],
 ) -> dict[str, tuple[bool, str, str]]:
     """Parse ``admit:<agent>:<granted|denied>:<reason>:<role>`` trace lines.
-
     Returns ``agent -> (admitted, reason, role)`` using the last decision per
     agent. Decisions come from the live gate against the configured trust
     plugin, so this dict is what lets the validators discriminate between a
     recomputing gate and a naive one.
-
     Example::
-
         admissions = _collect_admissions(events)
     """
     admissions: dict[str, tuple[bool, str, str]] = {}
@@ -4346,9 +4001,7 @@ def _admissions_for_role(
     role: str,
 ) -> dict[str, tuple[bool, str]]:
     """The ``agent -> (admitted, reason)`` decisions for one population role.
-
     Example::
-
         ring = _admissions_for_role(events, "ring")
     """
     return {
@@ -4366,15 +4019,12 @@ def _validate_role_denied(
     expected_reason: str,
 ) -> list[ValidationResult]:
     """Shared check: every agent of ``role`` is denied with ``expected_reason``.
-
     Fails when the population was never exercised (no decisions observed for
     the role — a gate that crashes or stays silent must not pass), when any
     member was admitted, or when the denial carries the wrong reason (a gate
     that denies for an accidental reason is not demonstrating the defense the
     validator is named for).
-
     Example::
-
         results = _validate_role_denied(events, name="parc_forgery_rejected",
                                         role="forged",
                                         expected_reason="proof_invalid")
@@ -4403,16 +4053,13 @@ def validate_failure_detection_accuracy(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
     """Live peers are not falsely suspected; recovered peers are cleared.
-
     Accuracy: after a warm-up, while a peer is provably reachable -- it is inside
     a reachable ``fd:phase`` segment *and* the observer received a heartbeat from
     it no longer than ``_MAX_PLAUSIBLE_GAP`` ago -- the detector must not suspect
     it.  A tight fixed timeout violates this on the upper tail of normal
     heartbeat jitter; an accrual detector does not.
-
     Recovery: a peer that genuinely went down and came back must end its final
     reachable segment un-suspected.
-
     Returns two results: ``failure_detection_accuracy`` and
     ``failure_detection_recovery``.
     """
@@ -4421,7 +4068,6 @@ def validate_failure_detection_accuracy(
     observer_ids = _fd_observer_ids(events)
     receipts = _fd_hb_receipts(events, observer_ids)
     watched = sorted(statuses.keys())
-
     # ----- accuracy: no false suspicion of a provably-live peer -----
     reachable_intervals: dict[str, list[tuple[float, float]]] = {}
     for peer in watched:
@@ -4432,7 +4078,6 @@ def validate_failure_detection_accuracy(
             ]
         else:
             reachable_intervals[peer] = [(0.0, last_ts)]
-
     false_positives: list[str] = []
     for peer in watched:
         intervals = reachable_intervals[peer]
@@ -4447,7 +4092,6 @@ def validate_failure_detection_accuracy(
                 false_positives.append(
                     f"{peer}: suspected at t={t} but a heartbeat arrived {round(t - recent, 3)} ago"
                 )
-
     if false_positives:
         accuracy = ValidationResult("failure_detection_accuracy", False, "; ".join(false_positives))
     else:
@@ -4456,7 +4100,6 @@ def validate_failure_detection_accuracy(
             True,
             f"no false suspicion of a provably-live peer across {len(watched)} peer(s)",
         )
-
     # ----- recovery: a healed peer ends un-suspected -----
     recovery_failures: list[str] = []
     recovered_peers = 0
@@ -4483,7 +4126,6 @@ def validate_failure_detection_accuracy(
             continue
         if in_window[-1][1]:
             recovery_failures.append(f"{peer}: still suspected at end of recovery segment")
-
     if recovery_failures:
         recovery = ValidationResult(
             "failure_detection_recovery", False, "; ".join(recovery_failures)
@@ -4500,19 +4142,15 @@ def validate_failure_detection_accuracy(
             True,
             f"all {recovered_peers} recovered peer(s) cleared by end",
         )
-
     return [accuracy, recovery]
 
 
 def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """Every honest migrant is admitted — the gate retains genuine reputation.
-
     Guards against the degenerate defense: a gate that denies everything
     trivially "catches" every attack. Portability only holds if honest
     credentials actually cross the border.
-
     Example::
-
         results = validate_parc_honest_admitted(events)
     """
     decisions = _admissions_for_role(events, "honest")
@@ -4533,12 +4171,9 @@ def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[Validati
 
 def validate_parc_forgery_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """A credential with tampered proof bytes is denied as ``proof_invalid``.
-
     The naive gate never checks the proof against the recomputed canonical
     payload, so the forged credential sails through it.
-
     Example::
-
         results = validate_parc_forgery_rejected(events)
     """
     return _validate_role_denied(
@@ -4551,14 +4186,11 @@ def validate_parc_forgery_rejected(events: list[dict[str, Any]]) -> list[Validat
 
 def validate_parc_inflation_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """An inflated score from a *trusted* issuer is denied as ``score_mismatch``.
-
     The headline property: the credential's signature is genuine and its
     issuer is trusted, yet recomputing the nanda-rep/0.2 scores from the
     carried receipts exposes the inflated claim. A gate that trusts signed
     claims (the naive baseline) admits it and FAILS this validator.
-
     Example::
-
         results = validate_parc_inflation_rejected(events)
     """
     return _validate_role_denied(
@@ -4571,15 +4203,12 @@ def validate_parc_inflation_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 def validate_parc_ring_severed(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """Wash-ring members are denied via whole-graph severance at the border.
-
     Each ring member's *inline* credential is individually corroborated (a
     single-subject ledger is a star and cannot show the ring), so inline
     recomputation alone admits it. Only re-running collusion severance over
     the originating domain's published ledger reveals the isolated dense
     component — the reason must therefore be ``severed_below_threshold``.
-
     Example::
-
         results = validate_parc_ring_severed(events)
     """
     return _validate_role_denied(
@@ -4592,13 +4221,10 @@ def validate_parc_ring_severed(events: list[dict[str, Any]]) -> list[ValidationR
 
 def validate_parc_replay_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """A stolen (genuine) credential presented by a non-subject is denied.
-
     The credential itself verifies — it was honestly issued to someone else.
     Admission must bind the presenter to ``credentialSubject.id``
     (``replay_presenter_mismatch``), or any bystander can borrow reputation.
-
     Example::
-
         results = validate_parc_replay_rejected(events)
     """
     return _validate_role_denied(
@@ -4611,14 +4237,11 @@ def validate_parc_replay_rejected(events: list[dict[str, Any]]) -> list[Validati
 
 def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """A credential signed with a rotated-out issuer key is denied as ``stale_key``.
-
     The signature bytes are cryptographically valid under the old key; what
     fails is the identity layer's key-rotation window as-of the credential's
     ``validFrom`` tick. This is the cross-layer check a trust plugin that
     ignores the identity layer cannot perform.
-
     Example::
-
         results = validate_parc_stale_key_rejected(events)
     """
     return _validate_role_denied(

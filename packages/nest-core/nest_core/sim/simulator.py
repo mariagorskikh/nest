@@ -1,11 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tier 1 discrete-event simulator.
-
 Drives state-machine agents through an event loop with a virtual clock.
 Deterministic: same seed → identical trace.
-
 Example::
-
     sim = Simulator(seed=42)
     sim.add_agent(AgentId("a1"), PingAgent())
     sim.add_agent(AgentId("a2"), PongAgent())
@@ -13,13 +10,11 @@ Example::
 """
 
 from __future__ import annotations
-
 import asyncio
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
 from nest_core.log import LazyLogger
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.sim.clock import VirtualClock
@@ -183,9 +178,7 @@ _ctx_check: type[AgentContext] = _SimAgentContext  # noqa: F841
 
 class Simulator:
     """Tier 1 discrete-event simulator.
-
     Example::
-
         sim = Simulator(seed=42, trace_path="trace.jsonl")
         sim.add_agent(AgentId("a1"), PingAgent())
         await sim.run(max_ticks=1000)
@@ -240,9 +233,7 @@ class Simulator:
     @property
     def clock(self) -> VirtualClock:
         """The simulator's virtual clock.
-
         Example::
-
             t = sim.clock.now
         """
         return self._clock
@@ -250,9 +241,7 @@ class Simulator:
     @property
     def event_queue(self) -> EventQueue:
         """The simulator's event queue (for distributed worker bridges).
-
         Example::
-
             q = sim.event_queue
         """
         return self._queue
@@ -260,9 +249,7 @@ class Simulator:
     @property
     def tick_count(self) -> int:
         """Number of events processed so far.
-
         Example::
-
             print(sim.tick_count)
         """
         return self._tick_count
@@ -270,9 +257,7 @@ class Simulator:
     @property
     def message_count(self) -> int:
         """Number of messages delivered so far.
-
         Example::
-
             print(sim.message_count)
         """
         return self._message_count
@@ -280,27 +265,21 @@ class Simulator:
     @property
     def dropped_count(self) -> int:
         """Number of messages dropped by failure injection.
-
         Example::
-
             print(sim.dropped_count)
         """
         return self._dropped_count
 
     def set_transport_factory(self, factory: Any) -> None:
         """Override how per-agent transports are constructed (distributed workers).
-
         Example::
-
             sim.set_transport_factory(lambda aid, q, c, ids: RoutedTransport(...))
         """
         self._transport_factory = factory
 
     def add_agent(self, agent_id: AgentId, agent: StateMachineAgent) -> None:
         """Register an agent for the simulation.
-
         Example::
-
             sim.add_agent(AgentId("a1"), MyAgent())
         """
         if agent_id in self._agents:
@@ -321,13 +300,11 @@ class Simulator:
 
     def _init_failures(self) -> None:
         all_ids = list(self._agents.keys())
-
         if self._byzantine_fraction > 0:
             n_byzantine = max(1, int(len(all_ids) * self._byzantine_fraction))
             shuffled = list(all_ids)
             self._failure_rng.shuffle(shuffled)
             self._byzantine_agents = set(shuffled[:n_byzantine])
-
         if self._partition_groups:
             for group_idx, group in enumerate(self._partition_groups):
                 for agent_name in group:
@@ -338,35 +315,28 @@ class Simulator:
     def _should_drop(self, sender: AgentId, target: AgentId) -> bool:
         if self._message_drop_rate > 0 and self._failure_rng.random() < self._message_drop_rate:
             return True
-
         if self._partition_map:
             s_group = self._partition_map.get(sender, -1)
             t_group = self._partition_map.get(target, -2)
             if s_group >= 0 and t_group >= 0 and s_group != t_group:
                 return True
-
         return False
 
     async def run(self, max_ticks: int = 100_000, max_time: float | None = None) -> None:
         """Run the simulation until events are exhausted or limits are reached.
-
         Example::
-
             await sim.run(max_ticks=5000)
         """
         all_ids = list(self._agents.keys())
         for slot in self._agents.values():
             slot.transport.all_agents = all_ids
-
         self._init_failures()
-
         log.debug(
             "simulation_start",
             seed=self._seed,
             agent_count=len(self._agents),
             parallel=self._parallel,
         )
-
         for aid in self._agents:
             if self._trace:
                 self._trace.record(
@@ -383,7 +353,6 @@ class Simulator:
                     agent_id=aid,
                 )
             )
-
         start_pairs = [(aid, slot) for aid, slot in self._agents.items()]
         if self._parallel:
             await asyncio.gather(
@@ -392,7 +361,6 @@ class Simulator:
         else:
             for aid, slot in start_pairs:
                 await slot.agent.on_start(self._make_context(aid, slot))
-
         while self._queue and self._tick_count < max_ticks:
             if self._parallel:
                 batch_time = self._queue.peek().time
@@ -417,7 +385,6 @@ class Simulator:
                 self._tick_count += 1
                 self._maybe_heal_partition()
                 await self._dispatch_event(event)
-
         stop_pairs = [(aid, slot) for aid, slot in self._agents.items()]
         for aid, _slot in stop_pairs:
             if self._trace:
@@ -435,7 +402,6 @@ class Simulator:
         else:
             for aid, slot in stop_pairs:
                 await slot.agent.on_stop(self._make_context(aid, slot))
-
         if self._trace:
             self._trace.close()
 
@@ -461,14 +427,11 @@ class Simulator:
         """Process a single simulation event."""
         if event.kind == "start":
             return
-
         if event.kind != "deliver":
             return
-
         target_slot = self._agents.get(event.agent_id)
         if target_slot is None:
             return
-
         if self._should_drop(event.target_id, event.agent_id):
             self._dropped_count += 1
             if self._trace:
@@ -484,12 +447,10 @@ class Simulator:
                     drop_rec["corr"] = str(event.correlation_id)
                 self._trace.record(drop_rec)
             return
-
         delivered_payload = event.payload
         if event.target_id in self._byzantine_agents and event.payload:
             noise = self._failure_rng.randbytes(len(event.payload))
             delivered_payload = bytes(a ^ b for a, b in zip(event.payload, noise, strict=True))
-
         agent_overrides = self._agent_plugins.get(event.agent_id)
         merged_plugins = {**self._plugins, **agent_overrides} if agent_overrides else self._plugins
         inbound_ctx = MessageContext(
@@ -519,7 +480,6 @@ class Simulator:
                     self._trace.record(denied_rec)
                 return
             delivered_payload = inbound_result.payload
-
         self._message_count += 1
         log.debug(
             "dispatch_deliver",
@@ -539,7 +499,6 @@ class Simulator:
             if event.correlation_id is not None:
                 rec["corr"] = str(event.correlation_id)
             self._trace.record(rec)
-
         ctx = self._make_context(event.agent_id, target_slot)
 
         async def _deliver() -> None:
@@ -553,9 +512,7 @@ class Simulator:
 
     def set_agent_plugins(self, agent_id: AgentId, overrides: dict[str, Any]) -> None:
         """Set per-agent plugin overrides (merged on top of shared plugins).
-
         Example::
-
             sim.set_agent_plugins(AgentId("a1"), {"identity": my_identity})
         """
         self._agent_plugins[agent_id] = overrides

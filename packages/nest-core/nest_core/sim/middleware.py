@@ -1,24 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Message middleware for the Tier 1 simulator.
-
 Composable hooks on outbound (send/broadcast) and inbound (receive) paths.
 Deterministic: middleware must use the simulation clock and seeded RNG from
 ``MessageContext``, never wall-clock time or unseeded randomness.
-
 Example::
-
     chain = MiddlewareChain([ObservabilityMiddleware()])
     ctx = MessageContext(sender=AgentId("a1"), recipient=AgentId("a2"), ...)
     result = await chain.on_send(ctx)
 """
 
 from __future__ import annotations
-
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
-
 from nest_core.types import AgentId, CorrelationId
 
 

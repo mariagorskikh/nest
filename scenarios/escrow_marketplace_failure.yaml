@@ -1,14 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Failure-mode variant of escrow_marketplace with message drops enabled.
-
 name: escrow_marketplace_failure
 description: |
   Same as escrow_marketplace but with message_drop=0.05 to exercise
   dropped delivery / dispute paths under failure injection.
-
 tier: 1
 seed: 42
-
 agents:
   count: 9
   brain: state-machine
@@ -22,7 +19,6 @@ agents:
     - name: arbiter
       count: 3
       config: {}
-
 layers:
   transport: in_memory
   comms: nest_native
@@ -36,20 +32,15 @@ layers:
   memory: blackboard
   privacy: noop
   datafacts: datafacts_v1
-
 task:
   type: escrow_marketplace
   config: {}
-
 failures:
   message_drop: 0.05
   byzantine_agents: 0.0
-
 duration: "ticks: 200"
-
 metrics:
   - message_count
   - agent_count
-
 output:
   trace: ./traces/escrow_marketplace_failure.jsonl

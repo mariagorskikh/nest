@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the Tier 1 discrete-event simulator.
-
 Covers: clock, event queue, agent lifecycle, determinism, and performance.
 """
 
 from __future__ import annotations
-
 import json
 import time
 from pathlib import Path
-
 import pytest
 from nest_core.sim import (
     EventQueue,
@@ -20,7 +17,6 @@ from nest_core.sim import (
 from nest_core.sim.agent import AgentContext
 from nest_core.sim.events import Event
 from nest_core.types import AgentId
-
 # ---------------------------------------------------------------------------
 # Clock tests
 # ---------------------------------------------------------------------------
@@ -117,9 +113,7 @@ class TestSimulator:
         ponger = PongAgent()
         sim.add_agent(AgentId("ping"), pinger)
         sim.add_agent(AgentId("pong"), ponger)
-
         await sim.run(max_ticks=100)
-
         assert ponger.received_count >= 1
         assert pinger.received_count >= 1
         assert sim.message_count >= 2
@@ -130,13 +124,10 @@ class TestSimulator:
         sim = Simulator(seed=42, trace_path=trace_file)
         sim.add_agent(AgentId("a1"), PingAgent(target=AgentId("a2")))
         sim.add_agent(AgentId("a2"), PongAgent())
-
         await sim.run(max_ticks=100)
-
         content = trace_file.read_text()
         lines = [line for line in content.strip().split("\n") if line]
         assert len(lines) > 0
-
         import json
 
         for line in lines:
@@ -156,7 +147,6 @@ class TestSimulator:
             sim.add_agent(AgentId("a2"), PongAgent())
             await sim.run(max_ticks=100)
             traces.append(trace_file.read_text())
-
         assert traces[0] == traces[1]
         assert len(traces[0]) > 0
 
@@ -165,7 +155,6 @@ class TestSimulator:
         """100 ping-pong agents converge in <2s."""
         trace_file = tmp_path / "perf_trace.jsonl"
         sim = Simulator(seed=99, trace_path=trace_file)
-
         agent_ids = [AgentId(f"a{i}") for i in range(100)]
         agents: list[PingAgent] = []
         for i, aid in enumerate(agent_ids):
@@ -173,11 +162,9 @@ class TestSimulator:
             agent = PingAgent(target=target)
             agents.append(agent)
             sim.add_agent(aid, agent)
-
         start = time.monotonic()
         await sim.run(max_ticks=10000)
         elapsed = time.monotonic() - start
-
         assert elapsed < 2.0, f"100 agents took {elapsed:.2f}s (limit: 2s)"
         assert sim.message_count > 0
 
@@ -187,16 +174,13 @@ class TestSimulator:
         """1000 ping-pong agents complete in reasonable time after hot-path fixes."""
         trace_file = tmp_path / "perf1k.jsonl"
         sim = Simulator(seed=99, trace_path=trace_file)
-
         agent_ids = [AgentId(f"a{i}") for i in range(1000)]
         for i, aid in enumerate(agent_ids):
             target = agent_ids[(i + 1) % 1000]
             sim.add_agent(aid, PingAgent(target=target))
-
         start = time.monotonic()
         await sim.run(max_ticks=10000)
         elapsed = time.monotonic() - start
-
         assert elapsed < 30.0, f"1000 agents took {elapsed:.2f}s (limit: 30s)"
         assert sim.message_count > 0
 
@@ -207,15 +191,12 @@ class TestSimulator:
         for run in range(2):
             trace_file = tmp_path / f"det_{run}.jsonl"
             sim = Simulator(seed=777, trace_path=trace_file)
-
             agent_ids = [AgentId(f"a{i}") for i in range(100)]
             for i, aid in enumerate(agent_ids):
                 target = agent_ids[(i + 1) % 100]
                 sim.add_agent(aid, PingAgent(target=target))
-
             await sim.run(max_ticks=10000)
             traces.append(trace_file.read_text())
-
         assert traces[0] == traces[1]
         assert len(traces[0]) > 0
 
@@ -233,7 +214,6 @@ class TestSimulator:
 
         sim.add_agent(AgentId("a1"), DelayAgent())
         await sim.run(max_ticks=100000, max_time=50.0)
-
         assert sim.clock.now <= 50.0
 
     @pytest.mark.asyncio
@@ -251,7 +231,6 @@ class TestSimulator:
 
         sim.add_agent(AgentId("timer"), TimerAgent())
         await sim.run(max_ticks=100)
-
         assert len(received) == 1
         assert received[0] == 5.0
 
@@ -284,7 +263,6 @@ class TestSimulatorEdgeCases:
         sim = Simulator(seed=1, trace_path=trace_file)
         sim.add_agent(AgentId("a1"), PingAgent(target=AgentId("missing")))
         await sim.run(max_ticks=50)
-
         assert sim.message_count == 0
         lines = [json.loads(line) for line in trace_file.read_text().splitlines() if line]
         kinds = {ev["kind"] for ev in lines}

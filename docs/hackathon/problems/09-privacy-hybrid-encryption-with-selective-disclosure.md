@@ -4,13 +4,9 @@ layer: privacy
 difficulty: hard
 status: solved
 ---
-
 > **Status: SOLVED** — implemented in `scenarios/sealed_bid_with_privacy.yaml` with the `hybrid_x25519` privacy plugin.
-
 # Hybrid encryption with selective disclosure and broadcast revocation
-
 ## Motivation
-
 The default privacy plugin
 [`nest_plugins_reference/privacy/noop.py`](../../../packages/nest-plugins-reference/nest_plugins_reference/privacy/noop.py)
 is 60 lines of **literally returning the input unchanged**.
@@ -20,7 +16,6 @@ witness)` (line 43) returns a proof with payload `b"mock-proof"`.
 limitation note at
 [README.md line 308-310](../../../README.md) calls this out
 explicitly: "no-op privacy."
-
 That is fine when scenarios don't care about confidentiality, but it
 means **every Nanda Town scenario that simulates a sensitive workflow is
 silently leaking everything to every observer**, and the trace cannot
@@ -30,18 +25,14 @@ privacy. The
 calls out "hybrid encryption (X25519 + ChaCha20-Poly1305), group key
 exchange, zk-SNARK / zk-STARK / Bulletproofs adapters, selective
 disclosure of credentials."
-
 This problem is **hard on purpose**: it requires real crypto, a clean
 group-key story, and a credible threat model. The reward is that
 every other Nanda Town scenario can now plug your privacy layer in and get
 a believable confidentiality story for free.
-
 Anyone running Nanda Town as a model of a real multi-party workflow —
 medical-data swaps, sealed-bid auctions where bids must stay sealed,
 attestations carrying selective fields — benefits.
-
 ## Success criteria
-
 - Ship a privacy plugin (suggested name: `hybrid_x25519`) registered
   as `(\"privacy\", \"<your_name>\")` in
   [`nest_core/plugins.py`](../../../packages/nest-core/nest_core/plugins.py).
@@ -77,9 +68,7 @@ attestations carrying selective fields — benefits.
 - Ship `scenarios/sealed_bid_with_privacy.yaml` combining PR #5's
   sealed-bid coordination plugin with your privacy plugin so bids
   stay sealed *on the wire*, not just in the auction logic.
-
 ## Suggested approach pointers
-
 - HPKE (RFC 9180) is the standard for this exact shape. The
   `cryptography` library doesn't ship it directly but it's a few
   hundred lines on top of X25519 + HKDF + ChaCha20-Poly1305.
@@ -93,18 +82,14 @@ attestations carrying selective fields — benefits.
   signatures bind to existing agent identities.
 - Run your test suite with `pytest -p no:randomly` if randomness
   ever creeps in — Tier 1 determinism demands it.
-
 ## Anti-patterns
-
 - Don't ship symmetric-only encryption claiming to be hybrid.
 - Don't ship "selective disclosure" as just JSON omission — the
   unrevealed fields must be cryptographically committed.
 - Don't claim forward secrecy without an explicit epoch story.
 - Don't reuse the same nonce twice (test for it).
 - Don't break the `noop` plugin's existing callers.
-
 ## Out of scope
-
 - Full zk-SNARK / zk-STARK implementation. Merkle-tree selective
   disclosure is sufficient.
 - Post-quantum primitives.

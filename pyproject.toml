@@ -25,7 +25,6 @@ dependencies = [
     "nest-plugins-reference",
     "nest-marketplace",
 ]
-
 [project.optional-dependencies]
 # Dependencies for the hackathon judge panel under scripts/judge/.
 # Install with: uv sync --extra judge
@@ -50,11 +49,9 @@ harness = [
 plugins = [
     "cryptography>=42.0",
 ]
-
 [project.urls]
 Homepage = "https://github.com/projnanda/nandatown"
 Repository = "https://github.com/projnanda/nandatown"
-
 [tool.uv.workspace]
 members = [
     "packages/nest-core",
@@ -66,7 +63,6 @@ members = [
     "packages/nest-plugins-reference",
     "packages/nest-marketplace",
 ]
-
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0",
@@ -84,7 +80,6 @@ dev-dependencies = [
     # so the shim's smoke tests can import it.
     "nest-cli",
 ]
-
 [tool.uv.sources]
 nest-core = { workspace = true }
 nest-sdk = { workspace = true }
@@ -94,15 +89,12 @@ nest-scenarios = { workspace = true }
 nest-shell = { workspace = true }
 nest-plugins-reference = { workspace = true }
 nest-marketplace = { workspace = true }
-
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH"]
 ignore = ["TC001", "TC002", "TC003", "A002"]
-
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
@@ -119,7 +111,6 @@ extraPaths = [
     "packages/nest-marketplace",
     ".",
 ]
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["packages", "scripts"]
@@ -137,7 +128,6 @@ markers = [
     "live: end-to-end tests that hit live external services (skipped by default)",
     "slow: performance tests that may take several seconds",
 ]
-
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101", "B311", "B310", "B112"]

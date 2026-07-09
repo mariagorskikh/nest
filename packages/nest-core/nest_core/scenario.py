@@ -1,26 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pydantic schema for Nanda Town scenario YAML files.
-
 Example::
-
     from nest_core.scenario import ScenarioConfig
     config = ScenarioConfig.from_yaml("scenarios/marketplace.yaml")
 """
 
 from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
-
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
 
 class RoleConfig(BaseModel):
     """Configuration for a specific agent role within a scenario.
-
     Example::
-
         role = RoleConfig(name="buyer", count=50, prompt_template="buyer_v1")
     """
 
@@ -40,9 +34,7 @@ class RoleConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     """Agent configuration for a scenario.
-
     Example::
-
         agents = AgentConfig(count=100, brain="state-machine")
     """
 
@@ -64,9 +56,7 @@ class AgentConfig(BaseModel):
 
 class LayerConfig(BaseModel):
     """Plugin selection for each of the 12 layers.
-
     Example::
-
         layers = LayerConfig(transport="in_memory", comms="nest_native")
     """
 
@@ -86,9 +76,7 @@ class LayerConfig(BaseModel):
 
 class TaskConfig(BaseModel):
     """Task configuration for the scenario.
-
     Example::
-
         task = TaskConfig(type="marketplace", config={"catalog_size": 200})
     """
 
@@ -98,9 +86,7 @@ class TaskConfig(BaseModel):
 
 class FailureConfig(BaseModel):
     """Failure injection configuration.
-
     Example::
-
         failures = FailureConfig(message_drop=0.05, byzantine_agents=0.10)
     """
 
@@ -120,9 +106,7 @@ class FailureConfig(BaseModel):
 
 class OutputConfig(BaseModel):
     """Output configuration for traces and reports.
-
     Example::
-
         output = OutputConfig(trace="./traces/out.jsonl")
     """
 
@@ -145,9 +129,7 @@ class DistributedConfig(BaseModel):
 
 class ScenarioConfig(BaseModel):
     """Top-level scenario configuration parsed from YAML.
-
     Example::
-
         config = ScenarioConfig(name="test", tier=1)
     """
 
@@ -212,9 +194,7 @@ class ScenarioConfig(BaseModel):
 
     def get_max_ticks(self) -> int:
         """Parse the duration field into max ticks.
-
         Example::
-
             ticks = config.get_max_ticks()
         """
         if self.duration.startswith("ticks:"):
@@ -224,9 +204,7 @@ class ScenarioConfig(BaseModel):
     @classmethod
     def from_yaml(cls, path: str | Path) -> ScenarioConfig:
         """Load a scenario configuration from a YAML file.
-
         Example::
-
             config = ScenarioConfig.from_yaml("scenarios/marketplace.yaml")
         """
         with Path(path).open() as f:
@@ -236,9 +214,7 @@ class ScenarioConfig(BaseModel):
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ScenarioConfig:
         """Create a scenario from a dictionary.
-
         Example::
-
             config = ScenarioConfig.from_dict({"name": "test", "tier": 1})
         """
         return cls.model_validate(data)

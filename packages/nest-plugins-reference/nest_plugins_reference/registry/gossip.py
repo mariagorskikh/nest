@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 """Gossip registry plugin — eventually-consistent agent discovery under partition.
-
 The default ``in_memory`` registry is one shared ``dict`` per simulation: every
 agent's ``register``, ``lookup``, and ``subscribe`` touch the same map.  That
 is a useful *test scaffold* but it is operationally a lie: in any real
@@ -10,14 +9,12 @@ injects a ``failures.network_partition`` (see
 ``nest_core/sim/simulator.py``), the partition silently does not affect
 registry lookups — partitioned agents can still discover each other through
 the shared dict.  That is physically impossible in production.
-
 This plugin replaces that scaffold with **per-agent local views** synchronised
 by anti-entropy gossip over the existing transport layer.  An on-chain
 registry author wrote this plugin to benchmark the eventual-consistency
 trade-off against the linearisable, partition-fatal alternative that a
 contract-backed registry provides.  Three invariants are enforced and exposed
 to validators:
-
 * **Partition honesty.**  Gossip messages ride the agent's own transport,
   so the simulator's ``_should_drop`` partition logic naturally blocks
   cross-partition propagation.  An agent's local view can only grow with
@@ -32,22 +29,15 @@ to validators:
   ``(version, publisher_id)`` pair.  Merge is last-writer-wins by
   ``version``, tiebroken by ``publisher_id`` lexicographically — same shape
   as a Lamport-style write tag, deterministic across replays.
-
 Wire format (binary-prefixed bytes over transport)::
-
     GOSSIP_PREFIX || op (1B) || canonical_json(payload)
-
 where ``op`` is ``D`` (digest exchange) or ``P`` (push of cards).  The
 canonical JSON encoding matches ``nest_core.sim.trace`` for replay equality.
-
 The plugin is **deterministic**: it uses the agent's seeded ``Random`` (via
 ``handle_gossip`` callers) for peer selection and never reads wall-clock
 time.  Same seed → identical view trajectory.
-
 Example::
-
     from nest_plugins_reference.registry.gossip import GossipNetwork, GossipRegistry
-
     net = GossipNetwork(agent_ids=[AgentId("a"), AgentId("b"), AgentId("c")])
     reg_a = GossipRegistry(AgentId("a"), net)
     await reg_a.register(AgentCard(agent_id=AgentId("a"), name="A"))
@@ -56,34 +46,26 @@ Example::
 """
 
 from __future__ import annotations
-
 import json
 import random
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-
 from nest_core.types import AgentCard, AgentId, Query
 
 if TYPE_CHECKING:
     from nest_core.sim.agent import AgentContext
-
 GOSSIP_PREFIX = b"GOSSIP|"
 """Wire marker for gossip messages.  Agents forward matching payloads to
 ``GossipRegistry.handle_gossip``; other payloads are application traffic.
-
 Example::
-
     if payload.startswith(GOSSIP_PREFIX):
         await registry.handle_gossip(sender, payload)
 """
-
 OP_DIGEST = b"D"
 """Wire op: digest exchange (peer asks: what versions do you hold?)."""
-
 OP_PUSH = b"P"
 """Wire op: push (peer sends cards the digest revealed it was missing)."""
-
 DEFAULT_FANOUT = 3
 """Number of peers each gossip round pushes to.  ``F=3`` is the sweet spot
 for ``N`` up to a few hundred — see the SWIM and Plumtree literature.
@@ -93,14 +75,11 @@ for ``N`` up to a few hundred — see the SWIM and Plumtree literature.
 @dataclass(frozen=True, order=True)
 class _WriteTag:
     """Lamport-style write tag: ``(version, publisher_id)``.
-
     Used to order concurrent writes deterministically.  ``version`` is a
     per-publisher monotonic counter; ties are broken by ``publisher_id``
     so two agents observing the same set of writes always agree on the
     winner.
-
     Example::
-
         tag1 = _WriteTag(version=1, publisher_id=AgentId("a"))
         tag2 = _WriteTag(version=1, publisher_id=AgentId("b"))
         assert tag1 < tag2  # 'a' < 'b' lex
@@ -113,12 +92,9 @@ class _WriteTag:
 @dataclass
 class _Versioned:
     """A stored card plus its write tag and a tombstone bit.
-
     Tombstones are kept so deregistration propagates through gossip
     without being overwritten by stale ``register`` re-prints.
-
     Example::
-
         v = _Versioned(card=card, tag=_WriteTag(1, AgentId("a")), tombstone=False)
     """
 
@@ -130,14 +106,11 @@ class _Versioned:
 @dataclass
 class GossipNetwork:
     """Shared backplane: peer list + per-publisher version counters.
-
     The network does **not** route messages — that is the transport's job.
     It only exposes the peer set and hands out fresh ``_WriteTag`` values so
     every per-agent ``GossipRegistry`` instance agrees on monotonic
     versioning even though the writers are independent.
-
     Example::
-
         net = GossipNetwork(agent_ids=[AgentId("a"), AgentId("b")])
         reg = GossipRegistry(AgentId("a"), net)
     """
@@ -148,9 +121,7 @@ class GossipNetwork:
 
     def next_version(self, publisher: AgentId) -> int:
         """Return the next monotonic version for ``publisher``.
-
         Example::
-
             v = net.next_version(AgentId("a"))
         """
         v = self._versions.get(publisher, 0) + 1
@@ -159,9 +130,7 @@ class GossipNetwork:
 
     def peers_of(self, agent: AgentId) -> list[AgentId]:
         """Return all peers of ``agent`` (i.e. every other agent in the network).
-
         Example::
-
             peers = net.peers_of(AgentId("a"))
         """
         return [a for a in self.agent_ids if a != agent]
@@ -169,19 +138,15 @@ class GossipNetwork:
 
 class GossipRegistry:
     """Per-agent gossip registry with partition-honest eventual consistency.
-
     The plugin satisfies ``nest_core.layers.registry.Registry``: ``register``,
     ``lookup``, ``subscribe``, ``deregister``.  Lookups read **only** the
     local view — they are potentially stale, never linearisable.
-
     Driver agents are responsible for calling ``gossip_round(ctx)`` on a
     schedule (typically ``ctx.schedule(GOSSIP_INTERVAL, ...)``) and for
     forwarding inbound ``GOSSIP_PREFIX``-marked payloads to
     ``handle_gossip(sender, payload)``.  See
     ``nest_core.scenarios_builtin.gossip_registry`` for a complete driver.
-
     Example::
-
         net = GossipNetwork(agent_ids=[AgentId("a"), AgentId("b")])
         reg = GossipRegistry(AgentId("a"), net)
         await reg.register(AgentCard(agent_id=AgentId("a"), name="A"))
@@ -198,16 +163,12 @@ class GossipRegistry:
     # ------------------------------------------------------------------
     # Registry protocol
     # ------------------------------------------------------------------
-
     async def register(self, card: AgentCard) -> None:
         """Register ``card`` locally; gossip will propagate it on the next round.
-
         Stamps the card with a fresh write tag from the shared network so
         concurrent re-registrations from the same publisher are ordered
         deterministically.
-
         Example::
-
             await reg.register(AgentCard(agent_id=AgentId("a"), name="A"))
         """
         tag = _WriteTag(
@@ -218,26 +179,20 @@ class GossipRegistry:
 
     async def lookup(self, query: Query) -> list[AgentCard]:
         """Return cards matching ``query`` from the **local** view.
-
         Stale by construction: only reflects what gossip has delivered to
         this agent so far.  During a partition, returns nothing from the
         other side that this agent did not already know about.
-
         Example::
-
             cards = await reg.lookup(Query(capabilities=["sell"]))
         """
         return [v.card for v in self._view.values() if not v.tombstone and _matches(v.card, query)]
 
     async def subscribe(self, query: Query) -> AsyncGenerator[AgentCard, None]:
         """Yield cards matching ``query`` from the local view, then end.
-
         This is a deliberately simple implementation: yield the current
         view once and stop.  A streaming subscription would require a
         long-lived task per subscriber; not justified for the test rig.
-
         Example::
-
             async for card in reg.subscribe(query):
                 print(card.name)
         """
@@ -246,9 +201,7 @@ class GossipRegistry:
 
     async def deregister(self, agent: AgentId) -> None:
         """Tombstone ``agent`` locally; gossip propagates the tombstone.
-
         Example::
-
             await reg.deregister(AgentId("a"))
         """
         existing = self._view.get(agent)
@@ -263,18 +216,14 @@ class GossipRegistry:
     # ------------------------------------------------------------------
     # Gossip mechanics
     # ------------------------------------------------------------------
-
     async def gossip_round(self, ctx: AgentContext) -> None:
         """Run one round of push-pull anti-entropy.
-
         Picks ``fanout`` peers uniformly at random (using the agent's
         seeded RNG, so replays are byte-identical) and sends each one a
         digest of locally-known write tags.  The peer replies with cards
         the digest revealed it was missing — that handshake completes
         via ``handle_gossip``.
-
         Example::
-
             await reg.gossip_round(ctx)
         """
         peers = self._network.peers_of(self._agent_id)
@@ -289,18 +238,14 @@ class GossipRegistry:
 
     async def handle_gossip(self, sender: AgentId, payload: bytes, ctx: AgentContext) -> bool:
         """Process a gossip message from ``sender``.
-
         Returns ``True`` if the payload was a gossip message (and was
         consumed), ``False`` otherwise.  Driver agents should call this
         first in ``on_message`` and dispatch normally only when it
         returns ``False``.
-
         On a ``D`` (digest), replies with a ``P`` (push) of cards the
         sender is missing or stale on.  On a ``P`` (push), merges each card into
         the local view via the same LWW rule used by ``register``.
-
         Example::
-
             handled = await reg.handle_gossip(sender, payload, ctx)
         """
         if not payload.startswith(GOSSIP_PREFIX):
@@ -325,15 +270,11 @@ class GossipRegistry:
     # ------------------------------------------------------------------
     # Inspection (used by validators + tests)
     # ------------------------------------------------------------------
-
     def view_snapshot(self) -> dict[AgentId, tuple[int, AgentId, bool]]:
         """Return a deterministic snapshot of the local view.
-
         Format: ``{agent_id: (version, publisher_id, tombstone)}``.  Two
         snapshots are equal iff the two views have converged.
-
         Example::
-
             snap = reg.view_snapshot()
         """
         return {
@@ -344,7 +285,6 @@ class GossipRegistry:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
-
     def _apply(self, card: AgentCard, tag: _WriteTag, *, tombstone: bool) -> None:
         existing = self._view.get(card.agent_id)
         if existing is not None and existing.tag >= tag:
@@ -378,7 +318,6 @@ def _matches(card: AgentCard, query: Query) -> bool:
 
 def _sample_without_replacement(rng: random.Random, peers: list[AgentId], k: int) -> list[AgentId]:
     """Deterministic sample of ``k`` peers from ``peers`` using ``rng``.
-
     We avoid ``random.sample`` because the agent ``rng`` may be a custom
     ``Random`` subclass; explicit Fisher-Yates over a copy keeps the
     sampling reproducible across Python versions.

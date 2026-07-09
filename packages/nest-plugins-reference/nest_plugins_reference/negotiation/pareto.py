@@ -1,13 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pareto-seeking multi-attribute negotiation plugin.
-
 Bilateral bargaining over *price* and *deadline* using additive multi-attribute
 utility and similarity-based trade-off (iso-utility) concessions, so the two
 parties move toward Pareto-efficient agreements instead of fighting over price
 alone.
-
 Example::
-
     neg = ParetoNegotiation(
         AgentId("buyer"),
         weights={"price": 0.6, "deadline": 0.4},
@@ -19,9 +16,7 @@ Example::
 """
 
 from __future__ import annotations
-
 from typing import Literal
-
 from nest_core.types import (
     AgentId,
     Agreement,
@@ -35,13 +30,10 @@ from nest_core.types import (
 
 class ParetoNegotiation:
     """Multi-attribute, Pareto-seeking bilateral negotiation.
-
     Each agent knows only its *own* private utility configuration (weights,
     feasible ranges, reservation level) and negotiates over two issues (price
     and deadline) that ride in ``terms.price`` and ``terms.conditions``.
-
     The strategy combines three classical results:
-
     - Keeney & Raiffa additive multi-attribute utility: a bundle's worth is the
       weighted sum of per-issue value functions, each normalized to ``[0, 1]``.
     - Rosenschein & Zlotkin 1994 Monotonic Concession Protocol (Zeuthen): the
@@ -51,12 +43,9 @@ class ParetoNegotiation:
       opponent's offer is below aspiration, the agent counters with the bundle
       on its current iso-utility set that is *closest* to the opponent's offer,
       yielding integrative ("logrolling") moves that are Pareto-improving.
-
     The plugin is Tier-1 deterministic: no wall-clock and no RNG. Session ids
     come from a per-instance counter and all scoring is pure integer arithmetic.
-
     Example::
-
         neg = ParetoNegotiation(
             AgentId("seller"),
             weights={"price": 0.5, "deadline": 0.5},
@@ -111,9 +100,7 @@ class ParetoNegotiation:
 
     async def open(self, partner: AgentId, terms: Terms) -> NegotiationSession:
         """Open a negotiation with initial terms and a deterministic session id.
-
         Example::
-
             session = await neg.open(AgentId("seller"), Terms(price=Money(amount=10)))
         """
         self._session_counter += 1
@@ -128,9 +115,7 @@ class ParetoNegotiation:
 
     async def offer(self, session: NegotiationSession, terms: Terms) -> None:
         """Record an offer as the current terms and append it to history.
-
         Example::
-
             await neg.offer(session, Terms(price=Money(amount=80), conditions={"deadline_days": 7}))
         """
         session.current_terms = terms
@@ -138,7 +123,6 @@ class ParetoNegotiation:
 
     async def respond(self, session: NegotiationSession) -> NegotiationResponse:
         """Accept if the opponent's offer clears aspiration, else trade off.
-
         Reads the opponent's latest offer from ``session.current_terms``. If its
         own-utility is at least this round's aspiration ``alpha(t)`` the offer is
         accepted; otherwise the agent returns the aspiration-satisfying grid
@@ -146,28 +130,22 @@ class ParetoNegotiation:
         Faratin–Sierra–Jennings trade-off move along the iso-utility curve. When
         aspiration exceeds the agent's reachable maximum it counters with its
         single most-preferred bundle.
-
         Example::
-
             resp = await neg.respond(session)
         """
         opponent = session.current_terms
         if opponent is None or opponent.price is None:
             return NegotiationResponse(accepted=True)
-
         round_index = self._rounds.get(session.id, 0)
         self._rounds[session.id] = round_index + 1
         alpha = self._aspiration(round_index)
-
         if self.utility(opponent) >= alpha:
             return NegotiationResponse(accepted=True)
-
         plo, phi = self._price_range
         dlo, dhi = self._deadline_range
         p_span = phi - plo
         d_span = dhi - dlo
         p_opp, d_opp = self._clamp(*self._extract(opponent))
-
         grid = self._grid()
         acceptable = [(p, d) for (p, d) in grid if self._score(p, d) >= alpha]
         if acceptable:
@@ -182,15 +160,12 @@ class ParetoNegotiation:
         else:
             # Aspiration above our reachable maximum: offer our most-preferred bundle.
             p_b, d_b = min(grid, key=lambda b: (-self._score(b[0], b[1]), b[0], b[1]))
-
         counter = Terms(price=Money(amount=p_b), conditions={"deadline_days": d_b})
         return NegotiationResponse(accepted=False, counter_terms=counter)
 
     async def close(self, session: NegotiationSession) -> Agreement | None:
         """Return an agreement if the session was agreed, else mark it rejected.
-
         Example::
-
             agreement = await neg.close(session)
         """
         if session.status == NegotiationStatus.AGREED:
@@ -204,13 +179,10 @@ class ParetoNegotiation:
 
     def utility(self, terms: Terms) -> float:
         """Return this agent's additive multi-attribute utility for ``terms``.
-
         Combines the price and deadline value functions (each normalized to
         ``[0, 1]`` per the agent's directional convention) weighted by
         ``weights``. Inputs are clamped into the feasible ranges before scoring.
-
         Example::
-
             neg = ParetoNegotiation(
                 AgentId("buyer"),
                 weights={"price": 0.5, "deadline": 0.5},
@@ -224,7 +196,6 @@ class ParetoNegotiation:
 
     def _aspiration(self, round_index: int) -> float:
         """Non-increasing own-utility floor for a round (Zeuthen/MCP schedule).
-
         ``alpha(t) = reservation + (1 - reservation) * patience ** t``, with ``t``
         capped at ``max_rounds`` so the floor settles at the agent's deadline
         horizon while staying monotonically non-increasing.

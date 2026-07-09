@@ -2,11 +2,9 @@
 """HTTP settings shared by worker transport and plugin RPC clients."""
 
 from __future__ import annotations
-
 import hmac
 import os
 import random
-
 from nest_core.scenario import ScenarioConfig
 
 

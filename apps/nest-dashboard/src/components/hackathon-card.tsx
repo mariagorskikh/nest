@@ -3,7 +3,6 @@
  * landing pages. Pulled into its own file so the visual marker
  * for agent-authored vs human-authored is defined exactly once.
  */
-
 import Image from "next/image";
 import Link from "next/link";
 import type { Submission } from "@/lib/hackathon-types";
@@ -12,7 +11,6 @@ import {
   formatLinesAdded,
   formatScore,
 } from "@/lib/hackathon-display";
-
 export function AuthorBadge({ submission }: { submission: Submission }) {
   const isAgent = submission.tag === "agent-authored";
   return (
@@ -34,7 +32,6 @@ export function AuthorBadge({ submission }: { submission: Submission }) {
     </span>
   );
 }
-
 export function ScoreBadge({ submission }: { submission: Submission }) {
   const total = submission.score?.total ?? null;
   return (
@@ -56,7 +53,6 @@ export function ScoreBadge({ submission }: { submission: Submission }) {
     </span>
   );
 }
-
 export function SubmissionCard({ submission }: { submission: Submission }) {
   return (
     <Link
@@ -100,7 +96,6 @@ export function SubmissionCard({ submission }: { submission: Submission }) {
     </Link>
   );
 }
-
 export function EmptyState({
   title,
   body,

@@ -1,27 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """In-memory registry plugin — local dictionary-based agent discovery.
-
 Example::
-
     registry = InMemoryRegistry()
     await registry.register(card)
     results = await registry.lookup(Query(capabilities=["sell"]))
 """
 
 from __future__ import annotations
-
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator
-
 from nest_core.types import AgentCard, AgentId, Query
 
 
 class InMemoryRegistry:
     """Dictionary-backed agent registry with capability indexing.
-
     Example::
-
         reg = InMemoryRegistry()
         await reg.register(AgentCard(agent_id=AgentId("a1"), name="Agent1"))
     """
@@ -45,9 +39,7 @@ class InMemoryRegistry:
 
     async def register(self, card: AgentCard) -> None:
         """Register an agent card.
-
         Example::
-
             await reg.register(card)
         """
         existing = self._cards.get(card.agent_id)
@@ -61,9 +53,7 @@ class InMemoryRegistry:
 
     async def lookup(self, query: Query) -> list[AgentCard]:
         """Look up agents matching a query.
-
         Example::
-
             results = await reg.lookup(Query(capabilities=["sell"]))
         """
         if query.capabilities:
@@ -74,16 +64,13 @@ class InMemoryRegistry:
             results = [self._cards[aid] for aid in candidate_ids if aid in self._cards]
         else:
             results = list(self._cards.values())
-
         if query.name_pattern:
             results = [c for c in results if query.name_pattern in c.name]
         return results
 
     async def subscribe(self, query: Query) -> AsyncGenerator[AgentCard, None]:
         """Subscribe to new agent registrations matching a query.
-
         Example::
-
             async for card in reg.subscribe(query):
                 print(card.name)
         """
@@ -99,9 +86,7 @@ class InMemoryRegistry:
 
     async def deregister(self, agent: AgentId) -> None:
         """Remove an agent from the registry.
-
         Example::
-
             await reg.deregister(AgentId("a1"))
         """
         card = self._cards.pop(agent, None)

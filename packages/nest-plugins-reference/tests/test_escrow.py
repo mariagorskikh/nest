@@ -1,12 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the escrow payments plugin.
-
 Covers happy path, dispute path with arbitration, refund, role-bound authz,
 state-machine guards, the ``Payments`` protocol shortcut, and conservation.
 """
 
 from __future__ import annotations
-
 import pytest
 from nest_core.types import AgentId, Money, PaymentRef, PaymentStatus, ServiceRef
 from nest_plugins_reference.payments.escrow import (
@@ -21,7 +19,6 @@ def _triple(
     initial_arbiter: int = 0,
 ) -> tuple[EscrowPayments, EscrowPayments, EscrowPayments]:
     """Build payer/payee/arbiter plugin instances sharing one vault.
-
     The shared ``balances``/``payments``/``escrows`` dicts mirror the
     pattern used by ``prepaid_credits`` and ``streaming``: each agent
     has its own plugin instance, but they all see the same ledger.
@@ -459,7 +456,6 @@ class TestPaymentsProtocol:
         payer, payee, arbiter = _triple()
         # 1. Unknown ref -> FAILED
         assert await payer.verify_payment(PaymentRef("nope")) == PaymentStatus.FAILED
-
         # 2. Funded but not delivered -> PENDING
         await payer.open_escrow(
             payee=AgentId("payee"),
@@ -468,12 +464,10 @@ class TestPaymentsProtocol:
             ref=PaymentRef("e1"),
         )
         assert await payer.verify_payment(PaymentRef("e1")) == PaymentStatus.PENDING
-
         # 3. Released -> CONFIRMED
         await payee.deliver(PaymentRef("e1"), proof="x")
         await payer.release(PaymentRef("e1"))
         assert await payer.verify_payment(PaymentRef("e1")) == PaymentStatus.CONFIRMED
-
         # 4. Refunded -> FAILED
         await payer.open_escrow(
             payee=AgentId("payee"),
@@ -483,7 +477,6 @@ class TestPaymentsProtocol:
         )
         await payer.refund(PaymentRef("e2"))
         assert await payer.verify_payment(PaymentRef("e2")) == PaymentStatus.FAILED
-
         # 5. Arbitrated -> CONFIRMED
         await payer.open_escrow(
             payee=AgentId("payee"),
@@ -495,7 +488,6 @@ class TestPaymentsProtocol:
         await payer.dispute(PaymentRef("e3"), reason="x")
         await arbiter.arbitrate(PaymentRef("e3"), payee_bps=4000, rationale="x")
         assert await payer.verify_payment(PaymentRef("e3")) == PaymentStatus.CONFIRMED
-
         # 6. Pure pay() (no escrow row) -> CONFIRMED
         await payer.pay(AgentId("payee"), Money(amount=10), PaymentRef("e4"))
         assert await payer.verify_payment(PaymentRef("e4")) == PaymentStatus.CONFIRMED

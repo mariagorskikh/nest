@@ -2,9 +2,7 @@
 """Observability middleware — structured per-message counters and logging."""
 
 from __future__ import annotations
-
 from typing import Any
-
 from nest_core.log import get_logger
 from nest_core.sim.middleware import MessageContext, MessageMiddleware
 

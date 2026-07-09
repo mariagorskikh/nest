@@ -1,10 +1,8 @@
 /** Block SSRF targets for server-side reachability probes. */
-
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
   "metadata.google.internal",
 ]);
-
 function isPrivateIpv4(host: string): boolean {
   const parts = host.split(".").map((p) => Number.parseInt(p, 10));
   if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) {
@@ -19,7 +17,6 @@ function isPrivateIpv4(host: string): boolean {
   if (a === 192 && b === 168) return true;
   return false;
 }
-
 export function isSafeExternalUrl(raw: string): boolean {
   let parsed: URL;
   try {
@@ -42,7 +39,6 @@ export function isSafeExternalUrl(raw: string): boolean {
   }
   return true;
 }
-
 export function sanitizeHttpHref(raw: string | null | undefined): string | null {
   if (!raw) return null;
   return isSafeExternalUrl(raw) ? raw : null;

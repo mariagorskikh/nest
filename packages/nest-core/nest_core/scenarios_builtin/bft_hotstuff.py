@@ -1,39 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
 """Partition-tolerant BFT consensus -- linear 2-phase HotStuff.
-
 Every replica runs the same state machine (``ReplicaAgent``): it can
 propose, vote, form Quorum Certificates, and become leader after a
 view-change, since round-robin leader rotation means any replica may be
 asked to lead a future view. This differs deliberately from
 ``nest_core.scenarios_builtin.consensus``'s fixed ``LeaderAgent``/
 ``FollowerAgent`` split, which never rotates leadership.
-
 Protocol shape (2-phase, not the original 3-phase HotStuff): PREPARE then
 COMMIT, each gathering its own 2f+1-vote Quorum Certificate out of 3f+1
 total replicas. Safety across view-changes comes from the standard
 locked-QC rule (never vote prepare for a view below what you've already
 locked), not from the phase count -- the third phase in the original paper
 buys cross-view pipelining/throughput, which is out of scope here.
-
 The ``Coordination``-protocol-shaped plugin (``nest_plugins_reference.
 coordination.hotstuff.HotStuff``) is a separate, non-networked conformance
 wrapper -- it is not used by this factory, matching the precedent set by
 ``contract_net``/``consensus.py``. The real wire protocol lives entirely in
 this module.
-
 Example::
-
     agents = bft_hotstuff_factory(config, plugins)
 """
 
 from __future__ import annotations
-
 from collections.abc import Sequence
 from typing import Any
-
 from nest_plugins_reference.coordination import hotstuff_wire
 from nest_plugins_reference.coordination.hotstuff_wire import QuorumCert, VoteRecord
-
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, Signature
@@ -41,9 +33,7 @@ from nest_core.types import AgentId, Signature
 
 class ReplicaAgent(StateMachineAgent):
     """Honest HotStuff replica: proposes (when leader), votes, forms QCs.
-
     Example::
-
         replica = ReplicaAgent(AgentId("replica-0"), replica_ids, f=2)
     """
 
@@ -80,9 +70,7 @@ class ReplicaAgent(StateMachineAgent):
 
     async def on_start(self, ctx: AgentContext) -> None:
         """Schedule the view-0 timeout and propose if leading view 0.
-
         Example::
-
             await replica.on_start(ctx)
         """
         await ctx.schedule(self._view_timeout_ticks, f"view-timeout:{self._current_view}".encode())
@@ -91,12 +79,9 @@ class ReplicaAgent(StateMachineAgent):
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
         """Dispatch an incoming wire message or self-scheduled timeout.
-
         Malformed or byzantine-garbled payloads are silently dropped --
         never raises.
-
         Example::
-
             await replica.on_message(ctx, AgentId("replica-1"), b"vote:prepare:1:abcd|sig:..")
         """
         text = payload.decode("utf-8", errors="replace")
@@ -290,7 +275,6 @@ class ReplicaAgent(StateMachineAgent):
 
 class MaliciousLeaderAgent(ReplicaAgent):
     """A replica that equivocates only on its own leader turns.
-
     When this replica is leader for a view, it sends two different PREPARE
     proposals (different value, different block hash) to disjoint halves of
     the replica set -- the literal "leader sending different proposals to
@@ -298,9 +282,7 @@ class MaliciousLeaderAgent(ReplicaAgent):
     validator must catch. Outside of its own leader turns it behaves like
     an honest ``ReplicaAgent``: voting, forming QCs, and view-changing
     normally, so the scenario exercises exactly one failure mode at a time.
-
     Example::
-
         leader = MaliciousLeaderAgent(AgentId("replica-1"), replica_ids, f=2)
     """
 
@@ -322,15 +304,12 @@ class MaliciousLeaderAgent(ReplicaAgent):
 
 def instantiate_identity(plugins: dict[str, Any], all_ids: Sequence[AgentId]) -> None:
     """Wire a per-agent signed ``DidKeyIdentity`` with full peer cross-registration.
-
     Mirrors ``nest_core.scenarios_builtin.marketplace``'s identity-wiring
     block: every replica must sign its own votes/proposals and verify every
     peer's signatures, so each gets its own identity instance with all
     peers registered, stored under ``plugins["_agent_plugins"]`` for the
     runner to apply as a per-agent override.
-
     Example::
-
         instantiate_identity(plugins, [AgentId("replica-0"), AgentId("replica-1")])
     """
     identity_cls = plugins.get("identity")
@@ -352,14 +331,11 @@ def bft_hotstuff_factory(
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
     """Create HotStuff replica agents and wire per-agent signed identities.
-
     Reads ``task.config.f`` (defaults to ``(count - 1) // 3``),
     ``task.config.view_timeout_ticks`` (default 40), and
     ``task.config.malicious_agents`` (a list of replica id strings to
     instantiate as ``MaliciousLeaderAgent`` instead of ``ReplicaAgent``).
-
     Example::
-
         agents = bft_hotstuff_factory(config, plugins)
     """
     task_config = config.task.config
@@ -367,10 +343,8 @@ def bft_hotstuff_factory(
     f = int(task_config.get("f", (count - 1) // 3))
     view_timeout_ticks = int(task_config.get("view_timeout_ticks", 40))
     malicious_names: set[str] = set(task_config.get("malicious_agents", []))
-
     replica_ids = [AgentId(f"replica-{i}") for i in range(count)]
     instantiate_identity(plugins, replica_ids)
-
     agents: dict[AgentId, StateMachineAgent] = {}
     for rid in replica_ids:
         if str(rid) in malicious_names:

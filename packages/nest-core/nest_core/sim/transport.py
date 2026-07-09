@@ -1,16 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """In-memory transport wired to the simulator's event queue.
-
 Example::
-
     transport = InMemoryTransport(agent_id, event_queue, clock)
     await transport.send(AgentId("a2"), b"hello")
 """
 
 from __future__ import annotations
-
 from typing import TYPE_CHECKING
-
 from nest_core.types import AgentId, CorrelationId, TransportCapabilities
 
 if TYPE_CHECKING:
@@ -20,9 +16,7 @@ if TYPE_CHECKING:
 
 class InMemoryTransport:
     """Transport that routes messages through the simulator's event queue.
-
     Example::
-
         transport = InMemoryTransport(AgentId("a1"), queue, clock)
         await transport.send(AgentId("a2"), b"data")
     """
@@ -54,9 +48,7 @@ class InMemoryTransport:
         deliver_at: float | None = None,
     ) -> None:
         """Enqueue a message delivery event.
-
         Example::
-
             await transport.send(AgentId("a2"), b"hello")
         """
         from nest_core.sim.events import Event
@@ -74,9 +66,7 @@ class InMemoryTransport:
 
     async def receive(self) -> tuple[AgentId, bytes]:
         """Not used in Tier 1 — the simulator pushes events to agents.
-
         Example::
-
             # Not applicable in simulation mode
         """
         raise NotImplementedError("Tier 1 transport is push-based via the event queue")
@@ -89,9 +79,7 @@ class InMemoryTransport:
         deliver_at: float | None = None,
     ) -> None:
         """Broadcast to all known agents.
-
         Example::
-
             await transport.broadcast(b"announcement")
         """
         for aid in self.all_agents:

@@ -1,11 +1,8 @@
 import type { NextRequest } from "next/server";
-
 const MAX_SKILLS_BODY_BYTES = 256 * 1024;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 30;
-
 const hits = new Map<string, { count: number; resetAt: number }>();
-
 function clientKey(request: NextRequest): string {
   const forwarded = request.headers.get("x-forwarded-for");
   if (forwarded) {
@@ -13,7 +10,6 @@ function clientKey(request: NextRequest): string {
   }
   return request.headers.get("x-real-ip") || "local";
 }
-
 export function checkSkillsWriteRateLimit(request: NextRequest): Response | null {
   const key = clientKey(request);
   const now = Date.now();
@@ -28,7 +24,6 @@ export function checkSkillsWriteRateLimit(request: NextRequest): Response | null
   }
   return null;
 }
-
 export function requireSkillsWriteAuth(request: NextRequest): Response | null {
   const configured = process.env.NEST_SKILLS_API_KEY?.trim();
   if (!configured) {
@@ -46,7 +41,6 @@ export function requireSkillsWriteAuth(request: NextRequest): Response | null {
   }
   return null;
 }
-
 export async function readSkillsJsonBody(
   request: NextRequest,
 ): Promise<{ body: Record<string, unknown> } | { error: Response }> {

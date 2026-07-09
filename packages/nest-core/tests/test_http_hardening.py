@@ -2,7 +2,6 @@
 """Tests for HTTP config hardening and JwtAuth virtual clock."""
 
 from __future__ import annotations
-
 import pytest
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.http_config import (
@@ -84,7 +83,6 @@ class TestJwtAuthClock:
         token = await auth.issue(AgentId("a1"), ["read"])
         ctx = await auth.verify(token)
         assert ctx.expires_at == 100.0 + 3600
-
         clock["now"] = 5000.0
         with pytest.raises(ValueError, match="expired"):
             await auth.verify(token)

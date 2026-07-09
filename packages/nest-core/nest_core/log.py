@@ -1,14 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Optional structured logging for Nanda Town (enabled via NEST_LOG env var).
-
 Example::
-
     export NEST_LOG=debug
     nest run marketplace
 """
 
 from __future__ import annotations
-
 import logging
 import os
 from typing import Any
@@ -22,12 +19,10 @@ def configure_logging() -> None:
     if _configured:
         return
     _configured = True
-
     level_name = os.environ.get("NEST_LOG", "").strip().lower()
     if not level_name:
         logging.basicConfig(level=logging.WARNING)
         return
-
     level = getattr(logging, level_name.upper(), logging.INFO)
     try:
         import structlog

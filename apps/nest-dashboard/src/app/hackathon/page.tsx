@@ -6,22 +6,18 @@
  * added), a few featured submissions, and a CTA into the layer
  * grid. Server-rendered: reads the static dataset and renders.
  */
-
 import Link from "next/link";
 import { formatLinesAdded, loadDataset } from "@/lib/hackathon";
 import { EmptyState, SubmissionCard } from "@/components/hackathon-card";
 import { HackathonFaq } from "@/components/hackathon-faq";
 import { HackathonPhases } from "@/components/hackathon-phases";
 import { hackathonEvent, hackathonFaqs } from "@/lib/hackathon-event";
-
 export const revalidate = 300;
-
 export const metadata = {
   title: "NandaHack — Nanda Town",
   description:
     "NandaHack: a fully virtual agentic AI hackathon by Project NANDA, HCLTech, and MIT Media Lab. Dates, FAQs, and every submitted protocol and plugin by layer, author, and judge score.",
 };
-
 function Stat({
   label,
   value,
@@ -45,7 +41,6 @@ function Stat({
     </div>
   );
 }
-
 export default async function HackathonLandingPage() {
   const data = await loadDataset();
   const featured = data.submissions
@@ -57,7 +52,6 @@ export default async function HackathonLandingPage() {
       return (b.additions ?? 0) - (a.additions ?? 0);
     })
     .slice(0, 3);
-
   return (
     <div className="bg-cream-100">
       {/* Header */}
@@ -69,7 +63,6 @@ export default async function HackathonLandingPage() {
               <br />
               of <span className="italic text-ink-700">protocols</span>.
             </h1>
-
             <div className="animate-fade-in stagger-2 lg:pt-6 max-w-md">
               <p className="text-[1.1rem] leading-[1.6] text-ink-500">
                 Every plugin and protocol pitched at NandaHack, with
@@ -84,7 +77,6 @@ export default async function HackathonLandingPage() {
               </p>
             </div>
           </div>
-
           <div className="mt-12 flex flex-wrap gap-3 animate-fade-in stagger-3">
             <Link href="/hackathon/layers" className="btn-primary">
               Browse by layer
@@ -111,14 +103,12 @@ export default async function HackathonLandingPage() {
           </div>
         </div>
       </section>
-
       {/* Two phases to join */}
       <section className="border-b border-cream-400/70 bg-cream-50">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-14">
           <HackathonPhases />
         </div>
       </section>
-
       {/* Stats */}
       <section className="border-b border-cream-400/70">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-12 grid grid-cols-2 md:grid-cols-4 gap-10">
@@ -144,7 +134,6 @@ export default async function HackathonLandingPage() {
           />
         </div>
       </section>
-
       {/* Key dates */}
       <section className="border-b border-cream-400/70 bg-cream-50">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-14">
@@ -157,7 +146,6 @@ export default async function HackathonLandingPage() {
               </h2>
             </div>
           </div>
-
           <div className="grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2 lg:grid-cols-3">
             {[
               {
@@ -191,7 +179,6 @@ export default async function HackathonLandingPage() {
           </div>
         </div>
       </section>
-
       {/* Featured */}
       <section>
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-14">
@@ -210,7 +197,6 @@ export default async function HackathonLandingPage() {
               Browse by layer →
             </Link>
           </div>
-
           {featured.length === 0 ? (
             <EmptyState
               title="No submissions yet."
@@ -225,7 +211,6 @@ export default async function HackathonLandingPage() {
           )}
         </div>
       </section>
-
       {/* Footer rail */}
       <section className="border-t border-cream-400/70 bg-cream-50">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-14 grid gap-10 lg:grid-cols-[1fr_2fr] lg:items-start">
@@ -263,7 +248,6 @@ export default async function HackathonLandingPage() {
           </div>
         </div>
       </section>
-
       {/* FAQ */}
       <section id="faq" className="border-t border-cream-400/70 scroll-mt-20">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-16 grid gap-12 lg:grid-cols-[1fr_2fr] lg:items-start">

@@ -1,31 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 """Escrow marketplace scenario -- three buyer/seller/arbiter triples.
-
 Drives the escrow plugin through both the happy path and two dispute paths,
 emitting one structured ``escrow:<kind>:<fields>`` broadcast per state
 transition. The four ``escrow_marketplace`` validators (see
 :mod:`nest_core.validators`) read those broadcasts and confirm:
-
 * every escrow walked a legal state-machine path;
 * every transition was broadcast by the role authorized to perform it;
 * every arbitration verdict stayed in ``[0, 10000]`` bps;
 * no payout happened without a preceding delivery proof.
-
 If the underlying payments plugin lacks the escrow protocol (e.g.
 ``prepaid_credits``), the agents fall back to a plain ``pay()`` and the
 trace will contain **no** ``escrow:*`` events -- which the validators
 report as a failure ("no escrow lifecycle observed"). That is the
 adversarial discrimination the charter asks for.
-
 Example::
-
     agents = escrow_marketplace_factory(config, plugins)
 """
 
 from __future__ import annotations
-
 from typing import Any
-
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, Money, PaymentRef
@@ -36,7 +29,6 @@ _TICK_OPEN = 1.0
 _TICK_DELIVER = 4.0
 _TICK_RESOLVE = 7.0
 _TICK_ARBITRATE = 10.0
-
 _OP_OPEN = b"op:open"
 _OP_DELIVER = b"op:deliver"
 _OP_RESOLVE = b"op:resolve"
@@ -45,7 +37,6 @@ _OP_ARBITRATE = b"op:arbitrate"
 
 def _emit(fields: dict[str, str | int]) -> str:
     """Build a structured ``escrow:<kind>:k=v:...`` broadcast payload.
-
     The colon-separated ``k=v`` form matches the parser in
     :func:`nest_core.validators._parse_escrow_events`.
     """
@@ -56,12 +47,9 @@ def _emit(fields: dict[str, str | int]) -> str:
 
 class BuyerAgent(StateMachineAgent):
     """Opens an escrow, then resolves it as either ``release`` or ``dispute``.
-
     The buyer owns the payer's plugin instance and is the only agent that
     can ``open_escrow`` / ``release`` / ``dispute`` / ``refund``.
-
     Example::
-
         agent = BuyerAgent(
             AgentId("buyer-0"),
             payee=AgentId("seller-0"),
@@ -147,9 +135,7 @@ class BuyerAgent(StateMachineAgent):
 
 class SellerAgent(StateMachineAgent):
     """Posts a delivery proof against ``ref``. Payee-only by construction.
-
     Example::
-
         agent = SellerAgent(AgentId("seller-0"), ref=PaymentRef("e-0"))
     """
 
@@ -173,11 +159,8 @@ class SellerAgent(StateMachineAgent):
 
 class ArbiterAgent(StateMachineAgent):
     """Settles a disputed escrow with a pre-configured ``payee_bps`` verdict.
-
     No-op in the ``happy`` mode (never asked to arbitrate).
-
     Example::
-
         agent = ArbiterAgent(
             AgentId("arbiter-1"),
             ref=PaymentRef("e-1"),
@@ -240,25 +223,20 @@ def escrow_marketplace_factory(
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
     """Build the 9 agents (3 triples) and wire shared per-agent payments.
-
     Each triple's three agents share the same balances + payments +
     escrows dicts (so the vault is a single ledger), but each agent
     holds its own plugin instance keyed by ``self._agent_id``. The
     factory installs them as per-agent overrides via the
     ``_agent_plugins`` channel the runner understands.
-
     For payment plugins that do not accept ``balances`` / ``payments`` /
     ``escrows`` kwargs (e.g. a future plugin with a different ctor),
     the factory falls back to a single shared instance.
-
     Example::
-
         agents = escrow_marketplace_factory(config, plugins)
     """
     payments_cls = plugins["payments"]
     agents: dict[AgentId, StateMachineAgent] = {}
     overrides: dict[AgentId, dict[str, Any]] = {}
-
     # All triples share one global ledger, so a buyer with insufficient
     # balance for triple-2 would propagate naturally; the per-triple amounts
     # below total < the buyer's default 1000.
@@ -295,7 +273,6 @@ def escrow_marketplace_factory(
         seller_id = AgentId(f"seller-{suffix}")
         arbiter_id = AgentId(f"arbiter-{suffix}")
         ref = PaymentRef(f"e-{suffix}")
-
         agents[buyer_id] = BuyerAgent(
             buyer_id,
             payee=seller_id,
@@ -311,9 +288,7 @@ def escrow_marketplace_factory(
             payee_bps=payee_bps,
             mode=mode,
         )
-
         for aid in (buyer_id, seller_id, arbiter_id):
             overrides[aid] = {"payments": _instance(aid)}
-
     plugins["_agent_plugins"] = overrides
     return agents

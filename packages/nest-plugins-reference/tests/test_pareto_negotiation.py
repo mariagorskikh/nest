@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit and property tests for the ParetoNegotiation plugin.
-
 Three property families (Hypothesis):
-
 * **Determinism**, identical construction + identical offer sequence yields an
   identical run (no wall-clock, no RNG).
 * **Monotonic concession**, a single agent's own counter-offer utilities are
@@ -14,10 +12,8 @@ Three property families (Hypothesis):
 """
 
 from __future__ import annotations
-
 import asyncio
 from typing import NamedTuple
-
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -114,7 +110,6 @@ def test_respond_accepts_best_immediately() -> None:
 
 def test_respond_counter_then_accept() -> None:
     """Counters meet the (falling) aspiration and minimize distance; then it accepts.
-
     Range 0..10 on both issues, equal weights, patience 0.9, reservation 0:
     aspiration is 1.0, 0.9, 0.81 on rounds 0, 1, 2. Against the buyer's worst
     offer (10, 10) the only utility>=1.0 bundle is (0, 0); the closest utility>=0.9
@@ -215,7 +210,6 @@ async def _self_play(
     buyer: ParetoNegotiation, seller: ParetoNegotiation, bounds: tuple[int, int, int, int]
 ) -> tuple[tuple[int, int] | None, list[tuple[int, int]]]:
     """Run two agents to settlement; return the agreement (if any) and exchanged bundles.
-
     Each side opens from its best-for-self position, then alternately responds to
     the other's latest offer. An agent either accepts (the offer becomes the
     agreement) or returns a trade-off counter that is recorded and forwarded.
@@ -236,7 +230,6 @@ async def _self_play(
             return None, exchanged
         buyer_last = br.counter_terms
         exchanged.append(_pd(buyer_last))
-
         await seller.offer(ss, buyer_last)
         sr = await seller.respond(ss)
         if sr.accepted:
@@ -271,7 +264,6 @@ def test_determinism(payload: tuple[_Cfg, list[tuple[int, int]]]) -> None:
 @settings(max_examples=200)
 def test_monotonic_concession(cfg: _Cfg) -> None:
     """A seller's own counter-offer utilities are non-increasing (MCP / Zeuthen).
-
     Fed its worst bundle (lowest price, shortest deadline) repeatedly, the seller
     never accepts (its utility for that bundle is 0 < aspiration), so it keeps
     countering; each counter sits on a non-increasing aspiration floor.
@@ -300,7 +292,6 @@ def test_monotonic_concession(cfg: _Cfg) -> None:
 @settings(max_examples=100, deadline=None)
 def test_selfplay_agreement_individually_rational(cfg: _Cfg) -> None:
     """Every settled self-play agreement clears both parties' reservation utility.
-
     An agent only accepts (and only counters with) bundles whose own utility
     meets its aspiration ``reservation + (1 - reservation) * patience ** t``,
     which is bounded below by ``reservation``. So neither side ever agrees to a
@@ -314,7 +305,6 @@ def test_selfplay_agreement_individually_rational(cfg: _Cfg) -> None:
     )
     if agreement is None:
         return  # no settlement reached: individual rationality is vacuous
-
     ap, ad = agreement
     assert buyer.utility(_terms(ap, ad)) >= cfg.reservation - _EPS
     assert seller.utility(_terms(ap, ad)) >= cfg.reservation - _EPS
@@ -337,7 +327,6 @@ _FSJ_SUBOPTIMAL = _Cfg(
 
 def test_fsj_tradeoff_does_not_guarantee_pareto_optimality() -> None:
     """Characterize the boundary: trade-off concession approaches but does not reach Pareto.
-
     Faratin, Sierra & Jennings 2002 show similarity-based trade-off moves raise
     joint gains and *approach* the Pareto frontier, but do not *guarantee* it
     under incomplete information: a Pareto-improving bundle offered early can be
@@ -346,7 +335,6 @@ def test_fsj_tradeoff_does_not_guarantee_pareto_optimality() -> None:
     would require the MCP/Zeuthen optimal-deal search (exponential in the issue
     grid per round); ParetoNegotiation deliberately trades that guarantee for
     tractable, deterministic concession.
-
     This test pins the configuration Hypothesis found and asserts the agreement
     IS dominated by a bundle exchanged earlier in the same session, documenting
     the limit as an intentional design boundary, not a bug. (The end-to-end
@@ -359,7 +347,6 @@ def test_fsj_tradeoff_does_not_guarantee_pareto_optimality() -> None:
         _self_play(buyer, seller, (cfg.plo, cfg.phi, cfg.dlo, cfg.dhi))
     )
     assert agreement is not None, "expected this configuration to settle"
-
     ap, ad = agreement
     ub_star = buyer.utility(_terms(ap, ad))
     us_star = seller.utility(_terms(ap, ad))

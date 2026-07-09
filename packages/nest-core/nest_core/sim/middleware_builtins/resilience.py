@@ -2,9 +2,7 @@
 """Resilience middleware — isolate agent delivery failures."""
 
 from __future__ import annotations
-
 from typing import Any
-
 from nest_core.sim.middleware import DeliveryErrorMiddleware, MessageContext, MessageMiddleware
 
 

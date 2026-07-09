@@ -6,7 +6,6 @@
 
 
 export type Tag = "agent-authored" | "human-authored";
-
 export type LayerKey =
   | "transport"
   | "communication"
@@ -21,14 +20,12 @@ export type LayerKey =
   | "privacy"
   | "datafacts"
   | "unclassified";
-
 export interface SubmissionAuthor {
   handle: string;
   avatar_url: string;
   profile_url: string;
   kind: "agent" | "human";
 }
-
 export interface JudgeScore {
   correctness: number | null;
   test_rigor: number | null;
@@ -39,12 +36,10 @@ export interface JudgeScore {
   total: number | null;
   notes: string | null;
 }
-
 /** Numeric range for a single rubric dimension (judges score 1..5). */
 export const SCORE_DIMENSION_MAX = 5;
 /** Maximum possible total across the six dimensions. */
 export const SCORE_TOTAL_MAX = 30;
-
 export interface Submission {
   id: string;
   pr_number: number;
@@ -63,7 +58,6 @@ export interface Submission {
   score: JudgeScore | null;
   tag: Tag;
 }
-
 export interface LayerStats {
   key: Exclude<LayerKey, "unclassified">;
   label: string;
@@ -72,7 +66,6 @@ export interface LayerStats {
   top_score: number | null;
   is_open: boolean;
 }
-
 export interface MarketplaceStats {
   total_submissions: number;
   unique_participants: number;
@@ -81,14 +74,12 @@ export interface MarketplaceStats {
   total_lines_added: number | null;
   total_files_changed: number | null;
 }
-
 export interface Dataset {
   generated_at: string;
   stats: MarketplaceStats;
   layers: LayerStats[];
   submissions: Submission[];
 }
-
 export const KNOWN_LAYER_KEYS = [
   "transport",
   "communication",

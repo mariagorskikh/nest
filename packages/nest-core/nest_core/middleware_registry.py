@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Middleware registry — resolves middleware names to implementations.
-
 Example::
-
     registry = MiddlewareRegistry()
     cls = registry.resolve("resilience")
     mw = cls(config={})
 """
 
 from __future__ import annotations
-
 import importlib.metadata
 from typing import Any, Protocol, runtime_checkable
 
@@ -19,9 +16,7 @@ class MiddlewareFactory(Protocol):
     """Built-in and third-party middleware factories."""
 
     def __init__(self, *, config: dict[str, Any] | None = None) -> None: ...
-
     async def on_send(self, ctx: Any) -> Any | None: ...
-
     async def on_receive(self, ctx: Any) -> Any | None: ...
 
 
@@ -60,13 +55,11 @@ class MiddlewareRegistry:
                 self._cache[name] = cls
                 return cls
             return cached
-
         builtin = _BUILTINS.get(name)
         if builtin is not None:
             cls = _import_dotted(builtin)
             self._cache[name] = cls
             return cls
-
         msg = f"No middleware found for name={name!r}"
         raise KeyError(msg)
 

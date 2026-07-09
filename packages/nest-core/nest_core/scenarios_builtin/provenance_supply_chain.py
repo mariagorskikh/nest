@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Content-addressed provenance scenario: a diamond data pipeline, then attacks.
-
 The pipeline is a **diamond**, not a line -- the canonical data-lineage shape::
-
                  source-0
                 /        \\
           refine-a      refine-b
@@ -10,20 +8,16 @@ The pipeline is a **diamond**, not a line -- the canonical data-lineage shape::
                aggregate-0   (join: parents = [refine-a, refine-b])
                     |
                  verify-0
-
 Each hop publishes a *dataset* through ``plugins["datafacts"]`` and declares its
 upstream input(s) as provenance parents. ``aggregate-0`` is a join: it waits for
 both refiners and lists both as parents, so the final report's lineage fans back
 out to a single shared root. A verifier that only followed the first parent would
 silently miss half the graph; the walk here is a full breadth-first traversal.
-
 ``verify-0`` plays two roles:
-
 1. **Verifier** -- walks the whole provenance DAG back to the root and reports
    how many distinct datasets it found.
 2. **Attacker** -- using its own identity (never the source's), it runs three
    attacks:
-
    * *Substitution*: republish different content under the source's exact
      ``name``; does it land on the source's URL?
    * *Forged freshness*: republish identical content claiming the source's
@@ -31,7 +25,6 @@ silently miss half the graph; the walk here is a full breadth-first traversal.
      outsider's signature?
    * *Broken provenance*: publish a dataset whose declared parent was never
      published; is it rejected?
-
 Every step is reported as a ``|``-delimited trace message (``:`` collides with
 the ``df://`` URL scheme). ``validate_trace(..., "provenance_supply_chain")``
 reads exactly these messages, so the one scenario YAML demonstrates both
@@ -39,17 +32,13 @@ directions: point ``layers.datafacts`` at ``cid_facts`` and every adversarial
 validator passes; point it at ``datafacts_v1`` and they fail, because that
 reference plugin has no content-addressing, no signed freshness, and no
 provenance concept at all.
-
 Example::
-
     agents = provenance_supply_chain_factory(config, plugins)
 """
 
 from __future__ import annotations
-
 import inspect
 from typing import Any, cast
-
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, DatasetMetadata
@@ -59,9 +48,7 @@ _PHANTOM_PARENT = "df://sha256-" + "0" * 64
 
 def _parents_of(meta: DatasetMetadata) -> list[str]:
     """Read declared provenance parents off a dataset as a plain list of URL strings.
-
     Example::
-
         parents = _parents_of(meta)
     """
     raw: object = meta.metadata.get("parents", [])
@@ -72,9 +59,7 @@ def _parents_of(meta: DatasetMetadata) -> list[str]:
 
 class SourceAgent(StateMachineAgent):
     """Publishes the root dataset (no parents) and fans it out to both refiners.
-
     Example::
-
         source = SourceAgent(AgentId("source-0"),
                              refiners=[AgentId("refine-a"), AgentId("refine-b")],
                              name="raw_sensor_readings", description="batch-A")
@@ -90,9 +75,7 @@ class SourceAgent(StateMachineAgent):
 
     async def on_start(self, ctx: AgentContext) -> None:
         """Publish the root dataset and send its URL to every refiner.
-
         Example::
-
             await source.on_start(ctx)
         """
         facts = ctx.plugins.get("datafacts")
@@ -106,9 +89,7 @@ class SourceAgent(StateMachineAgent):
 
 class RefineAgent(StateMachineAgent):
     """Publishes a derived dataset parented on the source, forwards to the aggregator.
-
     Example::
-
         refine = RefineAgent(AgentId("refine-a"), aggregator=AgentId("aggregate-0"),
                              name="cleaned_a")
     """
@@ -120,9 +101,7 @@ class RefineAgent(StateMachineAgent):
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
         """Publish a dataset parented on the source URL and forward it to the aggregator.
-
         Example::
-
             await refine.on_message(ctx, AgentId("source-0"), b"lineage|df://sha256-x|source-0")
         """
         msg = payload.decode("utf-8", errors="replace")
@@ -144,13 +123,10 @@ class RefineAgent(StateMachineAgent):
 
 class AggregateAgent(StateMachineAgent):
     """Joins both refiners into one dataset -- the diamond's closure -- and forwards it.
-
     A join lists *both* upstream datasets as parents, so the report's lineage
     fans back out to the shared root. This is what forces a verifier to walk
     every parent rather than a single spine.
-
     Example::
-
         agg = AggregateAgent(AgentId("aggregate-0"), downstream=AgentId("verify-0"),
                              name="aggregated_report", expected_parents=2)
     """
@@ -166,9 +142,7 @@ class AggregateAgent(StateMachineAgent):
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
         """Collect refiner inputs and, once both arrive, publish + forward the join.
-
         Example::
-
             await agg.on_message(ctx, AgentId("refine-a"), b"lineage|df://sha256-a|refine-a")
         """
         msg = payload.decode("utf-8", errors="replace")
@@ -192,9 +166,7 @@ class AggregateAgent(StateMachineAgent):
 
 class VerifyAndAttackAgent(StateMachineAgent):
     """Walks the provenance DAG, then runs three attacks as an outsider.
-
     Example::
-
         verify = VerifyAndAttackAgent(AgentId("verify-0"), source_id=AgentId("source-0"),
                                       source_name="raw_sensor_readings")
     """
@@ -206,9 +178,7 @@ class VerifyAndAttackAgent(StateMachineAgent):
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
         """Walk the lineage from the received leaf, then attempt the three attacks.
-
         Example::
-
             await verify.on_message(ctx, AgentId("aggregate-0"), b"lineage|df://sha256-x|aggregate-0")
         """
         msg = payload.decode("utf-8", errors="replace")
@@ -229,7 +199,6 @@ class VerifyAndAttackAgent(StateMachineAgent):
 
     async def _verify_chain(self, ctx: AgentContext, facts: Any, leaf_url: str) -> str | None:
         """Full breadth-first walk of the provenance DAG from the leaf to its root.
-
         Visits *every* parent of every node (not just ``parents[0]``), de-dupes
         shared ancestors so a diamond is counted once, reports the number of
         distinct datasets in the lineage, and returns the single root (a node
@@ -294,7 +263,6 @@ def _build_datafacts_handles(
     all_ids: list[AgentId],
 ) -> dict[AgentId, Any]:
     """Instantiate one datafacts handle per agent, sharing state where possible.
-
     Plugins that take an ``Identity`` plus ``datasets``/``proofs``/``clock``
     keyword arguments (e.g. ``cid_facts``) get one handle per agent over the
     same shared dicts and logical clock -- mirroring how the reference
@@ -302,9 +270,7 @@ def _build_datafacts_handles(
     one shared ledger. Plugins with a no-argument constructor (e.g.
     ``datafacts_v1``) get a single shared instance, already correct for them
     since their storage is one dict.
-
     Example::
-
         handles = _build_datafacts_handles(CidFacts, identities, all_ids)
     """
     shared_datasets: dict[Any, Any] = {}
@@ -312,12 +278,10 @@ def _build_datafacts_handles(
     shared_clock: Any = None
     shared_instance: Any = None
     handles: dict[AgentId, Any] = {}
-
     init_params = inspect.signature(datafacts_cls.__init__).parameters
     accepts_identity = "identity" in init_params or any(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in init_params.values()
     )
-
     for aid in all_ids:
         if accepts_identity:
             kwargs: dict[str, Any] = {"datasets": shared_datasets, "proofs": shared_proofs}
@@ -338,13 +302,10 @@ def provenance_supply_chain_factory(
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
     """Create the diamond pipeline: source -> {refine-a, refine-b} -> aggregate -> verify.
-
     Instantiates per-agent identity instances (so each hop signs as itself) and
     wires the resolved ``datafacts`` plugin class into per-agent handles via
     :func:`_build_datafacts_handles`.
-
     Example::
-
         agents = provenance_supply_chain_factory(config, plugins)
     """
     source_id = AgentId("source-0")
@@ -353,7 +314,6 @@ def provenance_supply_chain_factory(
     aggregate_id = AgentId("aggregate-0")
     verify_id = AgentId("verify-0")
     all_ids = [source_id, refine_a, refine_b, aggregate_id, verify_id]
-
     identity_cls = plugins.get("identity")
     identities: dict[AgentId, Any] = {}
     if identity_cls is not None and isinstance(identity_cls, type):
@@ -363,7 +323,6 @@ def provenance_supply_chain_factory(
             for peer_id, peer_ident in identities.items():
                 if peer_id != aid:
                     ident.register_peer(peer_id, peer_ident.public_key)
-
     agent_plugins: dict[AgentId, dict[str, Any]] = plugins.setdefault("_agent_plugins", {})
     datafacts_cls = plugins.get("datafacts")
     if datafacts_cls is not None and isinstance(datafacts_cls, type) and identities:
@@ -372,7 +331,6 @@ def provenance_supply_chain_factory(
             agent_plugins.setdefault(aid, {})["datafacts"] = handle
     plugins.pop("datafacts", None)
     plugins.pop("identity", None)
-
     source_name = "raw_sensor_readings"
     return {
         source_id: SourceAgent(

@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Example-based + adversarial tests for the ``hybrid_x25519`` privacy plugin.
-
 Three layers of coverage (mirrors the gossip plugin's test structure):
-
 1. **Unit / round-trip** — encryption to one and many recipients, selective
    disclosure prove/verify, and the structural guarantees (plaintext never on
    the wire, undisclosed fields never in the proof).
@@ -15,14 +13,11 @@ Three layers of coverage (mirrors the gossip plugin's test structure):
    learns nothing, yet the auctioneer recovers every bid and resolves the
    winner. This is the ``scenarios/sealed_bid_with_privacy.yaml`` story in
    runnable form.
-
 Example::
-
     pytest packages/nest-plugins-reference/tests/test_hybrid_x25519.py
 """
 
 from __future__ import annotations
-
 import pytest
 from nest_core.types import AgentId, Statement, Witness
 from nest_plugins_reference.privacy.hybrid_x25519 import (
@@ -266,13 +261,11 @@ class TestSealedBidWithPrivacy:
         bidders = {name: _mk(name) for name in bids}
         for plugin in bidders.values():
             plugin.register_peer(AgentId("auctioneer"), auctioneer.public_key)
-
         # Each bidder seals its bid to the auctioneer only.
         envelopes: dict[str, bytes] = {}
         for name, plugin in bidders.items():
             secret = f"bid:{bids[name]}".encode()
             envelopes[name] = await plugin.encrypt(secret, [AgentId("auctioneer")])
-
         # An eavesdropper watching the wire learns nothing about any bid.
         snoop = _mk("snoop")
         for name, env in envelopes.items():
@@ -281,7 +274,6 @@ class TestSealedBidWithPrivacy:
             )
             assert report.passed, report.detail
             assert str(bids[name]).encode() not in env
-
         # The auctioneer alone decrypts every bid and resolves a second-price win.
         decoded = {
             name: int((await auctioneer.decrypt(env)).split(b":")[1])

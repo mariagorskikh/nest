@@ -29,16 +29,13 @@
   --silver: #6b7280;
   --bronze: #a0522d;
 }
-
 * { margin: 0; padding: 0; box-sizing: border-box; }
-
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
 }
-
 /* Header */
 .header {
   background: #111111;
@@ -56,7 +53,6 @@ body {
 }
 .header h1 span { color: var(--red-light); }
 .header-meta { font-size: 13px; color: #888; }
-
 /* Upload */
 .upload-container {
   display: flex;
@@ -96,11 +92,9 @@ body {
 }
 .upload-zone .btn:hover { background: var(--red-light); }
 .upload-zone input[type="file"] { display: none; }
-
 /* Dashboard */
 .dashboard { display: none; }
 .dashboard.active { display: block; padding-bottom: 48px; }
-
 /* Summary cards */
 .summary-row {
   display: grid;
@@ -127,7 +121,6 @@ body {
 .card .value { font-size: 24px; font-weight: 700; color: var(--text); }
 .card .value.red { color: var(--red); }
 .card .value.green { color: var(--green); }
-
 /* Tabs */
 .tabs-container { padding: 0 32px; margin-top: 4px; }
 .tabs {
@@ -148,10 +141,8 @@ body {
 }
 .tab:hover { color: var(--text-secondary); }
 .tab.active { color: var(--red); border-bottom-color: var(--red); }
-
 .tab-panel { display: none; padding: 20px 0; }
 .tab-panel.active { display: block; }
-
 /* Containers */
 .panel-box {
   background: var(--bg-card);
@@ -161,7 +152,6 @@ body {
   overflow: hidden;
 }
 .panel-box svg { display: block; }
-
 /* Legend */
 .legend {
   display: flex;
@@ -178,12 +168,10 @@ body {
   font-weight: 500;
 }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
-
 /* Timeline */
 .timeline-event { cursor: pointer; }
 .timeline-event circle { transition: r 0.12s; }
 .timeline-event:hover circle { r: 6; }
-
 /* Tooltip */
 .tooltip {
   position: fixed;
@@ -208,7 +196,6 @@ body {
 }
 .tooltip .tt-row { color: #ccc; }
 .tooltip .tt-row b { color: #fff; }
-
 /* Graph */
 .graph-node text {
   fill: var(--text);
@@ -216,7 +203,6 @@ body {
   font-weight: 600;
   pointer-events: none;
 }
-
 /* Table */
 .table-wrapper { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
@@ -238,7 +224,6 @@ th:hover { color: var(--text-secondary); }
 th .sort-arrow { margin-left: 4px; font-size: 10px; }
 td { border-bottom: 1px solid var(--border-light); color: var(--text-secondary); }
 tr:hover td { background: var(--red-bg); }
-
 /* Metrics */
 .metrics-grid {
   display: grid;
@@ -262,7 +247,6 @@ tr:hover td { background: var(--red-bg); }
 }
 .metric-card .metric-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
 .metric-card .metric-detail { font-size: 12px; color: var(--text-muted); }
-
 /* Benchmark & Leaderboard */
 .benchmark-section { margin: 0 32px; }
 .benchmark-header {
@@ -295,7 +279,6 @@ tr:hover td { background: var(--red-bg); }
   border-color: var(--red);
 }
 .btn-sm.primary:hover { background: var(--red-light); }
-
 /* Leaderboard */
 .leaderboard-table { width: 100%; border-collapse: collapse; }
 .leaderboard-table th {
@@ -356,7 +339,6 @@ tr:hover td { background: var(--red-bg); }
 .badge-pass { background: #dcfce7; color: var(--green); }
 .badge-warn { background: #fef9c3; color: var(--gold); }
 .badge-fail { background: #fee2e2; color: var(--red); }
-
 /* Compare panel */
 .compare-grid {
   display: grid;
@@ -388,12 +370,10 @@ tr:hover td { background: var(--red-bg); }
 .compare-value { font-weight: 600; }
 .compare-better { color: var(--green); }
 .compare-worse { color: var(--red); }
-
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-alt); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
 @media (max-width: 768px) {
   .summary-row { grid-template-columns: repeat(2, 1fr); }
   .compare-grid { grid-template-columns: 1fr; }
@@ -404,12 +384,10 @@ tr:hover td { background: var(--red-bg); }
 </style>
 </head>
 <body>
-
 <div class="header">
   <h1><span>Nanda Town</span> Dashboard</h1>
   <div class="header-meta" id="header-meta"></div>
 </div>
-
 <!-- Upload -->
 <div class="upload-container" id="upload-screen">
   <div class="upload-zone" id="drop-zone">
@@ -419,11 +397,9 @@ tr:hover td { background: var(--red-bg); }
     <input type="file" id="file-input" accept=".jsonl,.json,.ndjson" multiple>
   </div>
 </div>
-
 <!-- Dashboard -->
 <div class="dashboard" id="dashboard">
   <div class="summary-row" id="summary-cards"></div>
-
   <div class="legend">
     <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div> Send</div>
     <div class="legend-item"><div class="legend-dot" style="background:var(--blue)"></div> Receive</div>
@@ -431,7 +407,6 @@ tr:hover td { background: var(--red-bg); }
     <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div> Broadcast</div>
     <div class="legend-item"><div class="legend-dot" style="background:var(--text-muted)"></div> Start / Stop</div>
   </div>
-
   <div class="tabs-container">
     <div class="tabs">
       <div class="tab active" data-tab="timeline">Timeline</div>
@@ -442,15 +417,12 @@ tr:hover td { background: var(--red-bg); }
       <div class="tab" data-tab="leaderboard">Leaderboard</div>
     </div>
   </div>
-
   <div class="tab-panel active" id="panel-timeline">
     <div class="panel-box" id="timeline-container"></div>
   </div>
-
   <div class="tab-panel" id="panel-graph">
     <div class="panel-box" id="graph-container"></div>
   </div>
-
   <div class="tab-panel" id="panel-table">
     <div class="panel-box">
       <div class="table-wrapper">
@@ -458,26 +430,20 @@ tr:hover td { background: var(--red-bg); }
       </div>
     </div>
   </div>
-
   <div class="tab-panel" id="panel-metrics">
     <div class="metrics-grid" id="metrics-grid"></div>
   </div>
-
   <div class="tab-panel" id="panel-benchmark">
     <div class="benchmark-section" id="benchmark-section"></div>
   </div>
-
   <div class="tab-panel" id="panel-leaderboard">
     <div class="benchmark-section" id="leaderboard-section"></div>
   </div>
 </div>
-
 <div class="tooltip" id="tooltip"></div>
-
 <script>
 (function() {
   "use strict";
-
   const COLORS = {
     send: "#1a7a3a",
     receive: "#2563eb",
@@ -486,15 +452,12 @@ tr:hover td { background: var(--red-bg); }
     start: "#999999",
     stop: "#999999"
   };
-
   let parsedTrace = null;
   const allRuns = [];
-
   // ── File handling ──
   const dropZone = document.getElementById("drop-zone");
   const fileInput = document.getElementById("file-input");
   const browseBtn = document.getElementById("browse-btn");
-
   browseBtn.addEventListener("click", e => { e.stopPropagation(); fileInput.click(); });
   dropZone.addEventListener("click", () => fileInput.click());
   dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
@@ -507,18 +470,15 @@ tr:hover td { background: var(--red-bg); }
   fileInput.addEventListener("change", () => {
     for (const f of fileInput.files) loadFile(f);
   });
-
   function loadFile(file) {
     const reader = new FileReader();
     reader.onload = e => parseAndRender(e.target.result, file.name);
     reader.readAsText(file);
   }
-
   const INJECTED_TRACE = "__NEST_TRACE_DATA__";
   if (INJECTED_TRACE !== "__NEST_" + "TRACE_DATA__") {
     try { parseAndRender(INJECTED_TRACE, "injected-trace.jsonl"); } catch(e) {}
   }
-
   async function parseAndRender(text, filename) {
     const lines = text.trim().split("\n").filter(l => l.trim());
     const events = [];
@@ -533,21 +493,17 @@ tr:hover td { background: var(--red-bg); }
       }
     }
     if (!events.length) { alert("No valid events found."); return; }
-
     const trace = analyzeTrace(events);
     trace.filename = filename;
     trace.timestamp = new Date().toISOString();
-
     allRuns.push(trace);
     parsedTrace = trace;
-
     document.getElementById("upload-screen").style.display = "none";
     document.getElementById("dashboard").classList.add("active");
     document.getElementById("header-meta").textContent =
       filename + " — " + events.length + " events";
     renderAll();
   }
-
   // ── Analysis ──
   function analyzeTrace(events) {
     const agents = new Set();
@@ -555,7 +511,6 @@ tr:hover td { background: var(--red-bg); }
     let sends = 0, receives = 0, dropped = 0, broadcasts = 0;
     let minTs = Infinity, maxTs = -Infinity;
     const correlations = {};
-
     for (const ev of events) {
       const a = ev.agent;
       agents.add(a);
@@ -568,32 +523,27 @@ tr:hover td { background: var(--red-bg); }
       if (ev.ts > s.lastTs) s.lastTs = ev.ts;
       if (ev.ts < minTs) minTs = ev.ts;
       if (ev.ts > maxTs) maxTs = ev.ts;
-
       if (ev.kind === "send") { sends++; s.sends++; }
       else if (ev.kind === "receive") { receives++; s.receives++; }
       else if (ev.kind === "dropped") { dropped++; s.dropped++; }
       else if (ev.kind === "broadcast") { broadcasts++; s.broadcasts++; }
-
       if (ev.corr) {
         if (!correlations[ev.corr]) correlations[ev.corr] = [];
         correlations[ev.corr].push(ev);
       }
     }
-
     const latencies = [];
     for (const evs of Object.values(correlations)) {
       const se = evs.find(e => e.kind === "send");
       const re = evs.find(e => e.kind === "receive");
       if (se && re) latencies.push(re.ts - se.ts);
     }
-
     const totalMessages = sends + broadcasts;
     const deliveredMessages = receives;
     const successRate = totalMessages > 0 ? deliveredMessages / totalMessages : 1;
     const meanLatency = latencies.length > 0 ? latencies.reduce((a,b)=>a+b,0)/latencies.length : 0;
     const duration = maxTs - minTs;
     const throughput = duration > 0 ? totalMessages / duration : 0;
-
     const edges = {};
     for (const ev of events) {
       if (ev.kind === "send" && ev.to) {
@@ -601,9 +551,7 @@ tr:hover td { background: var(--red-bg); }
         edges[key] = (edges[key] || 0) + 1;
       }
     }
-
     const score = computeScore(successRate, meanLatency, throughput, dropped, totalMessages);
-
     return {
       events, agents: [...agents].sort(), agentStats, correlations,
       sends, receives, dropped, broadcasts,
@@ -612,7 +560,6 @@ tr:hover td { background: var(--red-bg); }
       edges, totalMessages, deliveredMessages, score
     };
   }
-
   // Score weights: delivery 40%, latency 20%, throughput 20%, drop penalty 20%.
   function computeScore(successRate, meanLatency, throughput, dropped, total) {
     const sr = successRate * 40;
@@ -621,13 +568,11 @@ tr:hover td { background: var(--red-bg); }
     const dr = total > 0 ? Math.max(0, 20 - (dropped / total) * 100) : 20;
     return Math.round(Math.min(100, sr + lat + tp + dr));
   }
-
   function percentile(arr, p) {
     if (!arr.length) return 0;
     const sorted = [...arr].sort((a, b) => a - b);
     return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)];
   }
-
   // ── Render ──
   function renderAll() {
     renderSummaryCards();
@@ -638,7 +583,6 @@ tr:hover td { background: var(--red-bg); }
     renderBenchmark();
     renderLeaderboard();
   }
-
   function renderSummaryCards() {
     const p = parsedTrace;
     const cards = [
@@ -654,7 +598,6 @@ tr:hover td { background: var(--red-bg); }
       `<div class="card"><div class="label">${c.label}</div><div class="value ${c.cls||''}">${c.value}</div></div>`
     ).join("");
   }
-
   // ── Tooltip ──
   const tooltip = document.getElementById("tooltip");
   function showTooltip(ev, x, y) {
@@ -676,55 +619,46 @@ tr:hover td { background: var(--red-bg); }
     tooltip.style.top = top + "px";
   }
   function hideTooltip() { tooltip.style.display = "none"; }
-
   // ── Timeline ──
   function renderTimeline() {
     const container = document.getElementById("timeline-container");
     container.innerHTML = "";
     const p = parsedTrace;
     const agents = p.agents;
-
     const margin = { top: 30, right: 30, bottom: 40, left: 110 };
     const rowH = Math.max(22, Math.min(34, 600/agents.length));
     const height = margin.top + margin.bottom + agents.length*rowH;
     const width = Math.max(800, container.clientWidth || 800);
     const innerW = width - margin.left - margin.right;
     const innerH = height - margin.top - margin.bottom;
-
     const svg = d3.select(container).append("svg")
       .attr("width", width).attr("height", height);
     const g = svg.append("g").attr("transform",
       `translate(${margin.left},${margin.top})`);
-
     const xScale = d3.scaleLinear().domain([p.minTs, p.maxTs]).range([0, innerW]);
     const yScale = d3.scaleBand().domain(agents).range([0, innerH]).padding(0.3);
-
     // Grid
     g.selectAll(".grid").data(xScale.ticks(15)).enter()
       .append("line")
       .attr("x1", d=>xScale(d)).attr("x2", d=>xScale(d))
       .attr("y1", 0).attr("y2", innerH)
       .attr("stroke", "#e5e5e5").attr("stroke-opacity", 0.7);
-
     // Agent rows
     g.selectAll(".row").data(agents).enter()
       .append("rect")
       .attr("x", 0).attr("y", d=>yScale(d))
       .attr("width", innerW).attr("height", yScale.bandwidth())
       .attr("fill", (d,i) => i%2===0 ? "#fafafa" : "transparent");
-
     // Axes
     g.append("g").attr("transform", `translate(0,${innerH})`)
       .call(d3.axisBottom(xScale).ticks(15).tickFormat(d=>d+"t"))
       .selectAll("text,line,path")
       .attr("fill", "#999").attr("stroke", "#999");
-
     g.append("g").call(d3.axisLeft(yScale))
       .selectAll("text").attr("fill", "#555")
       .style("font-size", "11px").style("font-weight", "500");
     g.select(".domain").remove();
     g.selectAll(".tick line").remove();
-
     // Correlation lines
     for (const evs of Object.values(p.correlations)) {
       const se = evs.find(e => e.kind==="send"||e.kind==="broadcast");
@@ -748,7 +682,6 @@ tr:hover td { background: var(--red-bg); }
           .attr("stroke-dasharray", "4,3").attr("stroke-opacity", 0.5);
       }
     }
-
     // Dots
     const maxDots = 10000;
     let display = p.events;
@@ -758,7 +691,6 @@ tr:hover td { background: var(--red-bg); }
       const step = Math.ceil(rest.length / (maxDots - imp.length));
       display = imp.concat(rest.filter((_, i) => i%step===0));
     }
-
     g.selectAll(".timeline-event").data(display).enter()
       .append("g").attr("class", "timeline-event")
       .attr("transform", d =>
@@ -778,21 +710,16 @@ tr:hover td { background: var(--red-bg); }
       .on("mousemove", (event, d) => showTooltip(d, event.clientX, event.clientY))
       .on("mouseout", hideTooltip);
   }
-
   const var_red = "#8B0000";
-
   // ── Graph ──
   function renderGraph() {
     const container = document.getElementById("graph-container");
     container.innerHTML = "";
     const p = parsedTrace;
-
     const width = container.clientWidth || 800;
     const height = Math.max(500, Math.min(700, p.agents.length*35));
-
     const svg = d3.select(container).append("svg")
       .attr("width", width).attr("height", height);
-
     svg.append("defs").append("marker")
       .attr("id", "arrow").attr("viewBox", "0 -5 10 10")
       .attr("refX", 22).attr("refY", 0)
@@ -800,7 +727,6 @@ tr:hover td { background: var(--red-bg); }
       .attr("orient", "auto")
       .append("path").attr("d", "M0,-5L10,0L0,5")
       .attr("fill", var_red);
-
     const totalByAgent = {};
     for (const a of p.agents) {
       const s = p.agentStats[a];
@@ -811,7 +737,6 @@ tr:hover td { background: var(--red-bg); }
       id: a, total: totalByAgent[a],
       r: Math.max(14, Math.min(28, 14+(totalByAgent[a]/maxTotal)*14))
     }));
-
     const links = [];
     const maxEdge = Math.max(1, ...Object.values(p.edges));
     for (const [key, count] of Object.entries(p.edges)) {
@@ -819,19 +744,16 @@ tr:hover td { background: var(--red-bg); }
       links.push({ source: src, target: tgt, count,
         width: Math.max(1, (count/maxEdge)*5) });
     }
-
     const sim = d3.forceSimulation(nodes)
       .force("link", d3.forceLink(links).id(d=>d.id).distance(90))
       .force("charge", d3.forceManyBody().strength(-180))
       .force("center", d3.forceCenter(width/2, height/2))
       .force("collision", d3.forceCollide().radius(d=>d.r+8));
-
     const link = svg.selectAll(".link").data(links).enter()
       .append("line")
       .attr("stroke", var_red).attr("stroke-opacity", 0.3)
       .attr("stroke-width", d=>d.width)
       .attr("marker-end", "url(#arrow)");
-
     const node = svg.selectAll(".node").data(nodes).enter()
       .append("g").attr("class", "graph-node")
       .call(d3.drag()
@@ -839,20 +761,17 @@ tr:hover td { background: var(--red-bg); }
         .on("drag", (e,d) => { d.fx=e.x; d.fy=e.y; })
         .on("end", (e,d) => { if (!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; })
       );
-
     node.append("circle").attr("r", d=>d.r)
       .attr("fill", "rgba(139,0,0,0.08)")
       .attr("stroke", var_red).attr("stroke-width", 1.5);
     node.append("text").attr("dy", "0.35em")
       .attr("text-anchor", "middle").text(d=>d.id);
-
     sim.on("tick", () => {
       link.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
         .attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);
       node.attr("transform", d=>`translate(${d.x},${d.y})`);
     });
   }
-
   // ── Table ──
   let sortCol = "agent", sortAsc = true;
   function renderTable() {
@@ -863,13 +782,11 @@ tr:hover td { background: var(--red-bg); }
       {key:"dropped",label:"Dropped"},{key:"firstTs",label:"First Active"},
       {key:"lastTs",label:"Last Active"}
     ];
-
     const thead = document.querySelector("#agent-table thead tr");
     thead.innerHTML = cols.map(c => {
       const arrow = sortCol===c.key ? (sortAsc?" ▲":" ▼") : "";
       return `<th data-col="${c.key}">${c.label}<span class="sort-arrow">${arrow}</span></th>`;
     }).join("");
-
     let rows = p.agents.map(a => {
       const s = p.agentStats[a];
       return {agent:a,...s};
@@ -879,7 +796,6 @@ tr:hover td { background: var(--red-bg); }
       if (typeof va==="string") { va=va.toLowerCase(); vb=vb.toLowerCase(); }
       return (va<vb?-1:va>vb?1:0) * (sortAsc?1:-1);
     });
-
     document.querySelector("#agent-table tbody").innerHTML = rows.map(r =>
       `<tr>
         <td style="font-weight:600;color:var(--text)">${r.agent}</td>
@@ -890,7 +806,6 @@ tr:hover td { background: var(--red-bg); }
         <td>${r.firstTs}</td><td>${r.lastTs}</td>
       </tr>`
     ).join("");
-
     thead.querySelectorAll("th").forEach(th => {
       th.addEventListener("click", () => {
         const c = th.dataset.col;
@@ -900,14 +815,12 @@ tr:hover td { background: var(--red-bg); }
       });
     });
   }
-
   // ── Metrics ──
   function renderMetrics() {
     const p = parsedTrace;
     const p50 = percentile(p.latencies, 0.5);
     const p95 = percentile(p.latencies, 0.95);
     const p99 = percentile(p.latencies, 0.99);
-
     const metrics = [
       { title:"Success Rate", value:(p.successRate*100).toFixed(1)+"%",
         color: p.successRate>=0.9?"var(--green)":p.successRate>=0.7?"var(--gold)":"var(--red)",
@@ -926,7 +839,6 @@ tr:hover td { background: var(--red-bg); }
         color: p.score>=80?"var(--green)":p.score>=50?"var(--gold)":"var(--red)",
         detail:"Composite of success rate, latency, throughput, and drops" }
     ];
-
     document.getElementById("metrics-grid").innerHTML = metrics.map(m =>
       `<div class="metric-card">
         <div class="metric-title">${m.title}</div>
@@ -935,16 +847,13 @@ tr:hover td { background: var(--red-bg); }
       </div>`
     ).join("");
   }
-
   // ── Benchmark ──
   function renderBenchmark() {
     const section = document.getElementById("benchmark-section");
     const p = parsedTrace;
     if (!p) return;
-
     const grade = p.score>=90?"A":p.score>=80?"B":p.score>=70?"C":p.score>=50?"D":"F";
     const gradeColor = p.score>=70?"var(--green)":p.score>=50?"var(--gold)":"var(--red)";
-
     let compareHtml = "";
     if (allRuns.length >= 2) {
       const prev = allRuns[allRuns.length - 2];
@@ -984,7 +893,6 @@ tr:hover td { background: var(--red-bg); }
           </div>
         </div>`;
     }
-
     section.innerHTML = `
       <div class="benchmark-header">
         <h3>Benchmark Report</h3>
@@ -1028,22 +936,18 @@ tr:hover td { background: var(--red-bg); }
       </div>
       ${compareHtml}`;
   }
-
   // ── Leaderboard ──
   function renderLeaderboard() {
     const section = document.getElementById("leaderboard-section");
     if (!allRuns.length) return;
-
     const sorted = [...allRuns].sort((a,b) => b.score - a.score);
     const maxScore = Math.max(1, sorted[0].score);
-
     const rows = sorted.map((run, i) => {
       const rank = i + 1;
       const rankCls = rank<=3 ? `rank-${rank}` : "rank-other";
       const badge = run.score>=80?"badge-pass":run.score>=50?"badge-warn":"badge-fail";
       const badgeText = run.score>=80?"PASS":run.score>=50?"WARN":"FAIL";
       const ts = run.timestamp ? new Date(run.timestamp).toLocaleString() : "";
-
       return `<tr>
         <td><span class="rank-badge ${rankCls}">${rank}</span></td>
         <td>
@@ -1061,7 +965,6 @@ tr:hover td { background: var(--red-bg); }
         <td><span class="badge ${badge}">${badgeText}</span></td>
       </tr>`;
     }).join("");
-
     section.innerHTML = `
       <div class="benchmark-header">
         <h3>Leaderboard</h3>
@@ -1094,11 +997,9 @@ tr:hover td { background: var(--red-bg); }
         ${allRuns.length} run${allRuns.length>1?"s":""} loaded ·
         Load multiple trace files to compare and rank
       </div>`;
-
     const exportBtn = document.getElementById("export-btn");
     if (exportBtn) exportBtn.addEventListener("click", exportCSV);
   }
-
   function exportCSV() {
     const header = "rank,filename,score,success_rate,mean_latency,throughput,dropped,agents,events\n";
     const sorted = [...allRuns].sort((a,b) => b.score - a.score);
@@ -1111,7 +1012,6 @@ tr:hover td { background: var(--red-bg); }
     a.download = "nest-leaderboard.csv";
     a.click();
   }
-
   // ── Tab switching ──
   document.querySelectorAll(".tab").forEach(tab => {
     tab.addEventListener("click", () => {
@@ -1122,7 +1022,6 @@ tr:hover td { background: var(--red-bg); }
       if (tab.dataset.tab === "graph" && parsedTrace) renderGraph();
     });
   });
-
   window.__nestLoadTrace = parseAndRender;
 })();
 </script>

@@ -1,19 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Plugin registry — resolves plugin names to implementations.
-
 Discovers plugins via entry points and provides built-in defaults for every layer.
-
 Example::
-
     registry = PluginRegistry()
     transport_cls = registry.resolve("transport", "in_memory")
 """
 
 from __future__ import annotations
-
 import importlib.metadata
 from typing import Any, Literal, TypeVar, overload
-
 from nest_core.layers.comms import CommsProtocol
 from nest_core.layers.coordination import Coordination
 from nest_core.layers.datafacts import DataFacts
@@ -27,7 +22,6 @@ from nest_core.layers.transport import Transport
 from nest_core.layers.trust import Trust
 
 T = TypeVar("T")
-
 # Built-in reference plugins keyed by (layer, name)
 _REF = "nest_plugins_reference"
 _BUILTINS: dict[tuple[str, str], str] = {
@@ -79,9 +73,7 @@ def _import_dotted(path: str) -> Any:
 
 class PluginRegistry:
     """Resolves plugin names to their implementations.
-
     Example::
-
         reg = PluginRegistry()
         cls = reg.resolve("payments", "prepaid_credits")
     """
@@ -113,45 +105,31 @@ class PluginRegistry:
 
     @overload
     def resolve(self, layer: Literal["transport"], name: str) -> type[Transport]: ...
-
     @overload
     def resolve(self, layer: Literal["comms"], name: str) -> type[CommsProtocol]: ...
-
     @overload
     def resolve(self, layer: Literal["identity"], name: str) -> type[Identity]: ...
-
     @overload
     def resolve(self, layer: Literal["registry"], name: str) -> type[Registry]: ...
-
     @overload
     def resolve(self, layer: Literal["trust"], name: str) -> type[Trust]: ...
-
     @overload
     def resolve(self, layer: Literal["payments"], name: str) -> type[Payments]: ...
-
     @overload
     def resolve(self, layer: Literal["coordination"], name: str) -> type[Coordination]: ...
-
     @overload
     def resolve(self, layer: Literal["negotiation"], name: str) -> type[Negotiation]: ...
-
     @overload
     def resolve(self, layer: Literal["memory"], name: str) -> type[Memory]: ...
-
     @overload
     def resolve(self, layer: Literal["privacy"], name: str) -> type[Privacy]: ...
-
     @overload
     def resolve(self, layer: Literal["datafacts"], name: str) -> type[DataFacts]: ...
-
     @overload
     def resolve(self, layer: str, name: str) -> Any: ...
-
     def resolve(self, layer: str, name: str) -> Any:
         """Resolve a (layer, name) pair to a plugin class.
-
         Example::
-
             cls = registry.resolve("transport", "in_memory")
         """
         key = (layer, name)
@@ -162,21 +140,17 @@ class PluginRegistry:
                 self._cache[key] = cls
                 return cls
             return cached
-
         builtin = _BUILTINS.get(key)
         if builtin is not None:
             cls = _import_dotted(builtin)
             self._cache[key] = cls
             return cls
-
         msg = f"No plugin found for layer={layer!r}, name={name!r}"
         raise KeyError(msg)
 
     def list_plugins(self, layer: str | None = None) -> list[tuple[str, str]]:
         """List available plugins, optionally filtered by layer.
-
         Example::
-
             plugins = registry.list_plugins("payments")
         """
         all_keys: set[tuple[str, str]] = set()

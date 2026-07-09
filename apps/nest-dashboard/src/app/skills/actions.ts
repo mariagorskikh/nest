@@ -1,15 +1,12 @@
 "use server";
-
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { createSkill, type SkillSourceType } from "@/lib/skills";
 import { isSafeExternalUrl } from "@/lib/url-safety";
 import { initialSubmitState, type SubmitState } from "./form-state";
-
 function str(value: FormDataEntryValue | null): string {
   return typeof value === "string" ? value.trim() : "";
 }
-
 function isValidHttpUrl(value: string): boolean {
   try {
     const u = new URL(value);
@@ -18,11 +15,9 @@ function isValidHttpUrl(value: string): boolean {
     return false;
   }
 }
-
 function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
-
 /**
  * Reduce whatever the user typed to a bare GitHub handle: strip a leading "@",
  * a full "github.com/…" URL, and any trailing slash. Returns "" if nothing
@@ -34,13 +29,11 @@ function normalizeGithubUsername(value: string): string {
   if (urlMatch) v = urlMatch[1];
   return v.replace(/\/+$/, "").trim();
 }
-
 function isValidGithubUsername(value: string): boolean {
   // GitHub handles: 1–39 chars, alphanumeric or single hyphens, no leading/
   // trailing hyphen.
   return /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/.test(value);
 }
-
 /**
  * Best-effort client IP from the proxy headers Railway sets. Falls back to
  * null when we can't tell (e.g. local dev without a proxy).
@@ -51,7 +44,6 @@ async function clientIp(): Promise<string | null> {
   if (forwarded) return forwarded.split(",")[0].trim() || null;
   return h.get("x-real-ip");
 }
-
 /**
  * Best-effort check that a submitted URL actually answers. Never throws — a
  * failed or slow request just means we record `false`, we don't block the save.
@@ -71,7 +63,6 @@ async function checkReachable(url: string): Promise<boolean> {
     return false;
   }
 }
-
 export async function submitSkill(
   _prev: SubmitState,
   formData: FormData,
@@ -86,7 +77,6 @@ export async function submitSkill(
   const sourceType = str(formData.get("source_type")) as SkillSourceType;
   const sourceUrl = str(formData.get("source_url"));
   const content = str(formData.get("content"));
-
   // --- Validation ---------------------------------------------------------
   if (!name) {
     return { ...initialSubmitState, error: "Give your SkillMD a name." };
@@ -121,13 +111,11 @@ export async function submitSkill(
       error: "Paste the full SkillMD text — that looks too short.",
     };
   }
-
   // --- Best-effort reachability check for hosted links --------------------
   let reachable: boolean | null = null;
   if (sourceType === "url" || sourceType === "github") {
     reachable = await checkReachable(sourceUrl);
   }
-
   // --- Save ---------------------------------------------------------------
   try {
     const submitterIp = await clientIp();

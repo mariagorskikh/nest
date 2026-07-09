@@ -2,14 +2,12 @@
 """HTTP RPC for shared plugins across distributed workers."""
 
 from __future__ import annotations
-
 import asyncio
 import json
 import urllib.error
 import urllib.request
 from collections.abc import AsyncGenerator
 from typing import Any, cast
-
 from nest_core.layers.registry import Registry
 from nest_core.sim.http_config import (
     http_auth_headers,
@@ -161,7 +159,6 @@ class RegistryRpcServer:
             if len(parts) < 2:
                 return
             method, path = parts[0], parts[1]
-
             content_length = 0
             headers: dict[str, str] = {}
             while True:
@@ -172,11 +169,9 @@ class RegistryRpcServer:
                 if ":" in header:
                     key, value = header.split(":", 1)
                     headers[key.strip().lower()] = value.strip()
-
                 header_lower = header.lower()
                 if header_lower.startswith("content-length:"):
                     content_length = int(header_lower.split(":", 1)[1].strip())
-
             if not http_auth_valid(headers):
                 writer.write(
                     (
@@ -189,7 +184,6 @@ class RegistryRpcServer:
                 )
                 await writer.drain()
                 return
-
             body = b""
             status = 404
             response_body = b'{"ok":false}'
@@ -199,13 +193,11 @@ class RegistryRpcServer:
                 response_body = b'{"ok":false,"error":"payload too large"}'
             elif content_length > 0:
                 body = await reader.readexactly(content_length)
-
             payload_obj: dict[str, Any] = {}
             if body:
                 parsed = json.loads(body.decode("utf-8"))
                 if isinstance(parsed, dict):
                     payload_obj = cast("dict[str, Any]", parsed)
-
             if method == "GET" and path == "/health":
                 status = 200
                 response_body = b'{"ok":true}'
@@ -221,7 +213,6 @@ class RegistryRpcServer:
                 await self._registry.deregister(AgentId(str(payload_obj["agent_id"])))
                 status = 200
                 response_body = b'{"ok":true}'
-
             writer.write(
                 (
                     f"HTTP/1.1 {status} OK\r\n"

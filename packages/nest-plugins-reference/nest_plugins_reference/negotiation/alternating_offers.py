@@ -1,16 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Alternating offers negotiation plugin — Rubinstein-style bargaining.
-
 Example::
-
     neg = AlternatingOffers(AgentId("a1"), patience=0.9)
     session = await neg.open(AgentId("a2"), Terms(price=Money(amount=100)))
 """
 
 from __future__ import annotations
-
 import uuid
-
 from nest_core.types import (
     AgentId,
     Agreement,
@@ -23,9 +19,7 @@ from nest_core.types import (
 
 class AlternatingOffers:
     """Rubinstein-style alternating-offers negotiation.
-
     Example::
-
         neg = AlternatingOffers(AgentId("a1"))
         session = await neg.open(AgentId("a2"), terms)
     """
@@ -37,9 +31,7 @@ class AlternatingOffers:
 
     async def open(self, partner: AgentId, terms: Terms) -> NegotiationSession:
         """Open a negotiation with initial terms.
-
         Example::
-
             session = await neg.open(AgentId("a2"), terms)
         """
         session = NegotiationSession(
@@ -55,9 +47,7 @@ class AlternatingOffers:
 
     async def offer(self, session: NegotiationSession, terms: Terms) -> None:
         """Make a counter-offer.
-
         Example::
-
             await neg.offer(session, Terms(price=Money(amount=80)))
         """
         session.current_terms = terms
@@ -65,28 +55,22 @@ class AlternatingOffers:
 
     async def respond(self, session: NegotiationSession) -> NegotiationResponse:
         """Respond to the current offer using the patience discount.
-
         Example::
-
             resp = await neg.respond(session)
         """
         if session.current_terms is None or session.current_terms.price is None:
             session.status = NegotiationStatus.AGREED
             return NegotiationResponse(accepted=True)
-
         rounds = len(session.history)
         threshold = session.current_terms.price.amount * (self._patience**rounds)
         if session.current_terms.price.amount <= threshold or rounds >= 10:
             session.status = NegotiationStatus.AGREED
             return NegotiationResponse(accepted=True)
-
         return NegotiationResponse(accepted=False, counter_terms=session.current_terms)
 
     async def close(self, session: NegotiationSession) -> Agreement | None:
         """Close a session, returning an agreement if both parties accepted.
-
         Example::
-
             agreement = await neg.close(session)
         """
         if session.status == NegotiationStatus.AGREED:

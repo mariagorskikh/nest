@@ -3,14 +3,12 @@
 """Verify publishable package versions are internally consistent."""
 
 from __future__ import annotations
-
 import sys
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ROOT / "packages"
-
 # Packages published by .github/workflows/publish.yml in dependency order.
 PUBLISH_ORDER = (
     "nest-core",
@@ -31,7 +29,6 @@ def _read_version(name: str) -> str:
 
 def main() -> int:
     versions = {name: _read_version(name) for name in PUBLISH_ORDER}
-
     core_version = versions["nest-core"]
     init_path = PACKAGES / "nest-core" / "nest_core" / "__init__.py"
     init_text = init_path.read_text(encoding="utf-8")
@@ -50,7 +47,6 @@ def main() -> int:
     else:
         print("nest-core __version__ not found", file=sys.stderr)
         return 1
-
     sdk_version = versions["nest-sdk"]
     plugins_version = versions["nest-plugins-reference"]
     if sdk_version != plugins_version:
@@ -58,7 +54,6 @@ def main() -> int:
             f"warning: nest-sdk ({sdk_version}) != nest-plugins-reference ({plugins_version})",
             file=sys.stderr,
         )
-
     print("Publish version checks passed:")
     for name, version in versions.items():
         print(f"  {name}: {version}")

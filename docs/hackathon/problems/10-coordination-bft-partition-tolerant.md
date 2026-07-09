@@ -4,13 +4,9 @@ layer: coordination
 difficulty: hard
 status: solved
 ---
-
 > **Status: SOLVED** — implemented in `scenarios/bft_consensus_partition.yaml` and `scenarios/bft_consensus_byzantine.yaml` with HotStuff BFT.
-
 # Partition-tolerant BFT consensus with view-change and liveness proofs
-
 ## Motivation
-
 The default coordination plugin
 [`nest_plugins_reference/coordination/contract_net.py`](../../../packages/nest-plugins-reference/nest_plugins_reference/coordination/contract_net.py)
 is 95 lines of FIPA Contract Net — a single-round bidding scaffold
@@ -25,25 +21,20 @@ followers lying about their votes, or leader failure mid-round. As
 the [`docs/layers/coordination.md`](../../../docs/layers/coordination.md)
 file explicitly says: "it is not full BFT — that's a great thing to
 plug your own implementation into."
-
 PR #5 added sealed-bid coordination (FPSB/Vickrey) — useful for
 mechanism design but *not* a consensus protocol. The 4-agent
 partition story remains untested.
-
 The simulator already supports partitions
 ([`nest_core/sim/simulator.py`](../../../packages/nest-core/nest_core/sim/simulator.py)
 lines 246-260) and byzantine agents (lines 240-244). The plumbing is
 there; the *protocol* to test against it isn't.
-
 Anyone using Nanda Town to validate a real BFT protocol (Tendermint,
 HotStuff, PBFT) benefits directly. Anyone building agent
 infrastructure that has to survive a single replica failure without
 losing a commit benefits. This is hard because BFT is hard — but
 Nanda Town is the right place to test it, because the simulator gives you
 deterministic adversarial conditions you can't get on a real network.
-
 ## Success criteria
-
 - Ship a coordination plugin (suggested name: `bft_hotstuff`,
   `pbft`, or similar — pick one BFT protocol and implement it
   faithfully). Register as `(\"coordination\", \"<your_name>\")` in
@@ -79,9 +70,7 @@ deterministic adversarial conditions you can't get on a real network.
   `failures.byzantine_agents: 0.28` (i.e. 2 byzantine). Safety
   validator must pass; liveness may degrade but commits must still
   happen post-recovery.
-
 ## Suggested approach pointers
-
 - HotStuff is the cleanest reference — three-phase voting, linear
   view-change. Castro-Liskov PBFT is more traditional but more
   edges.
@@ -98,9 +87,7 @@ deterministic adversarial conditions you can't get on a real network.
 - Test with `Hypothesis` strategies that generate random partition
   schedules and byzantine vote patterns; safety must hold across
   all of them.
-
 ## Anti-patterns
-
 - Don't ship a "consensus" plugin that's actually leader-election +
   Raft (Raft is CFT, not BFT — byzantine validator suite will catch
   it).
@@ -109,9 +96,7 @@ deterministic adversarial conditions you can't get on a real network.
 - Don't skip the equivocation check by assuming an honest leader.
 - Don't ship without the byzantine scenario — partition-only is
   half the problem.
-
 ## Out of scope
-
 - Open membership (dynamic add/remove of agents mid-scenario).
 - Cross-chain interop / IBC-style relay.
 - Production-grade performance optimization (pipelining,

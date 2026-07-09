@@ -1,13 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Metrics computation from JSONL traces.
-
 Example::
-
     results = compute_metrics(trace_path, ["delivery_rate", "mean_latency", "message_count"])
 """
 
 from __future__ import annotations
-
 import json
 import math
 import re
@@ -22,20 +19,16 @@ def compute_metrics(
     metric_names: list[str],
 ) -> dict[str, float]:
     """Compute requested metrics from a JSONL trace file.
-
     Example::
-
         results = compute_metrics("trace.jsonl", ["delivery_rate", "message_count"])
     """
     trace_path = Path(trace_path)
     events = _load_events(trace_path)
-
     results: dict[str, float] = {}
     for name in metric_names:
         func = _METRIC_FUNCS.get(name)
         if func is not None:
             results[name] = func(events)
-
     return results
 
 
@@ -61,7 +54,6 @@ def _message_body(ev: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 def _delivery_rate(events: list[dict[str, Any]]) -> float:
     """Fraction of sent messages that were received (message delivery rate).
-
     NOTE: This was previously named ``_success_rate``.  The old name was
     misleading -- a 100 % delivery rate does NOT mean the protocol succeeded;
     it only means every message was delivered, even if every request was
@@ -95,7 +87,6 @@ _REJECT_RE = re.compile(r"^reject:")
 
 def _deal_rate(events: list[dict[str, Any]]) -> float:
     """Percentage of buy requests that resulted in a successful trade (``sold:``).
-
     Only meaningful for marketplace scenarios.  Returns 0.0 when there are no
     buy requests.
     """
@@ -116,7 +107,6 @@ def _deal_rate(events: list[dict[str, Any]]) -> float:
 
 def _rejection_rate(events: list[dict[str, Any]]) -> float:
     """Percentage of buy requests that received a ``reject:`` response.
-
     Only meaningful for marketplace scenarios.  Returns 0.0 when there are no
     buy requests.
     """
@@ -137,7 +127,6 @@ def _rejection_rate(events: list[dict[str, Any]]) -> float:
 
 def _mean_rounds_to_deal(events: list[dict[str, Any]]) -> float:
     """Average number of message rounds before a successful ``sold:`` trade.
-
     A "round" is counted as each buy/reject exchange between a unique
     buyer-seller pair before the pair reaches a ``sold:`` message.  Returns
     0.0 when there are no successful deals.
@@ -145,7 +134,6 @@ def _mean_rounds_to_deal(events: list[dict[str, Any]]) -> float:
     # Track ongoing negotiations per (buyer, seller) pair
     pair_rounds: dict[tuple[str, str], int] = defaultdict(int)
     deal_rounds: list[int] = []
-
     for ev in events:
         if ev.get("kind") != "send":
             continue
@@ -153,7 +141,6 @@ def _mean_rounds_to_deal(events: list[dict[str, Any]]) -> float:
         agent = ev.get("agent", "")
         to = ev.get("to", "")
         frm = ev.get("from", agent)
-
         if _BUY_RE.match(content):
             pair_rounds[(frm, to)] += 1
         elif _REJECT_RE.match(content):
@@ -166,7 +153,6 @@ def _mean_rounds_to_deal(events: list[dict[str, Any]]) -> float:
             deal_rounds.append(max(rounds, 1))
             # Reset for this pair in case they trade again
             pair_rounds[pair] = 0
-
     if not deal_rounds:
         return 0.0
     return sum(deal_rounds) / len(deal_rounds)
@@ -204,21 +190,18 @@ def _mean_latency(events: list[dict[str, Any]]) -> float:
 def _collect_latencies(events: list[dict[str, Any]]) -> list[float]:
     send_times: dict[str, float] = {}
     latencies: list[float] = []
-
     for ev in events:
         kind = ev.get("kind", "")
         corr = ev.get("corr", "")
         ts = _finite_ts(ev.get("ts", 0.0))
         if ts is None:
             continue
-
         if kind == "send" and corr:
             send_times[corr] = ts
         elif kind == "receive" and corr:
             send_ts = send_times.get(corr)
             if send_ts is not None:
                 latencies.append(ts - send_ts)
-
     return latencies
 
 
@@ -269,7 +252,6 @@ def _duration(events: list[dict[str, Any]]) -> float:
 
 def _throughput(events: list[dict[str, Any]]) -> float:
     """Messages per unit virtual-time.
-
     Returns ``0.0`` when the trace has zero observed duration -- which is the
     common case for the bundled zero-latency transport.  Reporting raw message
     count here would silently masquerade as a rate.
@@ -312,7 +294,6 @@ _METRIC_FUNCS: dict[str, Any] = {
     # Backward compatibility: old name still works
     "success_rate": _success_rate,
 }
-
 ALL_METRICS: list[str] = list(_METRIC_FUNCS.keys())
 
 
@@ -321,9 +302,7 @@ def validate_protocol(
     scenario_type: str,
 ) -> dict[str, Any]:
     """Run protocol validators and return results as part of metrics output.
-
     Example::
-
         results = validate_protocol("trace.jsonl", "marketplace")
         # {"validations": [{"name": ..., "passed": ..., "detail": ...}, ...],
         #  "all_passed": True}
@@ -344,9 +323,7 @@ def generate_html_report(
     output_path: str | Path,
 ) -> Path:
     """Generate an HTML report from metrics and trace data.
-
     Example::
-
         path = generate_html_report("trace.jsonl", metrics, "report.html")
     """
     import html
@@ -355,20 +332,16 @@ def generate_html_report(
     output_path = Path(output_path)
     events = _load_events(trace_path)
     agent_stats = _per_agent_stats(events)
-
     event_counts: dict[str, int] = defaultdict(int)
     for ev in events:
         kind = ev.get("kind", "unknown")
         event_counts[kind] += 1
-
     metrics_rows = "".join(
         f"<tr><td>{name}</td><td>{value:.4f}</td></tr>" for name, value in sorted(metrics.items())
     )
-
     event_rows = "".join(
         f"<tr><td>{kind}</td><td>{count}</td></tr>" for kind, count in sorted(event_counts.items())
     )
-
     agent_rows = ""
     sorted_agents = sorted(agent_stats.items(), key=lambda kv: kv[1]["sends"], reverse=True)
     for agent_name, stats in sorted_agents[:20]:
@@ -379,7 +352,6 @@ def generate_html_report(
             f"<td>{stats['receives']}</td>"
             f"<td>{stats['dropped']}</td></tr>"
         )
-
     html = f"""\
 <!DOCTYPE html>
 <html lang="en">
@@ -411,7 +383,6 @@ footer {{ margin-top: 3rem; padding-top: 1rem;
 <body>
 <h1>Nanda Town Trace Report</h1>
 <p>Source: <code>{html.escape(trace_path.name)}</code> &mdash; {len(events)} events</p>
-
 <div class="summary">
 <div class="card"><div class="value">\
 {metrics.get("agent_count", len(agent_stats)):.0f}\
@@ -426,25 +397,21 @@ footer {{ margin-top: 3rem; padding-top: 1rem;
 {metrics.get("mean_latency", 0):.2f}\
 </div><div class="label">Mean Latency</div></div>
 </div>
-
 <h2>Metrics</h2>
 <table>
 <tr><th>Metric</th><th>Value</th></tr>
 {metrics_rows}
 </table>
-
 <h2>Event Breakdown</h2>
 <table>
 <tr><th>Kind</th><th>Count</th></tr>
 {event_rows}
 </table>
-
 <h2>Top Agents</h2>
 <table>
 <tr><th>Agent</th><th>Sends</th><th>Receives</th><th>Dropped</th></tr>
 {agent_rows}
 </table>
-
 <footer>Generated by Nanda Town</footer>
 </body>
 </html>

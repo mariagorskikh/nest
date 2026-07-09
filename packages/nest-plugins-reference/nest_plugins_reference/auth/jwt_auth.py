@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """JWT auth plugin — sign tokens with HMAC-SHA256 for simulation.
-
 Example::
-
     auth = JwtAuth(secret=b"my-secret")
     token = await auth.issue(AgentId("a1"), ["read", "write"])
     ctx = await auth.verify(token)
 """
 
 from __future__ import annotations
-
 import hashlib
 import hmac
 import json
@@ -17,20 +14,16 @@ import time
 import warnings
 from collections import OrderedDict
 from collections.abc import Callable
-
 from nest_core.types import AgentId, AuthContext, Token
 
 # Publicly documented weak default — never use in production.
 KNOWN_WEAK_SECRET = b"nest-default-secret"
-
 ClockFn = Callable[[], float]
 
 
 class JwtAuth:
     """Simplified JWT-style auth using HMAC-SHA256.
-
     Example::
-
         auth = JwtAuth(secret=b"secret")
         token = await auth.issue(AgentId("a1"), ["read"])
     """
@@ -81,9 +74,7 @@ class JwtAuth:
 
     async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
         """Issue a token for a subject with given scopes.
-
         Example::
-
             token = await auth.issue(AgentId("a1"), ["read", "write"])
         """
         now = self._now()
@@ -101,9 +92,7 @@ class JwtAuth:
 
     async def verify(self, token: Token) -> AuthContext:
         """Verify a token and return its context.
-
         Example::
-
             ctx = await auth.verify(token)
             assert ctx.subject == AgentId("a1")
         """
@@ -111,18 +100,15 @@ class JwtAuth:
         if raw in self._revoked:
             msg = "Token has been revoked"
             raise ValueError(msg)
-
         parts = raw.rsplit("|", 1)
         if len(parts) != 2:
             msg = "Invalid token format"
             raise ValueError(msg)
-
         payload_str, sig = parts
         expected = self._sign(payload_str)
         if not hmac.compare_digest(sig, expected):
             msg = "Invalid token signature"
             raise ValueError(msg)
-
         data = json.loads(payload_str)
         if data["exp"] < self._now():
             msg = "Token has expired"
@@ -136,9 +122,7 @@ class JwtAuth:
 
     async def revoke(self, token: Token) -> None:
         """Revoke a token.
-
         Example::
-
             await auth.revoke(token)
         """
         self._remember_revoked(str(token))

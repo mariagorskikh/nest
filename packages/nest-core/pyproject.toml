@@ -22,22 +22,17 @@ dependencies = [
     "structlog>=24.0",
     "typer>=0.12",
 ]
-
 [project.optional-dependencies]
 plugins = ["nest-plugins-reference>=0.1.1"]
 llm = ["nest-shell>=0.1.0"]
 full = ["nest-core[plugins,llm]"]
-
 [project.scripts]
 nest = "nest_core.cli:app"
-
 [project.urls]
 Homepage = "https://github.com/projnanda/nandatown"
 Repository = "https://github.com/projnanda/nandatown"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
 [tool.hatch.build.targets.wheel]
 packages = ["nest_core"]

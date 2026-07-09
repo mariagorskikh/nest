@@ -5,11 +5,8 @@
 # The single most important target here is `ci-local`. It runs the EXACT
 # sequence of commands that .github/workflows/ci.yml executes, in the same
 # order, and hard-fails on the first red command. Run it before every push.
-
 .DEFAULT_GOAL := help
-
 .PHONY: help ci-local ci-dashboard hooks test-fast clean
-
 help: ## List available targets.
 	@echo "Nanda Town developer targets:"
 	@echo ""
@@ -20,7 +17,6 @@ help: ## List available targets.
 	@echo "  make hooks         Install pre-commit hooks."
 	@echo ""
 	@echo "  make help          Show this message."
-
 ci-local: ## Run the exact Python CI command sequence; hard-fail on the first red command.
 	@echo ">>> [1/9] uv sync --frozen"
 	uv sync --frozen
@@ -42,16 +38,12 @@ ci-local: ## Run the exact Python CI command sequence; hard-fail on the first re
 	uv run pytest -v -m "not slow"
 	@echo ""
 	@echo "ci-local: all Python checks passed. Safe to push."
-
 test-fast: ## Run fast tests only (exclude @pytest.mark.slow).
 	uv run pytest -v -m "not slow"
-
 clean: ## Remove dist/, coverage, and trace artifacts.
 	uv run python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p in ('dist','htmlcov','.pytest_cache','traces')]; pathlib.Path('.coverage').unlink(missing_ok=True)"
-
 ci-dashboard: ## Run nest-dashboard frontend CI (typecheck, lint, build).
 	cd apps/nest-dashboard && npm ci && npm run ci
-
 hooks: ## Install pre-commit hooks defined in .pre-commit-config.yaml.
 	uv run --with pre-commit pre-commit install
 	@echo "pre-commit hooks installed. Hooks will run automatically on 'git commit'."

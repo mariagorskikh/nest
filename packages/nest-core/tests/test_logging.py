@@ -2,11 +2,9 @@
 """Tests for optional structured logging (NEST_LOG)."""
 
 from __future__ import annotations
-
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
-
 import pytest
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.sim.simulator import Simulator
@@ -26,12 +24,10 @@ async def _run_sim_with_level(level: str, tmp_path: Path, monkeypatch: pytest.Mo
     from nest_core.log import reset_logging_for_tests
 
     reset_logging_for_tests()
-
     trace_file = tmp_path / f"log-{level}.jsonl"
     sim = Simulator(seed=1, trace_path=trace_file)
     sim.add_agent(AgentId("a0"), _PingOnce())
     sim.add_agent(AgentId("a1"), _PingOnce())
-
     buf = io.StringIO()
     with redirect_stdout(buf):
         await sim.run(max_ticks=50)

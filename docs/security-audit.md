@@ -1,23 +1,16 @@
 # Nanda Town — Security Audit (Red Team / Blue Team)
-
 Last updated: July 2026, after P0/P1 remediation.
-
 This document is the canonical security posture record for Nanda Town. It
 preserves the adversarial framing from the original autopsy and marks each
 finding as **FIXED**, **OPEN**, or **ACCEPTED_RISK**.
-
 For operator setup, see the [operator checklist](#operator-checklist) and
 [`distributed.md`](distributed.md). For dashboard API hardening, see
 [`apps/nest-dashboard/README.md`](../apps/nest-dashboard/README.md).
-
 ---
-
 ## Executive summary
-
 Nanda Town is a **strong Tier-1 simulation engine** with a clean middleware
 seam and good single-process determinism. The weak spots clustered in three
 places:
-
 1. **Distributed HTTP surface** — was open by default; now gated by
    `NEST_HTTP_SHARED_SECRET` when `workers > 1` or bind is not localhost
 2. **Next.js `/skills` API** — was public write with SSRF risk; now guarded
@@ -25,16 +18,11 @@ places:
 3. **Operational gaps** — JwtAuth sim-clock wiring, worker `partition_heal_at`,
    and `auth_scope` silent bypass are **fixed**; trace token leakage and TLS
    remain on the P2/P3 backlog
-
 **P0/P1 items from the July 2026 audit are remediated in code.** Remaining
 work is documented under [Open backlog (P2/P3)](#open-backlog-p2p3).
-
 ---
-
 ## Runtime evidence
-
 ### At audit time (historical)
-
 | Check | Result | Implication |
 |-------|--------|-------------|
 | `nest doctor` | 7/7 passed | Core engine healthy |
@@ -43,9 +31,7 @@ work is documented under [Open backlog (P2/P3)](#open-backlog-p2p3).
 | `GET /skills` | 500 | `DATABASE_URL` missing — no graceful fallback |
 | `.env.local` | absent | Skills registry not initialized |
 | `worker.py` Simulator | no `partition_heal_at` | Partition heal disabled in distributed runs |
-
 ### After remediation (current)
-
 | Check | Result | Implication |
 |-------|--------|-------------|
 | `require_http_shared_secret()` with `workers: 2` | raises without secret | Distributed runs fail fast until secret is set |
@@ -56,13 +42,9 @@ work is documented under [Open backlog (P2/P3)](#open-backlog-p2p3).
 | `auth_scope` without auth plugin | denies (`auth_plugin_missing`) | No silent bypass |
 | `POST /api/skills` in production | 503 without `NEST_SKILLS_API_KEY` | Writes disabled until configured |
 | SSRF to `http://127.0.0.1/...` | 400 on API; blocked in form action | Private/internal hosts rejected |
-
 ---
-
 ## Findings register
-
 ### Remediated (P0/P1)
-
 | ID | Finding | Status | Fix |
 |----|---------|--------|-----|
 | 1 | Worker HTTP bridge unauthenticated by default | **FIXED** | `require_http_shared_secret()` in `runner._run_distributed()` |
@@ -73,9 +55,7 @@ work is documented under [Open backlog (P2/P3)](#open-backlog-p2p3).
 | — | `partition_heal_at` not passed to workers | **FIXED** | `worker.py` forwards `failures.partition_heal_at_tick` |
 | — | JwtAuth not wired to sim clock | **FIXED** | `wire_auth_to_sim_clock()` in runner + worker |
 | — | Auth scope silent bypass when no auth plugin | **FIXED** | `auth_scope` denies with `auth_plugin_missing` |
-
 ### Still open or accepted
-
 | ID | Finding | Status | Notes |
 |----|---------|--------|-------|
 | 2 | Publicly known JWT default secret | **ACCEPTED_RISK** | `KNOWN_WEAK_SECRET` warns at runtime; use `NEST_JWT_SECRET` outside sim |
@@ -87,11 +67,8 @@ work is documented under [Open backlog (P2/P3)](#open-backlog-p2p3).
 | — | Auth scope inbound-only | **ACCEPTED_RISK** | Outbound `on_send` passes through by design |
 | — | `deploy-local.ps1` hardcodes `7/7` doctor match | **OPEN (P3)** | Brittle if doctor checks change |
 | — | `npm audit \|\| true` in CI | **OPEN (P3)** | Silences vulnerability failures |
-
 ---
-
 ## Architecture map (attack surface)
-
 ```mermaid
 flowchart TB
   subgraph fixed [Fixed P0/P1]
@@ -121,27 +98,18 @@ flowchart TB
   SkillsGuard --> SkillsAPI
   NeonDB[DATABASE_URL] --> SkillsAPI
 ```
-
 ---
-
 ## RED TEAM — Critical and high exposures
-
 ### Critical (remediated)
-
 **1. Worker HTTP bridge unauthenticated by default** — **FIXED**
-
 Previously `http_auth_valid()` returned `True` when `NEST_HTTP_SHARED_SECRET`
 was unset. Now `require_http_shared_secret()` raises before distributed runs
 when `workers > 1` or `worker_bind` is not localhost.
-
 **2. Publicly known JWT default secret** — **ACCEPTED_RISK**
-
 `KNOWN_WEAK_SECRET = b"nest-default-secret"` still exists for simulation
 convenience. `JwtAuth` emits a runtime warning. Set `NEST_JWT_SECRET` for
 any non-simulation deployment.
-
 ### High (remediated or open)
-
 | Finding | Status |
 |---------|--------|
 | No TLS on worker bridges | **OPEN** — use a reverse proxy |
@@ -150,13 +118,9 @@ any non-simulation deployment.
 | SSRF in reachability probe | **FIXED** |
 | Registry RPC on port 18999 | **OPEN** |
 | Trace JSONL logs full payloads | **OPEN** |
-
 ---
-
 ## BLUE TEAM — Hardened vs still weak
-
 ### Hardened (keep)
-
 | Area | Evidence |
 |------|----------|
 | Middleware chain drop/transform | `middleware.py` — `None` short-circuit, `kind: denied` / `kind: error` traces |
@@ -173,9 +137,7 @@ any non-simulation deployment.
 | Worker partition heal | `partition_heal_at_tick` forwarded in workers |
 | JwtAuth sim clock | `wire_auth_to_sim_clock()` in runner/worker |
 | Auth scope fail-closed | Denies when auth plugin missing |
-
 ### Weak / regressions (remaining)
-
 | Gap | Location | Severity |
 |-----|----------|----------|
 | Trace redaction | `simulator.py` trace `msg` field | P2 |
@@ -183,11 +145,8 @@ any non-simulation deployment.
 | `/skills` without `DATABASE_URL` | `db.ts` | P3 (UX) |
 | `ObservabilityMiddleware.dropped_count` | `observability.py` | P3 |
 | `KNOWN_WEAK_SECRET` warning-only | `jwt_auth.py` | Accepted for sim |
-
 ---
-
 ## Open backlog (P2/P3)
-
 | Priority | Fix | Effort |
 |----------|-----|--------|
 | P2 | Redact `metadata.auth_token` from trace `msg` field | Medium |
@@ -196,57 +155,41 @@ any non-simulation deployment.
 | P3 | Graceful `/skills` empty state when no `DATABASE_URL` | Small |
 | P3 | Increment `ObservabilityMiddleware.dropped_count` | Small |
 | P3 | Parameterize registry RPC port | Small |
-
 See [`roadmap.md`](roadmap.md) Phase 6.
-
 ---
-
 ## Operator checklist
-
 | Variable | When required | Example |
 |----------|---------------|---------|
 | `NEST_HTTP_SHARED_SECRET` | `nest run --workers N` (N>1) or `worker_bind` not localhost | `export NEST_HTTP_SHARED_SECRET=$(openssl rand -hex 32)` |
 | `NEST_JWT_SECRET` | Non-simulation deployments using JwtAuth | `export NEST_JWT_SECRET=$(openssl rand -hex 32)` |
 | `NEST_SKILLS_API_KEY` | `POST /api/skills` when `NODE_ENV=production` | Set in `apps/nest-dashboard/.env.local` |
 | `DATABASE_URL` | `/skills` page (Neon Postgres) | Neon console connection string |
-
 **Distributed run example:**
-
 ```bash
 export NEST_HTTP_SHARED_SECRET="your-long-random-secret"
 nest run marketplace --workers 2 --ticks 2000
 ```
-
 **Skills API example (production):**
-
 ```bash
 curl -X POST http://localhost:3000/api/skills \
   -H "Content-Type: application/json" \
   -H "X-Skills-API-Key: $NEST_SKILLS_API_KEY" \
   -d '{"name":"my-skill","source_type":"content","content":"# SkillMD\n..."}'
 ```
-
 **Local full stack:**
-
 ```powershell
 .\scripts\deploy-local.ps1 -Mode Prod -RunScenario -InitSkills `
   -DatabaseUrl "postgresql://user:pass@host/db?sslmode=require"
 # Also set NEST_SKILLS_API_KEY in apps/nest-dashboard/.env.local for prod POST
 ```
-
 ---
-
 ## Kill critic — what NOT to over-fix
-
 - **`privacy: noop` default** — intentional for simulation; documented limitation
 - **Distributed non-determinism** — by design for HTTP workers
 - **Reference plugins simplified** — testing scaffolding, not production crypto
 - **Local Postgres for skills** — won't work; `@neondatabase/serverless` needs Neon
-
 ---
-
 ## Active production state (local)
-
 - Dashboard prod mode: http://localhost:3000 (`/`, `/hackathon`, `/visualizer` → 200)
 - `/skills`: 500 until `DATABASE_URL` is set and `node scripts/db-init.mjs` runs
 - `nest doctor`: 7/7 when engine is healthy

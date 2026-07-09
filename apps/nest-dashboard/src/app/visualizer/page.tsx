@@ -1,5 +1,4 @@
 'use client';
-
 import {
   useCallback,
   useEffect,
@@ -9,11 +8,9 @@ import {
 } from 'react';
 import Image from 'next/image';
 import * as d3 from 'd3';
-
 /* ------------------------------------------------------------------ */
 /*  Real Nanda Town trace format                                      */
 /* ------------------------------------------------------------------ */
-
 type TraceKind =
   | 'start'
   | 'stop'
@@ -21,7 +18,6 @@ type TraceKind =
   | 'receive'
   | 'broadcast'
   | 'dropped';
-
 interface TraceEvent {
   ts: number;
   agent: string;
@@ -32,18 +28,15 @@ interface TraceEvent {
   size?: number;
   corr?: string;
 }
-
 /* ------------------------------------------------------------------ */
 /*  Scenarios                                                          */
 /* ------------------------------------------------------------------ */
-
 interface ScenarioMeta {
   id: string;
   name: string;
   blurb: string;
   file: string;
 }
-
 const SCENARIOS: ScenarioMeta[] = [
   {
     id: 'auction',
@@ -172,11 +165,9 @@ const SCENARIOS: ScenarioMeta[] = [
     file: '/scenario-traces/http_marketplace.jsonl',
   },
 ];
-
 /* ------------------------------------------------------------------ */
 /*  Role palette                                                       */
 /* ------------------------------------------------------------------ */
-
 const ROLE_COLORS: Record<string, string> = {
   auctioneer:   '#C45A3C',
   bidder:       '#5C6E5A',
@@ -195,19 +186,15 @@ const ROLE_COLORS: Record<string, string> = {
   distributor:  '#5C6E5A',
   retailer:     '#221F1A',
 };
-
 function roleOf(agent: string): string {
   return agent.replace(/-\d+$/, '');
 }
-
 function roleColor(role: string): string {
   return ROLE_COLORS[role] ?? '#6B6557';
 }
-
 /* ------------------------------------------------------------------ */
 /*  Role icons — PNG illustrations where available, line-art fallback */
 /* ------------------------------------------------------------------ */
-
 const ROLE_ICON_SRC: Record<string, string> = {
   auctioneer:   '/brand/nodes/node_auctioneer_v2.png',
   buyer:        '/brand/nodes/node_buyer_v2.png',
@@ -220,7 +207,6 @@ const ROLE_ICON_SRC: Record<string, string> = {
   supplier:     '/brand/nodes/node_supplier_v2.png',
   voter:        '/brand/nodes/node_voter_v2.png',
 };
-
 interface RoleIconProps {
   role: string;
   cx: number;
@@ -229,7 +215,6 @@ interface RoleIconProps {
   color: string;
   strokeWidth?: number;
 }
-
 function RoleIcon({
   role,
   cx,
@@ -256,7 +241,6 @@ function RoleIcon({
       />
     );
   }
-
   const half = size / 2;
   const s = size / 24;
   const tx = cx - half;
@@ -436,11 +420,9 @@ function RoleIcon({
     </g>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /*  Trace parser                                                       */
 /* ------------------------------------------------------------------ */
-
 function parseTrace(text: string): TraceEvent[] {
   const out: TraceEvent[] = [];
   for (const raw of text.split('\n')) {
@@ -456,7 +438,6 @@ function parseTrace(text: string): TraceEvent[] {
     }
   }
   out.sort((a, b) => a.ts - b.ts);
-
   // Nanda Town trace files currently emit ts:0.0 for every event. If the trace
   // has no temporal spread, synthesize one from file order so playback
   // has something to animate against.
@@ -473,16 +454,13 @@ function parseTrace(text: string): TraceEvent[] {
   }
   return out;
 }
-
 /* ------------------------------------------------------------------ */
 /*  Derived structures                                                 */
 /* ------------------------------------------------------------------ */
-
 interface Agent {
   id: string;
   role: string;
 }
-
 interface Flight {
   source: string;
   target: string;
@@ -491,13 +469,11 @@ interface Flight {
   kind: 'send' | 'broadcast' | 'dropped';
   msg: string;
 }
-
 interface EdgeKey {
   source: string;
   target: string;
   count: number;
 }
-
 interface Derived {
   agents: Agent[];
   agentIndex: Map<string, number>;
@@ -510,38 +486,30 @@ interface Derived {
   totalDropped: number;
   totalBroadcasts: number;
 }
-
 const SEP = '__';
-
 function edgeKey(source: string, target: string) {
   return `${source}${SEP}${target}`;
 }
-
 function derive(events: TraceEvent[]): Derived {
   const agents = new Map<string, Agent>();
   const ensureAgent = (id: string) => {
     if (!agents.has(id)) agents.set(id, { id, role: roleOf(id) });
   };
-
   type Pending = { from: string; to?: string; ts: number; msg: string; kind: 'send' | 'broadcast' };
   const pending = new Map<string, Pending>();
   const flights: Flight[] = [];
-
   let totalSent = 0;
   let totalReceived = 0;
   let totalDropped = 0;
   let totalBroadcasts = 0;
-
   let tMin = Infinity;
   let tMax = -Infinity;
-
   for (const e of events) {
     if (e.ts < tMin) tMin = e.ts;
     if (e.ts > tMax) tMax = e.ts;
     ensureAgent(e.agent);
     if (e.from) ensureAgent(e.from);
     if (e.to) ensureAgent(e.to);
-
     if (e.kind === 'send' && e.to && e.corr) {
       pending.set(e.corr, {
         from: e.agent,
@@ -598,7 +566,6 @@ function derive(events: TraceEvent[]): Derived {
       totalDropped++;
     }
   }
-
   for (const [, p] of pending) {
     if (p.kind === 'send' && p.to) {
       flights.push({
@@ -611,10 +578,8 @@ function derive(events: TraceEvent[]): Derived {
       });
     }
   }
-
   const agentList = Array.from(agents.values());
   const agentIndex = new Map(agentList.map((a, i) => [a.id, i]));
-
   // Ensure each flight has a visible lifetime — synthetic traces often have
   // sub-microsecond gaps between send/receive that flash by in <1 wall frame.
   const totalSpan = isFinite(tMax - tMin) ? Math.max(tMax - tMin, 0.01) : 1;
@@ -625,7 +590,6 @@ function derive(events: TraceEvent[]): Derived {
       if (f.tEnd > tMax) tMax = f.tEnd;
     }
   }
-
   // Build edge counts directly without round-tripping through a single string key
   const edgeMap = new Map<string, { source: string; target: string; count: number }>();
   for (const f of flights) {
@@ -635,7 +599,6 @@ function derive(events: TraceEvent[]): Derived {
     else edgeMap.set(key, { source: f.source, target: f.target, count: 1 });
   }
   const edges: EdgeKey[] = Array.from(edgeMap.values());
-
   return {
     agents: agentList,
     agentIndex,
@@ -649,21 +612,17 @@ function derive(events: TraceEvent[]): Derived {
     totalBroadcasts,
   };
 }
-
 /* ------------------------------------------------------------------ */
 /*  Initial role-aware layout (used to seed the force sim)            */
 /* ------------------------------------------------------------------ */
-
 interface Pos {
   x: number;
   y: number;
 }
-
 function computeLayout(agents: Agent[], width: number, height: number): Map<string, Pos> {
   const positions = new Map<string, Pos>();
   const cx = width / 2;
   const cy = height / 2;
-
   const byRole = new Map<string, Agent[]>();
   for (const a of agents) {
     if (!byRole.has(a.role)) byRole.set(a.role, []);
@@ -676,11 +635,9 @@ function computeLayout(agents: Agent[], width: number, height: number): Map<stri
       return an - bn;
     });
   }
-
   const roles = Array.from(byRole.keys());
   const roleCounts = roles.map((r) => byRole.get(r)!.length);
   const minDim = Math.min(width, height);
-
   if (roles.length >= 2 && roles.length <= 6 && roleCounts.every((c) => c === 1)) {
     const padding = minDim * 0.18;
     const usable = width - padding * 2;
@@ -691,7 +648,6 @@ function computeLayout(agents: Agent[], width: number, height: number): Map<stri
     });
     return positions;
   }
-
   const singletonRoles = roles.filter((r) => byRole.get(r)!.length === 1);
   const largeRoles = roles.filter((r) => byRole.get(r)!.length >= 4);
   if (
@@ -715,7 +671,6 @@ function computeLayout(agents: Agent[], width: number, height: number): Map<stri
     });
     return positions;
   }
-
   if (roles.length === 2 && roleCounts.every((c) => c >= 4)) {
     const [rA, rB] = roles;
     const listA = byRole.get(rA)!;
@@ -740,7 +695,6 @@ function computeLayout(agents: Agent[], width: number, height: number): Map<stri
     });
     return positions;
   }
-
   const ringRadius = minDim * 0.34;
   const clusterRadius = (minDim * 0.32) / Math.max(2, roles.length);
   roles.forEach((r, ri) => {
@@ -759,22 +713,18 @@ function computeLayout(agents: Agent[], width: number, height: number): Map<stri
   });
   return positions;
 }
-
 /* ------------------------------------------------------------------ */
 /*  Player — force-directed, draggable, zoomable                      */
 /* ------------------------------------------------------------------ */
-
 interface ForceNode extends d3.SimulationNodeDatum {
   id: string;
   role: string;
 }
-
 interface ForceLink extends d3.SimulationLinkDatum<ForceNode> {
   source: string | ForceNode;
   target: string | ForceNode;
   value: number;
 }
-
 interface PlayerProps {
   derived: Derived;
   simTime: number;
@@ -784,7 +734,6 @@ interface PlayerProps {
   speed: number;
   setSpeed: (s: number) => void;
 }
-
 function Player({
   derived,
   simTime,
@@ -796,19 +745,16 @@ function Player({
 }: PlayerProps) {
   const W = 900;
   const H = 580;
-
   const [hover, setHover] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const [view, setView] = useState({ k: 1, x: 0, y: 0 });
   const [, bump] = useState(0);
-
   const svgRef = useRef<SVGSVGElement>(null);
   const nodesRef = useRef<ForceNode[]>([]);
   const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const simRef = useRef<d3.Simulation<ForceNode, ForceLink> | null>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
-
   // Initialize force simulation each time the trace changes
   useEffect(() => {
     const seed = computeLayout(derived.agents, W, H);
@@ -819,7 +765,6 @@ function Player({
     const links: ForceLink[] = derived.edges
       .filter((e) => e.source !== e.target && e.source && e.target)
       .map((e) => ({ source: e.source, target: e.target, value: e.count }));
-
     const roles = Array.from(new Set(derived.agents.map((a) => a.role)));
     const roleAngle = new Map<string, number>();
     roles.forEach((r, i) => {
@@ -831,10 +776,8 @@ function Player({
     const cx = W / 2;
     const cy = H / 2;
     const clusterR = Math.min(W, H) * 0.30;
-
     const n = derived.agents.length;
     const collideR = n > 60 ? 11 : n > 30 ? 15 : 22;
-
     // Pre-populate positions from the seed so the first render already shows
     // nodes — d3 sim ticks happen asynchronously and React may not pick up
     // ref mutations until the next state-triggered render.
@@ -845,7 +788,6 @@ function Player({
         m.set(node.id, { x: node.x ?? 0, y: node.y ?? 0 });
       }
     }
-
     const sim = d3
       .forceSimulation<ForceNode, ForceLink>(nodes)
       .force(
@@ -889,16 +831,13 @@ function Player({
       .on('end', () => {
         bump((t) => (t + 1) % 1_000_000);
       });
-
     simRef.current = sim;
     nodesRef.current = nodes;
     bump((t) => (t + 1) % 1_000_000);
-
     return () => {
       sim.stop();
     };
   }, [derived]);
-
   // Playback animation
   const targetDuration = 18;
   const simPerWallSec =
@@ -927,7 +866,6 @@ function Player({
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [playing, speed, simPerWallSec, derived.tMax, setSimTime, setPlaying]);
-
   // Convert client coords to SVG world coords (post-zoom)
   const clientToSvg = useCallback((clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -938,7 +876,6 @@ function Player({
     const v = viewRef.current;
     return { x: (sx - v.x) / v.k, y: (sy - v.y) / v.k };
   }, []);
-
   // Drag a node
   const startNodeDrag = useCallback(
     (id: string, e: React.PointerEvent<SVGGElement>) => {
@@ -947,14 +884,12 @@ function Player({
       e.stopPropagation();
       const node = nodesRef.current.find((nn) => nn.id === id);
       if (!node) return;
-
       simRef.current.alphaTarget(0.3).restart();
       const start = clientToSvg(e.clientX, e.clientY);
       node.fx = start.x;
       node.fy = start.y;
       node.x = start.x;
       node.y = start.y;
-
       let moved = false;
       const downX = e.clientX;
       const downY = e.clientY;
@@ -980,7 +915,6 @@ function Player({
     },
     [clientToSvg],
   );
-
   // Pan the background
   const startBgPan = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     if ((e.target as SVGElement).closest('[data-agent]')) return;
@@ -1000,7 +934,6 @@ function Player({
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   }, []);
-
   // Mouse-wheel zoom around cursor
   useEffect(() => {
     const svg = svgRef.current;
@@ -1020,9 +953,7 @@ function Player({
     svg.addEventListener('wheel', handler, { passive: false });
     return () => svg.removeEventListener('wheel', handler);
   }, []);
-
   const resetView = () => setView({ k: 1, x: 0, y: 0 });
-
   // ------------------------- Derived state -------------------------
   interface InFlight {
     source: string;
@@ -1051,7 +982,6 @@ function Player({
     }
     return out;
   }, [simTime, derived.flights]);
-
   interface Ripple {
     id: string;
     t0: number;
@@ -1075,7 +1005,6 @@ function Player({
     }
     return out;
   }, [simTime, derived.flights]);
-
   const activeAgents = useMemo(() => {
     const s = new Set<string>();
     for (const f of inFlight) {
@@ -1084,7 +1013,6 @@ function Player({
     }
     return s;
   }, [inFlight]);
-
   const trafficWindow = (derived.tMax - derived.tMin) * 0.06;
   const recentEdges = useMemo(() => {
     const m = new Map<string, number>();
@@ -1096,13 +1024,11 @@ function Player({
     }
     return m;
   }, [simTime, derived.flights, trafficWindow]);
-
   const maxRecent = Math.max(1, ...recentEdges.values());
   const maxTotal = useMemo(
     () => Math.max(1, ...derived.edges.map((e) => e.count)),
     [derived.edges],
   );
-
   const counters = useMemo(() => {
     let sent = 0;
     let received = 0;
@@ -1119,11 +1045,9 @@ function Player({
     }
     return { sent, received, dropped, inFlight: inFlight.length };
   }, [simTime, derived.flights, inFlight.length]);
-
   const pct =
     ((simTime - derived.tMin) / Math.max(derived.tMax - derived.tMin, 1e-6)) *
     100;
-
   const neighborSet = useMemo(() => {
     const target = focused ?? hover;
     if (!target) return new Set<string>();
@@ -1134,7 +1058,6 @@ function Player({
     }
     return s;
   }, [hover, focused, derived.edges]);
-
   const agentStats = useMemo(() => {
     const m = new Map<string, { sent: number; recv: number; dropped: number }>();
     for (const a of derived.agents) {
@@ -1152,21 +1075,17 @@ function Player({
     }
     return m;
   }, [derived]);
-
   const positions = positionsRef.current;
   const fmt = (t: number) => t.toFixed(2);
-
   const colorOf = (kind: 'send' | 'broadcast' | 'dropped') =>
     kind === 'dropped'
       ? '#8C8576'
       : kind === 'broadcast'
       ? '#B58432'
       : '#C45A3C';
-
   const tooltipTarget = hover ?? focused;
   const tooltipPos = tooltipTarget ? positions.get(tooltipTarget) : undefined;
   const tooltipStats = tooltipTarget ? agentStats.get(tooltipTarget) : undefined;
-
   return (
     <div className="space-y-4">
       <div className="relative rounded-2xl border border-cream-400/70 bg-cream-50 overflow-hidden">
@@ -1201,10 +1120,8 @@ function Player({
               </feMerge>
             </filter>
           </defs>
-
           <rect width={W} height={H} fill="url(#bg-radial)" />
           <rect width={W} height={H} fill="url(#dot-grid)" />
-
           <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
             {/* Static edges — always visible, weighted by total + recent traffic */}
             {derived.edges.map((e) => {
@@ -1215,22 +1132,18 @@ function Player({
               const key = edgeKey(e.source, e.target);
               const recent = recentEdges.get(key) ?? 0;
               const total = e.count / maxTotal;
-
               const isFocusEdge =
                 focused && (e.source === focused || e.target === focused);
               const isHoverEdge =
                 hover && (e.source === hover || e.target === hover);
-
               let stroke = '#221F1A';
               let opacity = 0.05 + total * 0.12;
               let width = 0.5 + total * 1.0;
-
               if (recent > 0) {
                 stroke = '#C45A3C';
                 opacity = 0.30 + (recent / maxRecent) * 0.50;
                 width = 0.9 + (recent / maxRecent) * 2.0;
               }
-
               if (focused) {
                 if (isFocusEdge) {
                   stroke = '#C45A3C';
@@ -1248,7 +1161,6 @@ function Player({
                   opacity *= 0.45;
                 }
               }
-
               return (
                 <line
                   key={key}
@@ -1263,7 +1175,6 @@ function Player({
                 />
               );
             })}
-
             {/* Ripples — emanating pulses on each send/receive moment */}
             <g style={{ pointerEvents: 'none' }}>
               {ripples.map((r, i) => {
@@ -1289,7 +1200,6 @@ function Player({
                 );
               })}
             </g>
-
             {/* In-flight messages — head + glowing tail */}
             <g filter="url(#msg-glow)">
               {inFlight.map((f, i) => {
@@ -1352,7 +1262,6 @@ function Player({
                 );
               })}
             </g>
-
             {/* Agent nodes — line-art icons with drag */}
             {derived.agents.map((a) => {
               const pos = positions.get(a.id);
@@ -1434,7 +1343,6 @@ function Player({
             })}
           </g>
         </svg>
-
         {/* Tooltip */}
         {tooltipTarget && tooltipPos && tooltipStats && (
           <div
@@ -1464,7 +1372,6 @@ function Player({
             </div>
           </div>
         )}
-
         {/* Sim time overlay */}
         <div className="absolute left-4 top-4 flex items-center gap-2 rounded-full border border-cream-400/70 bg-cream-50/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.22em] text-ink-500">
           <span
@@ -1475,7 +1382,6 @@ function Player({
           <span>t = {fmt(simTime)}</span>
           <span className="text-ink-300">/ {fmt(derived.tMax)}</span>
         </div>
-
         {/* Live counters */}
         <div className="absolute right-4 top-4 flex gap-4 rounded-2xl border border-cream-400/70 bg-cream-50/90 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
           <span className="flex items-center gap-1.5">
@@ -1501,7 +1407,6 @@ function Player({
             </span>
           )}
         </div>
-
         {/* View controls */}
         <div className="absolute left-4 bottom-4 flex items-center gap-1 rounded-full border border-cream-400/70 bg-cream-50/90 px-1 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-500">
           <button
@@ -1549,7 +1454,6 @@ function Player({
             fit
           </button>
         </div>
-
         {/* Focus banner */}
         {focused && (
           <div className="absolute bottom-4 right-4 flex items-center gap-2 rounded-full border border-rust/40 bg-rust-bg/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-rust">
@@ -1565,13 +1469,11 @@ function Player({
           </div>
         )}
       </div>
-
       {/* Hint */}
       <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-300 px-1">
         drag nodes to rearrange · scroll to zoom · drag canvas to pan · click an
         agent to focus
       </div>
-
       {/* Sparkline + transport controls */}
       <div className="rounded-2xl border border-cream-400/70 bg-cream-50 px-5 py-4 space-y-3">
         <Sparkline
@@ -1579,7 +1481,6 @@ function Player({
           simTime={simTime}
           onSeek={(t) => setSimTime(t)}
         />
-
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
             onClick={() => {
@@ -1590,7 +1491,6 @@ function Player({
           >
             {playing ? 'Pause' : simTime >= derived.tMax ? 'Replay' : 'Play'}
           </button>
-
           <input
             type="range"
             min={0}
@@ -1602,7 +1502,6 @@ function Player({
             }}
             className="flex-1 accent-rust"
           />
-
           <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-ink-400">
             <span>speed</span>
             {[0.25, 0.5, 1, 2, 4].map((s) => (
@@ -1624,22 +1523,18 @@ function Player({
     </div>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /*  Sparkline of message density + scrub cursor                       */
 /* ------------------------------------------------------------------ */
-
 interface SparklineProps {
   derived: Derived;
   simTime: number;
   onSeek: (t: number) => void;
 }
-
 function Sparkline({ derived, simTime, onSeek }: SparklineProps) {
   const W = 800;
   const H = 36;
   const bins = 80;
-
   const { hist, max } = useMemo(() => {
     const arr = new Array(bins).fill(0) as number[];
     const span = Math.max(derived.tMax - derived.tMin, 1e-6);
@@ -1652,10 +1547,8 @@ function Sparkline({ derived, simTime, onSeek }: SparklineProps) {
     }
     return { hist: arr, max: Math.max(1, ...arr) };
   }, [derived]);
-
   const span = derived.tMax - derived.tMin || 1;
   const cursorX = ((simTime - derived.tMin) / span) * W;
-
   const svgRef = useRef<SVGSVGElement>(null);
   const seekFromEvent = (clientX: number) => {
     const target = svgRef.current;
@@ -1664,7 +1557,6 @@ function Sparkline({ derived, simTime, onSeek }: SparklineProps) {
     const f = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     onSeek(derived.tMin + f * span);
   };
-
   return (
     <svg
       ref={svgRef}
@@ -1697,18 +1589,15 @@ function Sparkline({ derived, simTime, onSeek }: SparklineProps) {
     </svg>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /*  Legend                                                             */
 /* ------------------------------------------------------------------ */
-
 function Legend({ agents }: { agents: Agent[] }) {
   const roles = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of agents) m.set(a.role, (m.get(a.role) ?? 0) + 1);
     return Array.from(m.entries());
   }, [agents]);
-
   return (
     <div className="rounded-2xl border border-cream-400/70 bg-cream-50 p-5">
       <h3 className="font-mono text-[10px] uppercase tracking-[0.22em] text-rust mb-4">
@@ -1763,16 +1652,13 @@ function Legend({ agents }: { agents: Agent[] }) {
     </div>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /*  MessageStream — windowed live feed centered on simTime            */
 /* ------------------------------------------------------------------ */
-
 interface MessageStreamProps {
   derived: Derived;
   simTime: number;
 }
-
 function flightIndexAtOrBefore(flights: Flight[], t: number): number {
   let lo = 0;
   let hi = flights.length - 1;
@@ -1788,7 +1674,6 @@ function flightIndexAtOrBefore(flights: Flight[], t: number): number {
   }
   return ans;
 }
-
 function MessageStream({ derived, simTime }: MessageStreamProps) {
   const recent = useMemo(() => {
     const span = Math.max(derived.tMax - derived.tMin, 1e-6);
@@ -1804,7 +1689,6 @@ function MessageStream({ derived, simTime }: MessageStreamProps) {
     }
     return result;
   }, [derived, simTime]);
-
   return (
     <div className="rounded-2xl border border-cream-400/70 bg-cream-50">
       <div className="border-b border-cream-400/70 px-5 py-3 flex items-center justify-between">
@@ -1852,11 +1736,9 @@ function MessageStream({ derived, simTime }: MessageStreamProps) {
     </div>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
-
 export default function VisualizerPage() {
   const [scenarioId, setScenarioId] = useState<string>('auction');
   const [events, setEvents] = useState<TraceEvent[] | null>(null);
@@ -1864,12 +1746,10 @@ export default function VisualizerPage() {
   const [error, setError] = useState<string | null>(null);
   const [customName, setCustomName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
   // Playback state — lifted so MessageStream can subscribe too
   const [simTime, setSimTime] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(1);
-
   const loadScenario = useCallback(async (id: string) => {
     const s = SCENARIOS.find((sc) => sc.id === id);
     if (!s) return;
@@ -1891,11 +1771,9 @@ export default function VisualizerPage() {
       setLoading(false);
     }
   }, []);
-
   useEffect(() => {
     void Promise.resolve().then(() => loadScenario('auction'));
   }, [loadScenario]);
-
   const handleFile = useCallback((file: File) => {
     setLoading(true);
     setError(null);
@@ -1916,12 +1794,10 @@ export default function VisualizerPage() {
     };
     reader.readAsText(file);
   }, []);
-
   const derived = useMemo(
     () => (events ? derive(events) : null),
     [events],
   );
-
   // Reset playback when a new trace loads
   useEffect(() => {
     if (derived) {
@@ -1929,7 +1805,6 @@ export default function VisualizerPage() {
       setPlaying(true);
     }
   }, [derived]);
-
   return (
     <div className="bg-cream-100">
       <section className="paper-texture border-b border-cream-400/70">
@@ -1938,7 +1813,6 @@ export default function VisualizerPage() {
             <span className="inline-flex h-1.5 w-1.5 rounded-full bg-rust" />
             <span className="eyebrow">Visualizer · live playback</span>
           </div>
-
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <div className="animate-fade-in stagger-1 flex items-start gap-5">
               <Image
@@ -1964,7 +1838,6 @@ export default function VisualizerPage() {
           </div>
         </div>
       </section>
-
       <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-10">
         <div className="animate-fade-in stagger-1">
           <div className="flex items-center justify-between gap-4 mb-4">
@@ -2029,7 +1902,6 @@ export default function VisualizerPage() {
             )}
           </div>
         </div>
-
         {loading && (
           <p className="mt-8 font-mono text-[11px] uppercase tracking-[0.22em] text-ink-400">
             Loading trace…
@@ -2040,7 +1912,6 @@ export default function VisualizerPage() {
             {error}
           </p>
         )}
-
         {derived && (
           <div className="mt-8 animate-fade-in stagger-2">
             <div className="mb-8 grid grid-cols-2 md:grid-cols-5 gap-6 border-t border-rust/40 pt-8">
@@ -2079,7 +1950,6 @@ export default function VisualizerPage() {
                 </div>
               ))}
             </div>
-
             <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
               <Player
                 key={scenarioId}

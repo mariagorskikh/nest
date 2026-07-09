@@ -2,11 +2,9 @@
 """Auth scope middleware — enforce bearer tokens on inbound messages."""
 
 from __future__ import annotations
-
 import base64
 import json
 from typing import Any, cast
-
 from nest_core.sim.middleware import MessageContext, MessageMiddleware
 from nest_core.types import Token
 
@@ -51,14 +49,12 @@ class AuthScopeMiddleware(MessageMiddleware):
             ctx.metadata["deny_reason"] = "auth_plugin_missing"
             ctx.drop = True
             return None
-
         token_raw = _extract_auth_token(ctx.payload)
         if token_raw is None:
             self._denied_count += 1
             ctx.metadata["deny_reason"] = "missing_auth_token"
             ctx.drop = True
             return None
-
         try:
             auth_ctx = await auth.verify(Token(token_raw))
         except ValueError as exc:
@@ -66,13 +62,11 @@ class AuthScopeMiddleware(MessageMiddleware):
             ctx.metadata["deny_reason"] = str(exc)
             ctx.drop = True
             return None
-
         if self._required_scope not in auth_ctx.scopes:
             self._denied_count += 1
             ctx.metadata["deny_reason"] = f"missing_scope:{self._required_scope}"
             ctx.drop = True
             return None
-
         ctx.metadata["auth_subject"] = str(auth_ctx.subject)
         return ctx
 
@@ -87,7 +81,6 @@ def attach_auth_token(payload: bytes, token: str) -> bytes:
             "payload": base64.b64encode(payload).decode("ascii"),
         }
         return json.dumps(wrapped, sort_keys=True).encode("utf-8")
-
     metadata = dict(cast("dict[str, Any]", data.get("metadata", {})))
     metadata["auth_token"] = token
     data["metadata"] = metadata

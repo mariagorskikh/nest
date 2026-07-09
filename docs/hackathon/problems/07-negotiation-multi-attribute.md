@@ -4,13 +4,9 @@ layer: negotiation
 difficulty: medium
 status: solved
 ---
-
 > **Status: SOLVED** — implemented in `scenarios/multi_attribute_market.yaml` with the `pareto` negotiation plugin.
-
 # Multi-attribute negotiation with Pareto-frontier search
-
 ## Motivation
-
 The default negotiation plugin
 [`nest_plugins_reference/negotiation/alternating_offers.py`](../../../packages/nest-plugins-reference/nest_plugins_reference/negotiation/alternating_offers.py)
 is 99 lines of single-attribute Rubinstein bargaining: the `respond`
@@ -23,7 +19,6 @@ the reference plugin uses only `price`. That collapses any
 multi-attribute negotiation (deadline-sensitive deliveries, quality-
 price tradeoffs, bundle deals) into a one-dimensional fight over
 price.
-
 Real markets are multi-attribute. A buyer trading off price against
 delivery date is the most common case in
 [`scenarios/marketplace.yaml`](../../../scenarios/marketplace.yaml)
@@ -34,12 +29,9 @@ round touched negotiation.
 [`docs/layers/negotiation.md`](../../../docs/layers/negotiation.md)
 explicitly wants "multi-attribute negotiation, multi-party
 negotiation, agenda-based bargaining, learning-based bidding."
-
 Anyone modelling supply chains, agent SLAs, or any market where
 "price" alone is a poor proxy benefits.
-
 ## Success criteria
-
 - Ship a negotiation plugin (suggested name: `multi_attribute` or
   `pareto`) registered as `(\"negotiation\", \"<your_name>\")` in
   [`nest_core/plugins.py`](../../../packages/nest-core/nest_core/plugins.py).
@@ -60,9 +52,7 @@ Anyone modelling supply chains, agent SLAs, or any market where
 - Ship `scenarios/multi_attribute_market.yaml` with 10 buyer-seller
   pairs negotiating over price + deadline. Each pair has a
   deterministic utility weight from the per-agent seeded RNG.
-
 ## Suggested approach pointers
-
 - The simplest multi-attribute strategy is "trade-off in the
   direction my opponent indicated." If they conceded on price but
   not deadline last round, you concede on deadline this round.
@@ -75,9 +65,7 @@ Anyone modelling supply chains, agent SLAs, or any market where
 - Patience discounts still apply, but per-attribute.
 - Encode utility weights deterministically from the agent's seed so
   traces replay.
-
 ## Anti-patterns
-
 - Don't ship a plugin that pretends to be multi-attribute but
   collapses to a weighted-sum scalar internally and never explores
   the frontier.
@@ -86,9 +74,7 @@ Anyone modelling supply chains, agent SLAs, or any market where
 - Don't make agreement deterministic from initial offers — agents
   must *exchange* offers to converge.
 - Don't break `alternating_offers`; ship alongside it.
-
 ## Out of scope
-
 - Multi-party (3+ agent) negotiation. Bilateral is enough.
 - Learning across negotiation sessions (no inter-session state).
 - Sealed-bid mechanisms — PR #5 already covers that under

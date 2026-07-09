@@ -2,11 +2,9 @@
 """Tests for failure injection: message drops, byzantine agents, partitions."""
 
 from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any
-
 import pytest
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
@@ -41,7 +39,6 @@ class TestMessageDrop:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=10000)
-
         assert sim.dropped_count == 0
         assert sim.message_count > 0
 
@@ -55,7 +52,6 @@ class TestMessageDrop:
             agents.append(agent)
             sim.add_agent(AgentId(f"a-{i}"), agent)
         await sim.run(max_ticks=50000)
-
         assert sim.dropped_count > 0
         assert sim.message_count > 0
 
@@ -67,7 +63,6 @@ class TestMessageDrop:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=10000)
-
         assert sim.message_count == 0
         assert sim.dropped_count > 0
 
@@ -80,7 +75,6 @@ class TestMessageDrop:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=10000)
-
         content = trace_file.read_text()
         lines = [ln for ln in content.strip().split("\n") if ln]
         dropped_events = [json.loads(ln) for ln in lines if '"dropped"' in ln]
@@ -102,7 +96,6 @@ class TestNetworkPartition:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=10000)
-
         assert sim.message_count == 0
         assert sim.dropped_count > 0
 
@@ -118,7 +111,6 @@ class TestNetworkPartition:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=10000)
-
         assert sim.message_count > 0
         assert sim.dropped_count == 0
 
@@ -137,14 +129,12 @@ class TestByzantineAgents:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=10000)
-
         assert sim.message_count > 0
         all_received = a.received + b.received
         corrupted = sum(
             1 for r in all_received if not r.decode("utf-8", errors="replace").startswith("ping-")
         )
         assert corrupted > 0
-
         receive_events = [
             json.loads(line)
             for line in trace_file.read_text().splitlines()
@@ -189,14 +179,11 @@ class TestFailureViaRunner:
                 "output": {"trace": str(trace_file)},
             }
         )
-
         runner = ScenarioRunner(config)
         result = await runner.run()
-
         assert result.exists()
         content = result.read_text()
         lines = [ln for ln in content.strip().split("\n") if ln]
-
         dropped = 0
         received = 0
         for line in lines:
@@ -205,7 +192,6 @@ class TestFailureViaRunner:
                 dropped += 1
             elif event["kind"] == "receive":
                 received += 1
-
         assert dropped > 0
         assert received > 0
 
@@ -224,7 +210,6 @@ class TestCombinedFailures:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=10000)
-
         assert sim.message_count == 0
         assert sim.dropped_count > 0
 
@@ -250,7 +235,6 @@ class TestCombinedFailures:
         sim.add_agent(AgentId("a"), a)
         sim.add_agent(AgentId("b"), b)
         await sim.run(max_ticks=5000)
-
         assert sim.message_count > 0
         receive_events = [
             json.loads(line)

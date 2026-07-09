@@ -1,13 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Verify hackathon-data.json matches fixture + scores (CI drift check).
-
 Usage::
-
     uv run python scripts/check_hackathon_data.py
 """
 
 from __future__ import annotations
-
 import argparse
 import json
 import sys
@@ -43,14 +40,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scores", type=Path, default=DEFAULT_SCORES)
     parser.add_argument("--committed", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
-
     if not args.fixture.exists():
         print(f"Missing fixture: {args.fixture}", file=sys.stderr)
         return 1
     if not args.committed.exists():
         print(f"Missing committed data: {args.committed}", file=sys.stderr)
         return 1
-
     with tempfile.TemporaryDirectory() as tmp:
         generated = Path(tmp) / "hackathon-data.json"
         _build_to(generated, fixture=args.fixture, scores=args.scores)
@@ -69,7 +64,6 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-
     print(f"{args.committed} matches fixture + scores.")
     return 0
 

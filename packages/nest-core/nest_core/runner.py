@@ -1,21 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Scenario runner — wires up plugins, agents, and simulator from a ScenarioConfig.
-
 Example::
-
     runner = ScenarioRunner(config)
     await runner.run()
 """
 
 from __future__ import annotations
-
 import asyncio
 import json
 import sys
 import time
 from pathlib import Path
 from typing import Any, cast
-
 from nest_core.log import get_logger
 from nest_core.middleware_registry import MiddlewareRegistry
 from nest_core.plugins import PluginRegistry
@@ -28,7 +24,6 @@ from nest_core.sim.trace_merge import merge_traces
 from nest_core.types import AgentId
 
 log = get_logger(__name__)
-
 _MANUAL_TRACE_TIMEOUT_S = 120.0
 
 
@@ -96,9 +91,7 @@ async def _wait_for_worker_traces(
 
 class ScenarioRunner:
     """Runs a scenario end-to-end: resolves plugins, creates agents, runs simulation.
-
     Example::
-
         config = ScenarioConfig.from_yaml("scenarios/marketplace.yaml")
         runner = ScenarioRunner(config)
         await runner.run()
@@ -121,9 +114,7 @@ class ScenarioRunner:
 
     def _resolve_plugins(self) -> dict[str, Any]:
         """Resolve all layer plugins from the config.
-
         Example::
-
             plugins = runner._resolve_plugins()
         """
         layers = self._config.layers
@@ -151,20 +142,15 @@ class ScenarioRunner:
 
     def _create_agents(self, plugins: dict[str, Any]) -> dict[AgentId, Any]:
         """Create agents based on scenario config and task type.
-
         When the agent config specifies ``brain`` as ``"llm"`` or ``"shell"``,
         shell agent factories from *nest-shell* are used instead of the default
         state-machine factories.
-
         Example::
-
             agents = runner._create_agents(plugins)
         """
         brain = self._config.agents.brain
-
         if brain in ("llm", "shell"):
             return self._create_shell_agents(plugins)
-
         from nest_core.scenarios import get_scenario_factory
 
         factory = get_scenario_factory(self._config.task.type)
@@ -172,9 +158,7 @@ class ScenarioRunner:
 
     def _create_shell_agents(self, plugins: dict[str, Any]) -> dict[AgentId, Any]:
         """Create LLM-backed shell agents for the configured task type.
-
         Example::
-
             agents = runner._create_shell_agents(plugins)
         """
         from nest_shell.agent import shell_marketplace_factory
@@ -189,7 +173,6 @@ class ScenarioRunner:
 
         provider = self._config.agents.llm_provider
         model = self._config.agents.llm_model
-
         backend: MockLLMBackend | OpenAIBackend | AnthropicBackend
         if provider == "mock" or model == "mock":
             backend = MockLLMBackend()
@@ -197,7 +180,6 @@ class ScenarioRunner:
             backend = AnthropicBackend(model=model)
         else:
             backend = OpenAIBackend(model=model)
-
         factories = {
             "marketplace": shell_marketplace_factory,
             "auction": shell_auction_factory,
@@ -206,7 +188,6 @@ class ScenarioRunner:
             "supply_chain": shell_supply_chain_factory,
             "reputation": shell_reputation_factory,
         }
-
         task_type = self._config.task.type
         factory_fn = factories.get(task_type)
         if factory_fn is None:
@@ -223,9 +204,7 @@ class ScenarioRunner:
 
     async def run(self) -> Path:
         """Run the scenario and return the trace file path.
-
         Example::
-
             trace_path = await runner.run()
         """
         if self._config.workers > 1:
@@ -235,16 +214,13 @@ class ScenarioRunner:
     async def _run_single(self) -> Path:
         plugins = self._resolve_plugins()
         self._resolved_plugins = plugins
-
         trace_path = Path(self._config.output.trace)
         trace_path.parent.mkdir(parents=True, exist_ok=True)
-
         failures = self._config.failures
         partition_groups: list[list[str]] | None = None
         if failures.network_partition:
             raw_groups = failures.network_partition.get("groups")
             partition_groups = parse_partition_groups(raw_groups)
-
         sim = Simulator(
             seed=self._config.seed,
             trace_path=trace_path,
@@ -256,16 +232,13 @@ class ScenarioRunner:
             parallel=self._config.parallel,
             middleware=self._resolve_middleware() or None,
         )
-
         agents = self._create_agents(plugins)
         wire_auth_to_sim_clock(plugins, lambda: sim.clock.now)
         for agent_id, agent in agents.items():
             sim.add_agent(agent_id, agent)
-
         agent_plugins = cast("dict[AgentId, dict[str, Any]]", plugins.pop("_agent_plugins", {}))
         for agent_id, overrides in agent_plugins.items():
             sim.set_agent_plugins(agent_id, overrides)
-
         await sim.run(max_ticks=self._config.get_max_ticks())
         return self._finalize_output(trace_path)
 
@@ -275,11 +248,9 @@ class ScenarioRunner:
         self._resolved_plugins = plugins
         all_agents = self._create_agents(plugins)
         agent_ids = list(all_agents.keys())
-
         final_trace = Path(self._config.output.trace)
         trace_dir = final_trace.parent / f".{self._config.name}-workers"
         trace_dir.mkdir(parents=True, exist_ok=True)
-
         partitions = partition_agents(
             agent_ids,
             self._config.workers,
@@ -288,7 +259,6 @@ class ScenarioRunner:
             bind_host=self._config.worker_bind,
             worker_hosts=self._config.worker_hosts,
         )
-
         log.info(
             "distributed_start",
             workers=self._config.workers,
@@ -296,26 +266,21 @@ class ScenarioRunner:
             seed=self._config.seed,
             worker_mode=self._config.worker_mode,
         )
-
         routes = build_routes(partitions)
-
         import yaml
 
         config_path = trace_dir / "scenario.yaml"
         with config_path.open("w", encoding="utf-8") as fh:
             yaml.safe_dump(self._config.model_dump(), fh)
-
         routes_path = trace_dir / "routes.json"
         routes_path.write_text(
             json.dumps({str(k): v for k, v in routes.items()}, indent=2),
             encoding="utf-8",
         )
-
         registry_server = None
         registry_url: str | None = None
         if self._config.distributed.shared_registry:
             from nest_plugins_reference.registry.in_memory import InMemoryRegistry
-
             from nest_core.sim.plugin_rpc import RegistryRpcServer
 
             registry_server = RegistryRpcServer(InMemoryRegistry())
@@ -325,7 +290,6 @@ class ScenarioRunner:
             advertise = _registry_advertise_host(self._config)
             registry_url = f"http://{advertise}:{registry_server.port}"
             log.info("registry_rpc_start", url=registry_url)
-
         for part in partitions:
             spec = _worker_spec(
                 part,
@@ -335,7 +299,6 @@ class ScenarioRunner:
             )
             spec_path = trace_dir / f"worker-{part.worker_id}-spec.json"
             spec_path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
-
         try:
             if self._config.worker_mode == "manual":
                 log.info("manual_worker_mode", manifest_dir=str(trace_dir))
@@ -360,7 +323,6 @@ class ScenarioRunner:
                         bind_host=part.bind_host,
                     )
                     await asyncio.sleep(0.05)
-
                 await asyncio.gather(*(p.wait() for p in procs))
                 exit_codes = [p.returncode if p.returncode is not None else -1 for p in procs]
                 if any(code != 0 for code in exit_codes):
@@ -369,7 +331,6 @@ class ScenarioRunner:
         finally:
             if registry_server is not None:
                 await registry_server.stop()
-
         merge_traces([part.trace_path for part in partitions], final_trace)
         log.info("trace_merge", output=str(final_trace), worker_count=len(partitions))
         return self._finalize_output(final_trace)
@@ -379,9 +340,7 @@ class ScenarioRunner:
             from nest_core.metrics import compute_metrics, generate_html_report
 
             self._metrics = compute_metrics(trace_path, self._config.metrics)
-
             if self._config.output.report:
                 report_path = Path(self._config.output.report)
                 generate_html_report(trace_path, self._metrics, report_path)
-
         return trace_path

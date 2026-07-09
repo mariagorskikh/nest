@@ -2,12 +2,10 @@
 """Tests for metrics computation and HTML report generation."""
 
 from __future__ import annotations
-
 import html
 import json
 import math
 from pathlib import Path
-
 import pytest
 from nest_core.metrics import (
     ALL_METRICS,
@@ -307,11 +305,9 @@ class TestHtmlReport:
             {"ts": 2.0, "agent": "a1", "kind": "stop"},
         ]
         trace.write_text("\n".join(json.dumps(e) for e in events))
-
         metrics = {"delivery_rate": 1.0, "message_count": 2.0}
         report_path = tmp_path / "report.html"
         result = generate_html_report(trace, metrics, report_path)
-
         assert result.exists()
         content = result.read_text()
         assert "Nanda Town Trace Report" in content
@@ -329,11 +325,9 @@ class TestHtmlReport:
             {"ts": 1.0, "agent": "a2", "kind": "receive", "from": "a1", "size": 10, "corr": "c-1"},
         ]
         trace.write_text("\n".join(json.dumps(e) for e in events))
-
         metrics = {"success_rate": 1.0, "message_count": 2.0}
         report_path = tmp_path / "report.html"
         result = generate_html_report(trace, metrics, report_path)
-
         assert result.exists()
         content = result.read_text()
         assert "Delivery Rate" in content
@@ -346,11 +340,9 @@ class TestHtmlReport:
             {"ts": 1.0, "agent": evil_name, "kind": "send", "to": "a2"},
         ]
         trace.write_text("\n".join(json.dumps(e) for e in events))
-
         metrics = {"message_count": 1.0}
         report_path = tmp_path / "report.html"
         generate_html_report(trace, metrics, report_path)
-
         content = report_path.read_text()
         assert evil_name not in content
         assert html.escape(evil_name) in content
@@ -378,10 +370,8 @@ class TestRunnerMetrics:
                 "output": {"trace": str(trace_file), "report": str(report_file)},
             }
         )
-
         runner = ScenarioRunner(config)
         await runner.run()
-
         assert runner.metrics["success_rate"] > 0
         assert runner.metrics["message_count"] > 0
         assert runner.metrics["agent_count"] == 10.0

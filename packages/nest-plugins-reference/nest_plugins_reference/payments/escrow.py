@@ -1,28 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """Escrow payments plugin — conditional, arbitrated, multi-party value transfer.
-
 Extends the prepaid-credit ledger with a three-phase escrow protocol:
-
     FUNDED -> DELIVERED -> RELEASED            (happy path)
     FUNDED -> DELIVERED -> DISPUTED -> ARBITRATED   (contested path)
     FUNDED -> REFUNDED                         (payer recalls before delivery)
-
 Funds are debited from the payer at ``open_escrow`` and held by the vault
 until the payer signs ``release`` (full payout to payee), the payer signs
 ``dispute`` and the named arbiter signs ``arbitrate`` (basis-point split),
 or the payer signs ``refund`` while the work is still undelivered.
-
 Authorization is enforced by ``self._agent_id``: only the role-holding
 agent's plugin instance can advance the state. The shared ``escrows``
 dict mirrors the shared ``balances`` dict used by ``prepaid_credits`` and
 ``streaming``, so a scenario can hand the same vault to all three roles.
-
 Satisfies the ``Payments`` protocol; ``pay()`` is a one-call shortcut
 that opens and releases an escrow in a single step (no arbiter, no
 delivery proof) so existing Payments callers still work.
-
 Example::
-
     payments = EscrowPayments(AgentId("buyer"), initial_balance=1000)
     handle = await payments.open_escrow(
         payee=AgentId("seller"),
@@ -37,10 +30,8 @@ Example::
 """
 
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Literal
-
 from nest_core.types import (
     AgentId,
     Money,
@@ -56,9 +47,7 @@ _BPS_DENOM = 10_000
 
 class EscrowError(ValueError):
     """Raised on any escrow state-machine or authorization violation.
-
     Example::
-
         try:
             await payments.release(PaymentRef("x"))
         except EscrowError as e:
@@ -69,9 +58,7 @@ class EscrowError(ValueError):
 @dataclass
 class EscrowHandle:
     """Per-escrow state held by the shared vault.
-
     Example::
-
         handle = EscrowHandle(
             ref=PaymentRef("job-1"),
             payer=AgentId("buyer"),
@@ -96,29 +83,23 @@ class EscrowHandle:
 
 class EscrowPayments:
     """Conditional, arbitrated escrow on top of a debit-credit ledger.
-
     Three roles per escrow, named at ``open_escrow`` time and bound to
     agent ids:
-
     * **payer** — funds the vault; can ``release``, ``dispute``, or
       ``refund`` (only while still ``FUNDED``).
     * **payee** — can ``deliver`` against the open escrow once.
     * **arbiter** — can ``arbitrate`` only after the payer disputes;
       issues a basis-point split (``payee_bps`` in ``[0, 10000]``) that
       decides how much of the locked amount each side receives.
-
     Every transition checks ``self._agent_id`` against the role the
     transition is reserved for; calling out of role raises
     :class:`EscrowError`. Calling out of state (e.g. releasing an
     escrow that has not been delivered) also raises.
-
     The plugin satisfies the ``Payments`` protocol. ``pay()`` is a
     one-call shortcut that opens and releases an escrow in a single
     step so existing Payments callers continue to work; ``refund()``
     only succeeds on escrows that are still ``FUNDED``.
-
     Example::
-
         payments = EscrowPayments(AgentId("buyer"), initial_balance=1000)
         handle = await payments.open_escrow(
             payee=AgentId("seller"),
@@ -144,28 +125,22 @@ class EscrowPayments:
         self._escrows = escrows if escrows is not None else {}
 
     # -- read helpers ----------------------------------------------------
-
     def balance(self, agent: AgentId) -> int:
         """Return an agent's balance.
-
         Example::
-
             bal = payments.balance(AgentId("buyer"))
         """
         return self._balances.get(agent, 0)
 
     def escrow(self, ref: PaymentRef) -> EscrowHandle | None:
         """Return the escrow handle for ``ref`` if it exists.
-
         Example::
-
             handle = payments.escrow(PaymentRef("job-1"))
             assert handle is not None and handle.state == "FUNDED"
         """
         return self._escrows.get(ref)
 
     # -- escrow lifecycle ------------------------------------------------
-
     async def open_escrow(
         self,
         payee: AgentId,
@@ -174,19 +149,15 @@ class EscrowPayments:
         ref: PaymentRef,
     ) -> EscrowHandle:
         """Lock ``amount`` in a new escrow vault. Only the payer may call.
-
         The payer's balance is debited immediately; the funds are held
         by the vault until ``release``, ``arbitrate``, or ``refund``.
-
         Example::
-
             handle = await payments.open_escrow(
                 payee=AgentId("seller"),
                 arbiter=AgentId("arbiter"),
                 amount=Money(amount=250),
                 ref=PaymentRef("job-1"),
             )
-
         Raises:
             EscrowError: If amount is not positive, ``ref`` already used,
                 payer's balance is insufficient, or arbiter equals payer
@@ -201,12 +172,10 @@ class EscrowPayments:
         if arbiter == self._agent_id or arbiter == payee:
             msg = "arbiter must be distinct from payer and payee"
             raise EscrowError(msg)
-
         payer_balance = self._balances.get(self._agent_id, 0)
         if payer_balance < amount.amount:
             msg = f"insufficient balance to fund escrow: {payer_balance} < {amount.amount}"
             raise EscrowError(msg)
-
         self._balances[self._agent_id] = payer_balance - amount.amount
         handle = EscrowHandle(
             ref=ref,
@@ -221,19 +190,15 @@ class EscrowPayments:
 
     async def deliver(self, ref: PaymentRef, proof: str) -> EscrowHandle:
         """Attach a delivery proof to ``ref``. Only the named payee may call.
-
         ``proof`` is opaque to the plugin (a content hash, URL, or
         signed receipt). The payer reads it off-band and decides to
         ``release`` or ``dispute``.
-
         Example::
-
             handle = await payee_payments.deliver(
                 PaymentRef("job-1"),
                 proof="sha256:cafe",
             )
             assert handle.state == "DELIVERED"
-
         Raises:
             EscrowError: If escrow does not exist, caller is not the
                 payee, or state is not ``FUNDED``.
@@ -251,12 +216,9 @@ class EscrowPayments:
 
     async def release(self, ref: PaymentRef) -> Receipt:
         """Pay out the full escrow amount to the payee. Payer-only.
-
         Example::
-
             receipt = await payments.release(PaymentRef("job-1"))
             assert receipt.amount.amount == 250
-
         Raises:
             EscrowError: If escrow does not exist, caller is not the
                 payer, or state is not ``DELIVERED``.
@@ -282,17 +244,13 @@ class EscrowPayments:
 
     async def dispute(self, ref: PaymentRef, reason: str) -> EscrowHandle:
         """Contest the delivery. Payer-only; transitions to ``DISPUTED``.
-
         Once disputed the payer can no longer ``release`` -- only the
         named arbiter can resolve, via :meth:`arbitrate`.
-
         Example::
-
             handle = await payments.dispute(
                 PaymentRef("job-1"),
                 reason="transcript missing last 4 minutes",
             )
-
         Raises:
             EscrowError: If escrow does not exist, caller is not the
                 payer, or state is not ``DELIVERED``.
@@ -315,19 +273,15 @@ class EscrowPayments:
         rationale: str,
     ) -> Receipt:
         """Resolve a disputed escrow with a basis-point payout split.
-
         ``payee_bps`` is the payee's share in basis points ``[0, 10000]``.
         The payee receives ``amount * payee_bps / 10000``; the payer is
         credited the remainder. Settlement is atomic.
-
         Example::
-
             receipt = await arbiter_payments.arbitrate(
                 PaymentRef("job-1"),
                 payee_bps=6000,
                 rationale="approx 60% usable",
             )
-
         Raises:
             EscrowError: If escrow does not exist, caller is not the
                 named arbiter, state is not ``DISPUTED``, or
@@ -343,7 +297,6 @@ class EscrowPayments:
         if not 0 <= payee_bps <= _BPS_DENOM:
             msg = f"payee_bps must be in [0, {_BPS_DENOM}]: {payee_bps}"
             raise EscrowError(msg)
-
         to_payee = handle.amount * payee_bps // _BPS_DENOM
         to_payer = handle.amount - to_payee
         if to_payee:
@@ -363,32 +316,25 @@ class EscrowPayments:
         return receipt
 
     # -- Payments protocol -----------------------------------------------
-
     async def quote(self, service: ServiceRef) -> Quote:
         """Return a fixed quote for any service.
-
         Example::
-
             q = await payments.quote(ServiceRef("svc"))
         """
         return Quote(service=service, price=Money(amount=10))
 
     async def pay(self, to: AgentId, amount: Money, ref: PaymentRef) -> Receipt:
         """Open and release an escrow in one call (no arbiter, no proof).
-
         Provided so the plugin satisfies the bare ``Payments`` protocol.
         The escrow's ``arbiter`` is set to the recipient as a sentinel;
         the escrow is auto-released before any third party can act, so
         the arbiter never matters.
-
         Example::
-
             receipt = await payments.pay(
                 AgentId("seller"),
                 Money(amount=50),
                 PaymentRef("p1"),
             )
-
         Raises:
             EscrowError: If amount is not positive, ``ref`` already used,
                 or payer balance is insufficient.
@@ -411,13 +357,10 @@ class EscrowPayments:
 
     async def verify_payment(self, ref: PaymentRef) -> PaymentStatus:
         """Map escrow/payment state to a ``PaymentStatus``.
-
         Returns ``CONFIRMED`` once an escrow reaches ``RELEASED`` or
         ``ARBITRATED`` (or for any straight ``pay()`` receipt), and
         ``PENDING`` while an escrow is mid-flight.
-
         Example::
-
             status = await payments.verify_payment(PaymentRef("job-1"))
         """
         if ref in self._payments and ref not in self._escrows:
@@ -433,16 +376,12 @@ class EscrowPayments:
 
     async def refund(self, ref: PaymentRef) -> None:
         """Recall funds from an escrow that has not been delivered. Payer-only.
-
         Only succeeds while the escrow is still ``FUNDED`` (the payee
         has not posted a delivery proof yet). After delivery, the
         payer must either ``release`` or ``dispute``; ``refund`` is no
         longer available.
-
         Example::
-
             await payments.refund(PaymentRef("job-1"))
-
         Raises:
             EscrowError: If escrow does not exist, caller is not the
                 payer, or state is not ``FUNDED``.
@@ -461,7 +400,6 @@ class EscrowPayments:
         handle.state = "REFUNDED"
 
     # -- private ---------------------------------------------------------
-
     def _require_escrow(self, ref: PaymentRef) -> EscrowHandle:
         handle = self._escrows.get(ref)
         if handle is None:

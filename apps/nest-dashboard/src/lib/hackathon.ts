@@ -19,27 +19,22 @@
  * import from client components — the public surface is the types and
  * helpers in `./hackathon-types`.
  */
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import { EMPTY_DATASET } from "./hackathon-display";
 import type { Dataset } from "./hackathon-types";
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
 function validateDataset(raw: unknown): Dataset | null {
   if (!isRecord(raw) || !Array.isArray(raw.submissions) || !isRecord(raw.stats)) {
     return null;
   }
   return raw as unknown as Dataset;
 }
-
 // Re-export generated types and display helpers from a single module.
 export * from "./hackathon-types";
 export * from "./hackathon-display";
-
 /**
  * Read the static dataset JSON from `public/hackathon-data.json`.
  *
@@ -64,7 +59,6 @@ export async function loadDataset(): Promise<Dataset> {
     return EMPTY_DATASET;
   }
 }
-
 // Mark this module as revalidating at ~5 min intervals when used in a
 // Server Component — keeps the build artifact warm without hitting
 // disk on every request.

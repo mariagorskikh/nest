@@ -4,21 +4,17 @@
  * Server component owns the dataset + 404 handling; the
  * client-side `LayerSubmissions` sub-component owns sort UI.
  */
-
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { loadDataset, submissionsForLayer } from "@/lib/hackathon";
 import { LayerSubmissions } from "./layer-submissions";
-
 export const revalidate = 300;
-
 export async function generateStaticParams() {
   // Pre-render every known layer at build time. Other slugs fall
   // through to the dynamic path and 404 on first request.
   const data = await loadDataset();
   return data.layers.map((layer) => ({ layer: layer.key }));
 }
-
 export default async function LayerPage({
   params,
 }: {
@@ -30,9 +26,7 @@ export default async function LayerPage({
   if (!meta) {
     notFound();
   }
-
   const subs = submissionsForLayer(data, meta.key);
-
   return (
     <div className="bg-cream-100">
       <section className="paper-texture border-b border-cream-400/70">
@@ -45,7 +39,6 @@ export default async function LayerPage({
               ← Layers
             </Link>
           </div>
-
           <div className="grid gap-10 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <div>
               <p className="eyebrow">Layer · {meta.label.toLowerCase()}</p>
@@ -77,7 +70,6 @@ export default async function LayerPage({
           </div>
         </div>
       </section>
-
       <section>
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-12">
           <LayerSubmissions submissions={subs} layerLabel={meta.label} />

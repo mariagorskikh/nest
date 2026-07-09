@@ -6,14 +6,11 @@ import {
 } from "@/lib/skills-api-guard";
 import { isSafeExternalUrl } from "@/lib/url-safety";
 import { createSkill, listSkills, type SkillSourceType } from "@/lib/skills";
-
 // This registry is read/written at request time, never prerendered.
 export const dynamic = "force-dynamic";
-
 function s(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
-
 /**
  * GET /api/skills
  * Returns every submitted SkillMD as JSON. An OpenClaw agent can call this to
@@ -23,7 +20,6 @@ export async function GET() {
   const skills = await listSkills();
   return Response.json({ count: skills.length, skills });
 }
-
 /**
  * POST /api/skills
  * Register a SkillMD programmatically. Body (JSON):
@@ -35,11 +31,9 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
   const rateError = checkSkillsWriteRateLimit(request);
   if (rateError) return rateError;
-
   const parsed = await readSkillsJsonBody(request);
   if ("error" in parsed) return parsed.error;
   const body = parsed.body;
-
   const name = s(body.name);
   const sourceType = s(body.source_type) as SkillSourceType;
   const sourceUrl = s(body.source_url);
@@ -50,7 +44,6 @@ export async function POST(request: NextRequest) {
   const submitterIp = forwarded
     ? forwarded.split(",")[0].trim() || null
     : request.headers.get("x-real-ip");
-
   if (!name) {
     return Response.json({ error: "name is required" }, { status: 400 });
   }
@@ -78,7 +71,6 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
-
   try {
     const skill = await createSkill({
       name,

@@ -3,7 +3,6 @@
 """Generate JSONL trace fixtures for the nest-dashboard visualizer."""
 
 from __future__ import annotations
-
 import asyncio
 import shutil
 import sys
@@ -12,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS_DIR = ROOT / "scenarios"
 OUT_DIR = ROOT / "apps" / "nest-dashboard" / "public" / "scenario-traces"
-
 NEW_SCENARIOS = (
     "memory_concurrent_writers",
     "escrow_marketplace",
@@ -38,7 +36,6 @@ async def _run_one(name: str, out_path: Path) -> None:
     if not yaml_path.exists():
         print(f"skip missing scenario: {yaml_path}", file=sys.stderr)
         return
-
     data = ScenarioConfig.from_yaml(yaml_path).model_dump()
     data["duration"] = "ticks: 500"
     data.setdefault("output", {})["trace"] = str(out_path)

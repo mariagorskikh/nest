@@ -2,11 +2,9 @@
 """Tests for message middleware and the middleware registry."""
 
 from __future__ import annotations
-
 import json
 import random
 from pathlib import Path
-
 import pytest
 from nest_core.middleware_registry import MiddlewareRegistry
 from nest_core.scenario import ScenarioConfig
@@ -122,7 +120,6 @@ class TestBuiltinMiddleware:
         sim.add_agent(AgentId("boom"), _BoomAgent())
         sim.add_agent(AgentId("sender"), _StartToBoomAgent())
         await sim.run(max_ticks=10)
-
         kinds = [json.loads(line)["kind"] for line in trace_file.read_text().splitlines() if line]
         assert "error" in kinds
 

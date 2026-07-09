@@ -2,11 +2,9 @@
 """Tests for protocol invariant validators."""
 
 from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any
-
 from nest_core.validators import (
     VALIDATORS,
     ValidationResult,
@@ -51,7 +49,6 @@ from nest_core.validators import (
 )
 
 type Event = dict[str, Any]
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -974,7 +971,6 @@ class TestEmpicPaymentsValidators:
             _empic({"event_type": "empic_escrow_released", "payment_ref": "p1", "amount": 20}),
             _empic({"event_type": "empic_escrow_refunded", "payment_ref": "p1", "amount": 30}),
         ]
-
         results = validate_empic_escrow_conservation(events)
         assert len(results) == 1
         assert results[0].passed
@@ -985,7 +981,6 @@ class TestEmpicPaymentsValidators:
             _empic({"event_type": "empic_escrow_debited", "payment_ref": "p1", "amount": 50}),
             _empic({"event_type": "empic_escrow_released", "payment_ref": "p1", "amount": 20}),
         ]
-
         results = validate_empic_escrow_conservation(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -998,7 +993,6 @@ class TestEmpicPaymentsValidators:
             _empic({"event_type": "empic_escrow_released", "payment_ref": "p1", "amount": 70}),
             _empic({"event_type": "empic_escrow_refunded", "payment_ref": "p2", "amount": 30}),
         ]
-
         results = validate_empic_escrow_conservation(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1025,7 +1019,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_no_release_without_accepted_delivery(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1050,7 +1043,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_no_release_without_accepted_delivery(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1075,7 +1067,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_invalid_delivery_not_paid(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1124,7 +1115,6 @@ class TestEmpicPaymentsValidators:
                 tick=1,
             ),
         ]
-
         results = validate_empic_delivery_policy_integrity(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1173,7 +1163,6 @@ class TestEmpicPaymentsValidators:
                 tick=1,
             ),
         ]
-
         results = validate_empic_delivery_policy_integrity(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1223,7 +1212,6 @@ class TestEmpicPaymentsValidators:
                 tick=1,
             ),
         ]
-
         results = validate_empic_delivery_policy_integrity(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1273,7 +1261,6 @@ class TestEmpicPaymentsValidators:
                 tick=1,
             ),
         ]
-
         results = validate_empic_delivery_policy_integrity(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1310,7 +1297,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_pubsub_billing_caps(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1346,7 +1332,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_pubsub_billing_caps(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1381,7 +1366,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_pubsub_billing_caps(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1432,7 +1416,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_pubsub_billing_caps(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1460,7 +1443,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_pubsub_billing_caps(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1480,7 +1462,6 @@ class TestEmpicPaymentsValidators:
             ),
             _empic({"event_type": "empic_escrow_debited", "payment_ref": "p1", "amount": 50}),
         ]
-
         results = validate_empic_max_spend_enforced(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1499,7 +1480,6 @@ class TestEmpicPaymentsValidators:
             ),
             _empic({"event_type": "empic_escrow_debited", "payment_ref": "p1", "amount": 50}),
         ]
-
         results = validate_empic_max_spend_enforced(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1527,7 +1507,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_max_spend_enforced(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1539,7 +1518,6 @@ class TestEmpicPaymentsValidators:
             _empic({"event_type": "empic_escrow_debited", "payment_ref": "p1", "amount": 50}),
             _empic({"event_type": "empic_escrow_released", "payment_ref": "p1", "amount": 50}),
         ]
-
         results = validate_empic_all_escrows_terminal(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1550,7 +1528,6 @@ class TestEmpicPaymentsValidators:
             _empic({"event_type": "empic_escrow_debited", "payment_ref": "p1", "amount": 50}),
             _empic({"event_type": "empic_escrow_released", "payment_ref": "p1", "amount": 10}),
         ]
-
         results = validate_empic_all_escrows_terminal(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1563,7 +1540,6 @@ class TestEmpicPaymentsValidators:
             _empic({"event_type": "empic_escrow_debited", "payment_ref": "s1", "amount": 40}),
             _empic({"event_type": "empic_escrow_refunded", "payment_ref": "s1", "amount": 40}),
         ]
-
         results = validate_empic_all_escrows_terminal(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1598,7 +1574,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_no_duplicate_settlement(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1612,7 +1587,6 @@ class TestEmpicPaymentsValidators:
             _empic({"event_type": "empic_escrow_refunded", "payment_ref": "p1", "amount": 25}),
             _empic({"event_type": "empic_escrow_refunded", "payment_ref": "p1", "amount": 25}),
         ]
-
         results = validate_empic_no_duplicate_settlement(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1649,7 +1623,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_provider_service_binding(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1684,7 +1657,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_provider_service_binding(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1703,7 +1675,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_provider_service_binding(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1762,7 +1733,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_payment_participant_binding(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1796,7 +1766,6 @@ class TestEmpicPaymentsValidators:
                 }
             ),
         ]
-
         results = validate_empic_payment_participant_binding(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1816,7 +1785,6 @@ class TestEmpicPaymentsValidators:
                 }
             )
         ]
-
         results = validate_empic_no_secret_material(events)
         assert len(results) == 1
         assert results[0].passed
@@ -1834,7 +1802,6 @@ class TestEmpicPaymentsValidators:
                 }
             )
         ]
-
         results = validate_empic_no_secret_material(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1858,7 +1825,6 @@ class TestEmpicPaymentsValidators:
                 tick=3,
             ),
         ]
-
         results = validate_empic_no_drain_after_close(events)
         assert len(results) == 1
         assert not results[0].passed
@@ -1887,7 +1853,6 @@ class TestEmpicPaymentsValidators:
                 tick=3,
             ),
         ]
-
         results = validate_empic_no_overbill_on_partition(events)
         assert len(results) == 1
         assert not results[0].passed
