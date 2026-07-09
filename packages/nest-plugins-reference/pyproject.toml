@@ -35,6 +35,7 @@ Repository = "https://github.com/projnanda/nandatown"
 # install-time discovery path described in CONTRIBUTING.md.
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
+replay_safe = "nest_plugins_reference.comms.replay_safe:ReplaySafeComms"
 
 [project.entry-points."nest.plugins.memory"]
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"
