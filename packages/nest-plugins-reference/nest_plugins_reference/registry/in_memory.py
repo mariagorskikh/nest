@@ -64,9 +64,7 @@ class InMemoryRegistry:
             results = [self._cards[aid] for aid in candidate_ids if aid in self._cards]
         else:
             results = list(self._cards.values())
-        if query.name_pattern:
-            results = [c for c in results if query.name_pattern in c.name]
-        return results
+        return [c for c in results if self._matches(c, query)]
 
     async def subscribe(self, query: Query) -> AsyncGenerator[AgentCard, None]:
         """Subscribe to new agent registrations matching a query.
@@ -97,4 +95,10 @@ class InMemoryRegistry:
     def _matches(card: AgentCard, query: Query) -> bool:
         if query.capabilities and not all(cap in card.capabilities for cap in query.capabilities):
             return False
-        return not (query.name_pattern and query.name_pattern not in card.name)
+        if query.name_pattern and query.name_pattern not in card.name:
+            return False
+        if query.metadata_filter:
+            for key, value in query.metadata_filter.items():
+                if card.metadata.get(key) != value:
+                    return False
+        return True

@@ -152,6 +152,35 @@ class TestRegistryRpc:
         finally:
             await server.stop()
 
+    @pytest.mark.asyncio
+    async def test_oversized_body_returns_413_without_routing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("NEST_HTTP_MAX_BODY", "1024")
+        server = RegistryRpcServer(InMemoryRegistry())
+        port = await server.start("127.0.0.1", 0)
+        try:
+            payload = b"x" * 2048
+            request = (
+                f"POST /registry/register HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{port}\r\n"
+                f"Content-Length: {len(payload)}\r\n"
+                "\r\n"
+            ).encode("ascii") + payload
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(request)
+            await writer.drain()
+            response = await reader.read(4096)
+            writer.close()
+            await writer.wait_closed()
+            assert b"413" in response
+            assert b"payload too large" in response
+            found = await RemoteRegistry(f"http://127.0.0.1:{port}").lookup(Query())
+            assert found == []
+        finally:
+            await server.stop()
+
 
 class TestDistributedRunner:
     @pytest.fixture(autouse=True)

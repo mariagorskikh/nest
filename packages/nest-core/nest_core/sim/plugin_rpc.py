@@ -184,14 +184,24 @@ class RegistryRpcServer:
                 )
                 await writer.drain()
                 return
+            max_body = http_max_body_bytes()
+            if content_length > max_body:
+                response_body = b'{"ok":false,"error":"payload too large"}'
+                writer.write(
+                    (
+                        "HTTP/1.1 413 Payload Too Large\r\n"
+                        "Content-Type: application/json\r\n"
+                        f"Content-Length: {len(response_body)}\r\n"
+                        "\r\n"
+                    ).encode("ascii")
+                    + response_body
+                )
+                await writer.drain()
+                return
             body = b""
             status = 404
             response_body = b'{"ok":false}'
-            max_body = http_max_body_bytes()
-            if content_length > max_body:
-                status = 413
-                response_body = b'{"ok":false,"error":"payload too large"}'
-            elif content_length > 0:
+            if content_length > 0:
                 body = await reader.readexactly(content_length)
             payload_obj: dict[str, Any] = {}
             if body:

@@ -66,8 +66,14 @@ try {
     if ($DatabaseUrl) {
         Write-Step 'writing apps/nest-dashboard/.env.local'
         $escaped = $DatabaseUrl.Replace('"', '\"')
-        "DATABASE_URL=`"$escaped`"" | Set-Content -Path $EnvLocal -Encoding utf8
-        Write-Host "Wrote $EnvLocal"
+        $newLine = "DATABASE_URL=`"$escaped`""
+        $lines = @()
+        if (Test-Path $EnvLocal) {
+            $lines = @(Get-Content $EnvLocal | Where-Object { $_ -notmatch '^\s*DATABASE_URL\s*=' })
+        }
+        $lines += $newLine
+        $lines | Set-Content -Path $EnvLocal -Encoding utf8
+        Write-Host "Wrote $EnvLocal (merged DATABASE_URL, preserved other keys)"
     }
     $hasEnvLocal = Test-Path $EnvLocal
     if ($InitSkills) {

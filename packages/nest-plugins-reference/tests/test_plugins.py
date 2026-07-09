@@ -200,6 +200,33 @@ class TestInMemoryRegistry:
         results = await reg.lookup(Query())
         assert len(results) == 0
 
+    @pytest.mark.asyncio
+    async def test_lookup_metadata_filter(self) -> None:
+        from nest_plugins_reference.registry.in_memory import InMemoryRegistry
+
+        reg = InMemoryRegistry()
+        await reg.register(
+            AgentCard(
+                agent_id=AgentId("a1"),
+                name="SellerA",
+                capabilities=["sell"],
+                metadata={"region": "us", "tier": "gold"},
+            )
+        )
+        await reg.register(
+            AgentCard(
+                agent_id=AgentId("a2"),
+                name="SellerB",
+                capabilities=["sell"],
+                metadata={"region": "eu", "tier": "gold"},
+            )
+        )
+        results = await reg.lookup(
+            Query(capabilities=["sell"], metadata_filter={"region": "us", "tier": "gold"})
+        )
+        assert len(results) == 1
+        assert results[0].agent_id == AgentId("a1")
+
 
 # ---------------------------------------------------------------------------
 # 5. Auth: jwt

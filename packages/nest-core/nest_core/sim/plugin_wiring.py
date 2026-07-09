@@ -5,13 +5,16 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from typing import Any
-from nest_plugins_reference.auth.jwt_auth import KNOWN_WEAK_SECRET, JwtAuth
 
 
 def wire_auth_to_sim_clock(plugins: dict[str, Any], clock_now: Callable[[], float]) -> None:
     """Instantiate JwtAuth (if still a class) and bind it to the simulator clock."""
     auth = plugins.get("auth")
     if auth is None:
+        return
+    try:
+        from nest_plugins_reference.auth.jwt_auth import KNOWN_WEAK_SECRET, JwtAuth
+    except ImportError:
         return
     secret_raw = os.environ.get("NEST_JWT_SECRET", KNOWN_WEAK_SECRET.decode("utf-8"))
     secret = secret_raw.encode("utf-8")
