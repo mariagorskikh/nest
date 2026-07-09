@@ -46,7 +46,17 @@ _BUYER_BALANCE = 5000
 
 @dataclass
 class _Job:
-    """One round's settlement: the ref, the locked weights, and the amount."""
+    """One round's settlement: the ref, the locked weights, and the amount.
+
+    Example::
+
+        job = _Job(
+            buyer=AgentId("buyer-0"),
+            ref=PaymentRef("split-buyer-0-0"),
+            payees=_split("contrib-0", "contrib-1"),
+            amount=1000,
+        )
+    """
 
     buyer: AgentId
     ref: PaymentRef
@@ -110,14 +120,17 @@ class BuyerAgent(StateMachineAgent):
     """
 
     def __init__(self, agent_id: AgentId, jobs: list[_Job]) -> None:
+        """Bind the buyer to its id and its per-round settlement plan."""
         self._id = agent_id
         self._jobs = jobs
 
     async def on_start(self, ctx: AgentContext) -> None:
+        """Schedule one ``run:<index>`` wakeup per job, one logical tick apart."""
         for index in range(len(self._jobs)):
             await ctx.schedule(float(index + 1), f"run:{index}".encode())
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
+        """Open, broadcast, and settle the scheduled job's fan-out payment."""
         text = payload.decode("utf-8", errors="replace")
         if not text.startswith("run:"):
             return
