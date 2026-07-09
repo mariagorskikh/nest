@@ -76,7 +76,7 @@ async def run_worker_partition(
         parallel=True,
         middleware=_resolve_middleware(config) or None,
     )
-    wire_auth_to_sim_clock(worker_plugins, sim.clock.now)
+    wire_auth_to_sim_clock(worker_plugins, lambda: sim.clock.now)
 
     bridge = WorkerHttpBridge(sim.event_queue, sim.clock)
 

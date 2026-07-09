@@ -258,7 +258,7 @@ class ScenarioRunner:
         )
 
         agents = self._create_agents(plugins)
-        wire_auth_to_sim_clock(plugins, sim.clock.now)
+        wire_auth_to_sim_clock(plugins, lambda: sim.clock.now)
         for agent_id, agent in agents.items():
             sim.add_agent(agent_id, agent)
 
