@@ -3036,6 +3036,214 @@ def validate_escrow_no_payout_without_delivery(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Delegated-auth validators (adversarial)
+# ---------------------------------------------------------------------------
+
+
+def _parse_authz_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Parse trace broadcasts of the form ``authz:<kind>:k=v:k=v...``.
+
+    Returns one dict per matching event, in trace (emission) order, with
+    ``kind``, the broadcasting ``agent``, and the parsed ``key=value`` fields.
+    Only sender-recorded ``broadcast`` events are inspected, so a broadcast is
+    counted once rather than once per recipient. Non-matching broadcasts are
+    skipped silently.
+    """
+    out: list[dict[str, str]] = []
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("authz:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 2:
+            continue
+        parsed: dict[str, str] = {"kind": parts[1], "agent": str(ev.get("agent", ""))}
+        for piece in parts[2:]:
+            if "=" in piece:
+                key, _, value = piece.partition("=")
+                parsed[key] = value
+        out.append(parsed)
+    return out
+
+
+def _authz_scope_map(parsed: list[dict[str, str]]) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Build ``audience -> scopes`` and ``audience -> parent-audience`` maps.
+
+    Each token is keyed by the audience it was minted for (unique in a strict
+    delegation tree). Root tokens come from ``issued`` events, delegated tokens
+    from ``delegated`` events.
+    """
+    scopes: dict[str, set[str]] = {}
+    parent: dict[str, str] = {}
+    for ev in parsed:
+        if ev["kind"] == "issued":
+            holder = ev.get("holder", "")
+            scopes[holder] = {s for s in ev.get("scopes", "").split("|") if s}
+        elif ev["kind"] == "delegated":
+            aud = ev.get("aud", "")
+            scopes[aud] = {s for s in ev.get("scopes", "").split("|") if s}
+            parent[aud] = ev.get("parent", "")
+    return scopes, parent
+
+
+def validate_authz_no_scope_escalation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every delegated token's scopes are a subset of its parent's scopes.
+
+    Delegation must only *attenuate*. A child token that holds a scope its
+    parent never held is a privilege escalation -- the confused-deputy /
+    scope-widening attack. This reads the ``authz:delegated`` events, reconstructs
+    the token tree by audience, and flags any child whose scope set is not a
+    subset of its parent's.
+
+    The default ``jwt`` plugin has no ``delegate`` surface, so the tree never
+    forms and no ``authz:delegated`` events reach the trace -- reported here as
+    "no delegation observed" (the adversarial discrimination the charter asks
+    for).
+    """
+    parsed = _parse_authz_events(events)
+    scopes, parent = _authz_scope_map(parsed)
+    violations: list[str] = []
+    for aud, parent_aud in parent.items():
+        child_scopes = scopes.get(aud, set())
+        parent_scopes = scopes.get(parent_aud, set())
+        extra = child_scopes - parent_scopes
+        if extra:
+            violations.append(
+                f"{aud!r} holds {sorted(extra)} not held by parent {parent_aud!r} "
+                f"{sorted(parent_scopes)}"
+            )
+    if violations:
+        return [ValidationResult("authz_no_scope_escalation", False, "; ".join(violations))]
+    if not parent:
+        return [
+            ValidationResult(
+                "authz_no_scope_escalation",
+                False,
+                "no delegation observed in trace -- plugin lacks the delegate surface",
+            )
+        ]
+    return [
+        ValidationResult(
+            "authz_no_scope_escalation",
+            True,
+            f"{len(parent)} delegated tokens all attenuate their parent's scopes",
+        )
+    ]
+
+
+def validate_authz_cascading_revocation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No token verifies OK once any ancestor in its chain has been revoked.
+
+    Revoking a parent capability must invalidate every descendant. The check
+    walks the trace in order, tracking which audiences have been revoked
+    (``authz:revoked`` events), and flags any ``authz:verified:result=ok`` for a
+    token whose audience *or any ancestor audience* is already revoked.
+
+    Because verifications that happened **before** the revocation are legitimate,
+    ordering matters -- the check only faults an OK verification that occurs
+    after the revoke. A plugin that keeps honoring descendants of a revoked
+    parent (e.g. ``jwt``, which revokes by exact string with no parent-child
+    link) is caught here; ``jwt`` additionally emits no delegation lifecycle at
+    all, so this reports "no verifications observed".
+    """
+    parsed = _parse_authz_events(events)
+    _, parent = _authz_scope_map(parsed)
+
+    def _ancestors(aud: str) -> set[str]:
+        chain: set[str] = set()
+        cur = aud
+        seen: set[str] = set()
+        while cur in parent and cur not in seen:
+            seen.add(cur)
+            cur = parent[cur]
+            chain.add(cur)
+        return chain
+
+    revoked: set[str] = set()
+    violations: list[str] = []
+    saw_verified = False
+    for ev in parsed:
+        if ev["kind"] == "revoked":
+            revoked.add(ev.get("aud", ""))
+        elif ev["kind"] == "verified" and ev.get("result") == "ok":
+            saw_verified = True
+            aud = ev.get("aud", "")
+            compromised = ({aud} | _ancestors(aud)) & revoked
+            if compromised:
+                violations.append(
+                    f"{aud!r} verified OK after ancestor(s) {sorted(compromised)} revoked"
+                )
+    if violations:
+        return [ValidationResult("authz_cascading_revocation", False, "; ".join(violations))]
+    if not saw_verified:
+        return [
+            ValidationResult(
+                "authz_cascading_revocation",
+                False,
+                "no verifications observed in trace -- plugin lacks the delegate surface",
+            )
+        ]
+    return [
+        ValidationResult(
+            "authz_cascading_revocation",
+            True,
+            "no token verified OK after an ancestor was revoked",
+        )
+    ]
+
+
+def validate_authz_audience_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No token verifies OK when presented by an agent other than its audience.
+
+    A capability minted for agent B must not be usable by agent C (a
+    confused-deputy replay). Every ``authz:verified:result=ok`` event must carry
+    ``presenter == aud``; a mismatch means the plugin honored a token for the
+    wrong holder.
+
+    The default ``jwt`` plugin binds no audience and never delegates, so it
+    emits no verifications -- reported here as "no verifications observed".
+    """
+    parsed = _parse_authz_events(events)
+    violations: list[str] = []
+    saw_verified = False
+    for ev in parsed:
+        if ev["kind"] != "verified" or ev.get("result") != "ok":
+            continue
+        saw_verified = True
+        presenter = ev.get("presenter", "")
+        aud = ev.get("aud", "")
+        if presenter != aud:
+            violations.append(f"token for {aud!r} verified OK when presented by {presenter!r}")
+    if violations:
+        return [ValidationResult("authz_audience_binding", False, "; ".join(violations))]
+    if not saw_verified:
+        return [
+            ValidationResult(
+                "authz_audience_binding",
+                False,
+                "no verifications observed in trace -- plugin lacks the delegate surface",
+            )
+        ]
+    return [
+        ValidationResult(
+            "authz_audience_binding",
+            True,
+            "every OK verification was presented by the token's declared audience",
+        )
+    ]
+
+
 def validate_receipt_reputation_ring_severed(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -4705,5 +4913,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "delegated_auth": [
+        validate_authz_no_scope_escalation,
+        validate_authz_cascading_revocation,
+        validate_authz_audience_binding,
     ],
 }

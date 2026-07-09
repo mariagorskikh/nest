@@ -293,6 +293,7 @@ for r in validate_trace(Path("traces/auction.jsonl"), "auction"):
 | Supply chain | Delivered goods trace through all four hops; no materials lost. |
 | Reputation | Cheaters get bad reports; agents with score ≤ −3 are warned. |
 | Marketplace | No double-sell (same product to two buyers); every buy answered; sold price matches the offer. |
+| Delegated auth | Delegated scopes ⊆ the parent's (attenuation); no token verifies after an ancestor is revoked (cascading revocation); presenter must equal the token's audience. |
 
 > **Important.** Validators are property *checks*, not blessings of the
 > bundled scenarios. They inspect trace evidence and can still only verify

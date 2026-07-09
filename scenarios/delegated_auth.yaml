@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated-auth tree: 1 coordinator + 3 intermediaries + 12 leaves drive the
+# delegatable auth plugin through a full delegation tree plus three adversarial
+# probes (scope escalation, stale parent, audience confusion). The three
+# delegated_auth validators must all PASS under `auth: delegatable` and all FAIL
+# under `auth: jwt` (no delegate surface, so no delegation events are emitted).
+
+name: delegated_auth
+description: |
+  A coordinator issues a root capability, delegates narrowed tokens to three
+  intermediaries, and each intermediary delegates further-narrowed tokens to
+  four leaves. intermediary-0 attempts a scope escalation and an audience
+  confusion; the coordinator revokes intermediary-2 (cascading to its four
+  leaves) and presents a pre-minted expired token. All three delegated_auth
+  validators (no-scope-escalation, cascading-revocation, audience-binding)
+  must pass under the delegatable plugin.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 16
+  brain: state-machine
+  roles:
+    - name: coordinator
+      count: 1
+      config: {}
+    - name: intermediary
+      count: 3
+      config: {}
+    - name: leaf
+      count: 12
+      config: {}
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: delegatable
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: delegated_auth
+  config: {}
+
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+
+# Event budget (max_ticks counts processed events). Each broadcast fans out to
+# all 16 agents, so the tree + revoke/recheck/expired probes need headroom.
+duration: "ticks: 5000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/delegated_auth.jsonl
