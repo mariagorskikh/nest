@@ -1997,6 +1997,7 @@ class TestValidatorRegistry:
             "failure_detection",
             "parc_migration",
             "rogue_trusted_agent",
+            "delegated_auth",
         }
         assert set(VALIDATORS.keys()) == expected
 

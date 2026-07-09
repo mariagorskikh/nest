@@ -4600,6 +4600,231 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 # ---------------------------------------------------------------------------
+# Delegated auth validators (adversarial)
+# ---------------------------------------------------------------------------
+
+
+def _collect_auth_lines(events: list[dict[str, Any]], prefix: str) -> list[str]:
+    """Collect broadcast/send bodies that start with an auth trace prefix."""
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if msg.startswith(prefix):
+            lines.append(msg)
+    return lines
+
+
+def _auth_attacks(events: list[dict[str, Any]]) -> list[str]:
+    """Return declared auth attack types from the trace."""
+    return [line.split(":", 1)[1] for line in _collect_auth_lines(events, "auth_attack:")]
+
+
+def validate_delegated_auth_scope_escalation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Scope escalation attempts must be blocked at delegation time.
+
+    Example::
+
+        results = validate_delegated_auth_scope_escalation(events)
+    """
+    attacks = _auth_attacks(events)
+    if "scope_escalation" not in attacks:
+        return [
+            ValidationResult(
+                "delegated_auth_scope_escalation",
+                False,
+                "no scope_escalation attack declared in trace",
+            )
+        ]
+    blocked = any(
+        ":blocked:" in line
+        for line in _collect_auth_lines(events, "auth_delegate:")
+        if "leaf-99" in line and "admin" in line
+    )
+    if not blocked:
+        return [
+            ValidationResult(
+                "delegated_auth_scope_escalation",
+                False,
+                "scope escalation was not blocked at delegation",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_scope_escalation",
+            True,
+            "scope escalation blocked at delegation",
+        )
+    ]
+
+
+def validate_delegated_auth_stale_parent(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """After parent revocation, child verification must be rejected.
+
+    Example::
+
+        results = validate_delegated_auth_stale_parent(events)
+    """
+    attacks = _auth_attacks(events)
+    revokes = _collect_auth_lines(events, "auth_revoke:")
+    if "stale_parent" not in attacks or not revokes:
+        return [
+            ValidationResult(
+                "delegated_auth_stale_parent",
+                False,
+                "no stale_parent attack or auth_revoke in trace",
+            )
+        ]
+    rejected = any(
+        line.startswith("auth_verify:")
+        and ":rejected:" in line
+        and ("RevokedAncestorError" in line or "revoked" in line.lower() or "ValueError" in line)
+        for line in _collect_auth_lines(events, "auth_verify:")
+    )
+    if not rejected:
+        return [
+            ValidationResult(
+                "delegated_auth_stale_parent",
+                False,
+                "child still verified after parent revocation",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_stale_parent",
+            True,
+            "revoked parent blocked child verification",
+        )
+    ]
+
+
+def validate_delegated_auth_audience_confusion(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A child token presented by the wrong audience agent must be rejected.
+
+    Example::
+
+        results = validate_delegated_auth_audience_confusion(events)
+    """
+    attacks = _auth_attacks(events)
+    if "audience_confusion" not in attacks:
+        return [
+            ValidationResult(
+                "delegated_auth_audience_confusion",
+                False,
+                "no audience_confusion attack declared in trace",
+            )
+        ]
+    confused = [
+        line
+        for line in _collect_auth_lines(events, "auth_verify:")
+        if line.startswith("auth_verify:leaf-1:") and ":rejected:" in line
+    ]
+    if not confused or not any("AudienceMismatchError" in line for line in confused):
+        return [
+            ValidationResult(
+                "delegated_auth_audience_confusion",
+                False,
+                "wrong presenter was not rejected for audience mismatch",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_audience_confusion",
+            True,
+            "audience confusion rejected at verification",
+        )
+    ]
+
+
+def validate_delegated_auth_transitive_revocation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Revoking a grandparent must invalidate grandchild verification.
+
+    Example::
+
+        results = validate_delegated_auth_transitive_revocation(events)
+    """
+    attacks = _auth_attacks(events)
+    if "transitive_revocation" not in attacks:
+        return [
+            ValidationResult(
+                "delegated_auth_transitive_revocation",
+                False,
+                "no transitive_revocation attack declared in trace",
+            )
+        ]
+    rejected = any(
+        line.startswith("auth_verify:leaf-0:")
+        and ":rejected:" in line
+        and "RevokedAncestorError" in line
+        for line in _collect_auth_lines(events, "auth_verify:")
+    )
+    if not rejected:
+        return [
+            ValidationResult(
+                "delegated_auth_transitive_revocation",
+                False,
+                "grandchild still verified after grandparent revocation",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_transitive_revocation",
+            True,
+            "transitive revocation blocked grandchild verification",
+        )
+    ]
+
+
+def validate_delegated_auth_ttl_bound(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Child TTL greater than parent remaining TTL must be blocked.
+
+    Example::
+
+        results = validate_delegated_auth_ttl_bound(events)
+    """
+    attacks = _auth_attacks(events)
+    if "ttl_violation" not in attacks:
+        return [
+            ValidationResult(
+                "delegated_auth_ttl_bound",
+                False,
+                "no ttl_violation attack declared in trace",
+            )
+        ]
+    blocked = any(
+        ":blocked:TtlViolationError" in line
+        for line in _collect_auth_lines(events, "auth_delegate:")
+        if "leaf-99" in line and ":5000" in line
+    )
+    if not blocked:
+        return [
+            ValidationResult(
+                "delegated_auth_ttl_bound",
+                False,
+                "TTL violation was not blocked at delegation",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_ttl_bound",
+            True,
+            "TTL violation blocked at delegation",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -4710,5 +4935,12 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "delegated_auth": [
+        validate_delegated_auth_scope_escalation,
+        validate_delegated_auth_stale_parent,
+        validate_delegated_auth_audience_confusion,
+        validate_delegated_auth_transitive_revocation,
+        validate_delegated_auth_ttl_bound,
     ],
 }
