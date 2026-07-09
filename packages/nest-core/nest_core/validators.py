@@ -4595,6 +4595,212 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 # ---------------------------------------------------------------------------
+# Delegated-auth validators
+# ---------------------------------------------------------------------------
+
+
+def _delegated_auth_frames(events: list[dict[str, Any]]) -> list[list[str]]:
+    """Return every ``dauth:`` trace frame, colon-split into its fields.
+
+    Example::
+
+        frames = _delegated_auth_frames(events)
+    """
+    frames: list[list[str]] = []
+    for ev in events:
+        # Each frame is recorded once as a "send" and again as a "receive"; take
+        # the send as the canonical single source so counts are not doubled.
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        body = _message_body(ev)
+        if body.startswith("dauth:"):
+            frames.append(body.split(":"))
+    return frames
+
+
+def _delegated_auth_subtree(children: dict[str, list[str]], root: str) -> set[str]:
+    """Return *root* and all its transitive delegatees (inclusive subtree)."""
+    seen: set[str] = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(children.get(node, []))
+    return seen
+
+
+def validate_delegated_auth_scope_narrowing(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every delegated child holds a strict subset of its parent's scopes.
+
+    Reconstructs each token's granted scopes from the ``issue`` / ``delegate``
+    frames and FAILS if any child carries a scope its parent never held (scope
+    escalation). The default ``jwt`` plugin, which re-issues unrelated tokens
+    with whatever scopes are asked for, cannot uphold this.
+
+    Example::
+
+        results = validate_delegated_auth_scope_narrowing(events)
+    """
+    scopes_of: dict[str, set[str]] = {}
+    violations: list[str] = []
+    delegations = 0
+    for frame in _delegated_auth_frames(events):
+        if frame[1] == "issue" and len(frame) >= 4:
+            owner, scope_str = frame[2], frame[3]
+            scopes_of[owner] = set(scope_str.split("|")) if scope_str else set[str]()
+        elif frame[1] == "delegate" and len(frame) >= 5:
+            parent, child, scope_str = frame[2], frame[3], frame[4]
+            child_scopes = set(scope_str.split("|")) if scope_str else set[str]()
+            scopes_of[child] = child_scopes
+            delegations += 1
+            parent_scopes = scopes_of.get(parent)
+            if parent_scopes is None:
+                violations.append(f"{child} delegated from unknown parent {parent}")
+            elif not child_scopes.issubset(parent_scopes):
+                extra = sorted(child_scopes - parent_scopes)
+                violations.append(f"{child} widened scopes by {extra} beyond parent {parent}")
+    if delegations == 0:
+        return [
+            ValidationResult("delegated_auth_scope_narrowing", False, "no delegations observed")
+        ]
+    if violations:
+        return [ValidationResult("delegated_auth_scope_narrowing", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "delegated_auth_scope_narrowing",
+            True,
+            f"{delegations} delegation(s) narrow scopes",
+        )
+    ]
+
+
+def validate_delegated_auth_cascading_revocation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Revoking a token invalidates its whole subtree — and nothing else.
+
+    Builds the delegation tree from ``delegate`` frames, then checks the verify
+    sweeps: pre-revocation, every legitimate holder verifies; post-revocation,
+    every token in a revoked node's subtree FAILS and every unrelated token still
+    verifies. FAILS if a revoked descendant still verifies (stale parent) or an
+    unrelated token is wrongly rejected. The default ``jwt`` plugin revokes only
+    exact strings, so a revoked parent leaves its children valid.
+
+    Example::
+
+        results = validate_delegated_auth_cascading_revocation(events)
+    """
+    children: dict[str, list[str]] = defaultdict(list)
+    revoked: list[str] = []
+    for frame in _delegated_auth_frames(events):
+        if frame[1] == "delegate" and len(frame) >= 4:
+            children[frame[2]].append(frame[3])
+        elif frame[1] == "revoke" and len(frame) >= 3:
+            revoked.append(frame[2])
+
+    if not revoked:
+        return [
+            ValidationResult("delegated_auth_cascading_revocation", False, "no revocation observed")
+        ]
+
+    dead: set[str] = set()
+    for node in revoked:
+        dead |= _delegated_auth_subtree(children, node)
+    if not (dead - set(revoked)):
+        return [
+            ValidationResult(
+                "delegated_auth_cascading_revocation",
+                False,
+                "revoked token had no descendants; cascade not exercised",
+            )
+        ]
+
+    pre_ok = 0
+    post_checked = 0
+    violations: list[str] = []
+    for frame in _delegated_auth_frames(events):
+        if frame[1] != "verify" or len(frame) < 6:
+            continue
+        presenter, owner, outcome, phase = frame[2], frame[3], frame[4], frame[5]
+        if presenter != owner:
+            continue  # audience-binding validator owns impostor probes
+        if phase == "pre":
+            if outcome != "ok":
+                violations.append(f"pre-revocation verify for {owner} was {outcome}")
+            else:
+                pre_ok += 1
+        elif phase == "post":
+            post_checked += 1
+            if owner in dead and outcome != "fail":
+                violations.append(f"revoked-subtree {owner} still verified after revocation")
+            if owner not in dead and outcome != "ok":
+                violations.append(f"unrelated {owner} wrongly failed after revocation")
+
+    if pre_ok == 0 or post_checked == 0:
+        return [
+            ValidationResult(
+                "delegated_auth_cascading_revocation", False, "no pre/post verify sweep observed"
+            )
+        ]
+    if violations:
+        return [
+            ValidationResult("delegated_auth_cascading_revocation", False, "; ".join(violations))
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_cascading_revocation",
+            True,
+            f"revoking {sorted(revoked)} killed a subtree of {len(dead)} token(s)",
+        )
+    ]
+
+
+def validate_delegated_auth_audience_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A token presented by anyone other than its audience is rejected.
+
+    Checks every impostor verify probe (presenter != owner) and FAILS if any
+    succeeded. The default ``jwt`` plugin has no audience binding, so any holder
+    of the token string verifies.
+
+    Example::
+
+        results = validate_delegated_auth_audience_binding(events)
+    """
+    impostor_probes = 0
+    violations: list[str] = []
+    for frame in _delegated_auth_frames(events):
+        if frame[1] != "verify" or len(frame) < 6:
+            continue
+        presenter, owner, outcome = frame[2], frame[3], frame[4]
+        if presenter == owner:
+            continue
+        impostor_probes += 1
+        if outcome != "fail":
+            violations.append(f"impostor {presenter} verified {owner}'s token")
+    if impostor_probes == 0:
+        return [
+            ValidationResult(
+                "delegated_auth_audience_binding", False, "no impostor probes observed"
+            )
+        ]
+    if violations:
+        return [ValidationResult("delegated_auth_audience_binding", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "delegated_auth_audience_binding",
+            True,
+            f"{impostor_probes} impostor probe(s) rejected",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -4671,6 +4877,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
         validate_multi_attribute_individually_rational,
+    ],
+    "delegated_auth": [
+        validate_delegated_auth_scope_narrowing,
+        validate_delegated_auth_cascading_revocation,
+        validate_delegated_auth_audience_binding,
     ],
     "provenance_supply_chain": [
         validate_provenance_chain_integrity,
