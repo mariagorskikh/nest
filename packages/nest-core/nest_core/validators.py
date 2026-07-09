@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -4616,7 +4616,16 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 def _parse_order_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Parse ``order:<kind>:k=v:...`` broadcasts, preserving the event timestamp.
+    """Parse ``order:<kind>:k=v:...`` broadcasts, preserving the engine's own fields.
+
+    The engine stamps ``agent`` (the broadcaster) and ``corr`` (a monotonic id) on
+    every event. Those are the trust anchors, so they are written into the record
+    AFTER the ``k=v`` tokens from ``msg`` -- otherwise a forged ``corr=``/``agent=``
+    token inside the message body would silently overwrite the engine's record and
+    let a front-run rewrite its own arrival order. Reserved keys always win:
+
+    * ``corr`` / ``ts`` / ``broadcaster`` -- engine-authored, never from ``msg``
+    * ``agent``                           -- the *claim* made by ``msg`` (untrusted)
 
     Example::
 
@@ -4637,14 +4646,15 @@ def _parse_order_events(events: list[dict[str, Any]]) -> list[dict[str, str]]:
             continue
         seen.add(key)
         parts = msg[len("order:") :].split(":")
-        record: dict[str, str] = {
-            "kind": parts[0],
-            "ts": str(ev.get("ts", "")),
-            "corr": str(ev.get("corr", "")),
-        }
+        record: dict[str, str] = {}
         for token in parts[1:]:
             field, _, value = token.partition("=")
             record[field] = value
+        # Engine-authored fields last: they must not be forgeable from ``msg``.
+        record["kind"] = parts[0]
+        record["ts"] = str(ev.get("ts", ""))
+        record["corr"] = corr
+        record["broadcaster"] = str(ev.get("agent", ""))
         parsed.append(record)
     return parsed
 
@@ -4668,6 +4678,57 @@ def _fail(name: str, detail: str) -> list[ValidationResult]:
     return [ValidationResult(name, False, detail)]
 
 
+def _bind_order_identities(
+    submits: list[dict[str, str]],
+    executes: list[dict[str, str]],
+) -> str | None:
+    """Bind every ``agent=`` claim to the engine-stamped broadcaster; detail on failure.
+
+    Without this, ``agent=`` is pure narration: any agent can emit
+    ``order:submit:agent=X`` or ``order:execute:agent=X`` and attribute activity to
+    others -- laundering phantom orders and censorship past ``no_injection``, and
+    letting a non-sequencer author the execution order. The engine's ``agent``
+    field on each event is the one identity nobody can forge, so:
+
+    * every ``submit`` must be broadcast BY the trader it names, one per trader;
+    * every ``execute`` must be broadcast by a single agent (the sequencer), which
+      must not itself be a submitter;
+    * every ``execute`` must name an agent that actually submitted (no phantoms).
+
+    The sequencer is *derived* from the trace (the common broadcaster of the
+    executes), never hardcoded -- these validators must hold against foreign
+    traces, where no name is guaranteed.
+    """
+    submitters: set[str] = set()
+    for e in submits:
+        broadcaster = e.get("broadcaster", "")
+        claimed = e.get("agent", "")
+        if not broadcaster:
+            return "order:submit with no engine-stamped agent -- broadcaster unprovable"
+        if claimed != broadcaster:
+            return (
+                f"order:submit claims agent={claimed!r} but was broadcast by "
+                f"{broadcaster!r} -- forged attribution"
+            )
+        if broadcaster in submitters:
+            return f"{broadcaster!r} submitted more than one order in the batch -- ambiguous"
+        submitters.add(broadcaster)
+
+    sequencers = {e.get("broadcaster", "") for e in executes}
+    if "" in sequencers:
+        return "order:execute with no engine-stamped agent -- sequencer unprovable"
+    if len(sequencers) != 1:
+        return f"order:execute broadcast by {len(sequencers)} agents -- no single sequencer"
+    sequencer = sequencers.pop()
+    if sequencer in submitters:
+        return f"sequencer {sequencer!r} also submitted an order -- self-dealing"
+    for e in executes:
+        claimed = e.get("agent", "")
+        if claimed not in submitters:
+            return f"order:execute names agent={claimed!r} which never submitted -- phantom order"
+    return None
+
+
 def validate_fair_ordering_integrity(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """Executed order equals the engine-authored arrival order (no front-running).
 
@@ -4677,10 +4738,24 @@ def validate_fair_ordering_integrity(events: list[dict[str, Any]]) -> list[Valid
     (``order:execute`` by ``pos``) must equal it. A sequencer that reorders the
     batch (front-running) diverges here and FAILS.
 
+    Identities are bound to the engine's broadcaster stamp, not to the ``agent=``
+    token in the message body, so a forged ``order:execute:agent=X`` cannot
+    attribute sequencing to a bystander. See :func:`_bind_order_identities`.
+
     Robustness: a missing / malformed / duplicate ``corr`` on a submit, or a
     missing / malformed / duplicate ``pos`` on an execute, FAILS loudly -- the
     neutral and executed orders rest on these keys, so an ambiguous one must
     never be allowed to pass.
+
+    Scope (single batch): all ``order:*`` events in the trace are pooled into one
+    batch, because ``pos`` is asserted to be a clean ``0..n-1`` bijection. A trace
+    with two legitimate rounds, each emitting its own ``pos`` 0..n-1, would fail
+    that guard. Multi-round traces need a ``round=`` token to group on first.
+
+    Tier-1 limit: the broadcast IS the execution. This proves the sequencer's
+    *narrated* order matches arrival order; it cannot prove that narration matches
+    some hidden internal ordering. A sequencer that reorders internally but
+    narrates faithfully is indistinguishable from an honest one at this tier.
     """
     name = "fair_ordering_integrity"
     parsed = _parse_order_events(events)
@@ -4688,6 +4763,10 @@ def validate_fair_ordering_integrity(events: list[dict[str, Any]]) -> list[Valid
     executes = [e for e in parsed if e["kind"] == "execute"]
     if not submits or not executes:
         return _fail(name, "no order:submit/execute events observed -- plugin lacks fair-ordering")
+
+    identity_failure = _bind_order_identities(submits, executes)
+    if identity_failure is not None:
+        return _fail(name, identity_failure)
 
     # Neutral order key: engine ``corr`` on each submit. Missing/malformed/dup -> FAIL.
     corr_keys: list[int] = []
@@ -4739,33 +4818,37 @@ def validate_fair_ordering_no_injection(events: list[dict[str, Any]]) -> list[Va
     Catches a sequencer that censors a submitted order or inserts one that was
     never submitted, by comparing the multiset of executed agents against the
     submitted agents (again keyed off engine-recorded broadcasts).
+
+    Identities are bound to the engine's broadcaster stamp before counting --
+    otherwise a censored order can be laundered by forging an
+    ``order:submit:agent=<victim>`` line, keeping the tallies balanced.
+
+    Scope (single batch): see :func:`validate_fair_ordering_integrity`.
     """
+    name = "fair_ordering_no_injection"
     parsed = _parse_order_events(events)
-    submitted = sorted(e.get("agent", "") for e in parsed if e["kind"] == "submit")
-    executed = sorted(e.get("agent", "") for e in parsed if e["kind"] == "execute")
-    if not submitted or not executed:
-        return [
-            ValidationResult(
-                "fair_ordering_no_injection",
-                False,
-                "no order:submit/execute events observed -- plugin lacks fair-ordering",
-            )
-        ]
+    submits = [e for e in parsed if e["kind"] == "submit"]
+    executes = [e for e in parsed if e["kind"] == "execute"]
+    if not submits or not executes:
+        return _fail(name, "no order:submit/execute events observed -- plugin lacks fair-ordering")
+
+    identity_failure = _bind_order_identities(submits, executes)
+    if identity_failure is not None:
+        return _fail(name, identity_failure)
+
+    # Multisets, not sets: a count-preserving drop-one/duplicate-one pair must be
+    # reported with the agents that actually moved, not as an empty diff.
+    submitted = Counter(e.get("agent", "") for e in submits)
+    executed = Counter(e.get("agent", "") for e in executes)
     if submitted != executed:
-        dropped = sorted(set(submitted) - set(executed))
-        injected = sorted(set(executed) - set(submitted))
-        return [
-            ValidationResult(
-                "fair_ordering_no_injection",
-                False,
-                f"dropped={dropped} injected={injected}",
-            )
-        ]
+        dropped = sorted((submitted - executed).elements())
+        injected = sorted((executed - submitted).elements())
+        return _fail(name, f"dropped={dropped} injected={injected}")
     return [
         ValidationResult(
-            "fair_ordering_no_injection",
+            name,
             True,
-            f"all {len(submitted)} submitted orders executed exactly once",
+            f"all {sum(submitted.values())} submitted orders executed exactly once",
         )
     ]
 

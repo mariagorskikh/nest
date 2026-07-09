@@ -96,8 +96,17 @@ def _integrity(events: list[dict[str, object]]) -> bool:
     return results[0].passed
 
 
-def _ev(msg: str, corr: str) -> dict[str, object]:
-    return {"kind": "broadcast", "msg": msg, "corr": corr, "ts": 0.0}
+def _ev(msg: str, corr: str, agent: str | None = None) -> dict[str, object]:
+    """Build a broadcast event with the engine's ``agent`` stamp.
+
+    ``agent`` is what the *engine* recorded as the broadcaster -- distinct from any
+    ``agent=`` token inside ``msg``, which is only what the message claims. When
+    omitted it defaults to an honest trace: a submit is broadcast by the trader it
+    names, an execute by ``sequencer``.
+    """
+    if agent is None:
+        agent = msg.split("agent=")[1].split(":")[0] if ":submit:" in msg else "sequencer"
+    return {"kind": "broadcast", "msg": msg, "corr": corr, "ts": 0.0, "agent": agent}
 
 
 def test_integrity_fails_on_malformed_corr() -> None:
@@ -142,6 +151,122 @@ def test_integrity_passes_on_wellformed_corr() -> None:
         _ev("order:execute:pos=1:agent=t1", "corr-4"),
     ]
     assert _integrity(events) is True
+
+
+def _no_injection(events: list[dict[str, object]]) -> bool:
+    """Run just the no-injection validator on hand-crafted in-memory events."""
+    from nest_core.validators import validate_events
+
+    results = [
+        r
+        for r in validate_events(events, "fair_ordering")
+        if r.name == "fair_ordering_no_injection"
+    ]
+    return results[0].passed
+
+
+# --- Evasion tests: the ``agent=``/``corr=`` tokens in ``msg`` are narration. ---
+# Each of these was a clean PASS before identities were bound to the engine's
+# broadcaster stamp and the engine's fields were made unforgeable from ``msg``.
+
+
+def test_integrity_fails_on_forged_corr_token_in_msg() -> None:
+    """A ``corr=`` token inside ``msg`` must not override the engine's ``corr``.
+
+    The neutral arrival order is the whole verdict. If a submitter can smuggle its
+    own ``corr`` into the message body, it rewrites its own arrival position and a
+    front-run reads as honest. t0 really arrived first (corr-1) but claims corr-90;
+    t1 really arrived second (corr-2) but claims corr-10 -- and the executes then
+    run t1 ahead of t0.
+    """
+    events = [
+        _ev("order:submit:agent=t0:corr=corr-90", "corr-1"),
+        _ev("order:submit:agent=t1:corr=corr-10", "corr-2"),
+        _ev("order:execute:pos=0:agent=t1", "corr-3"),  # t1 front-runs t0
+        _ev("order:execute:pos=1:agent=t0", "corr-4"),
+    ]
+    assert _integrity(events) is False
+
+
+def test_spoofed_submit_agent_token_fails_both() -> None:
+    """A submit must be broadcast BY the trader it names, or the trace is forged.
+
+    Here the sequencer emits a submit attributed to ``t2`` and then executes it --
+    a phantom order laundered into the batch. The multiset of submitted vs executed
+    agents balances perfectly, so counting alone cannot see it.
+    """
+    events = [
+        _ev("order:submit:agent=t0:order=buy_1", "corr-1"),
+        _ev("order:submit:agent=t1:order=buy_2", "corr-2"),
+        _ev("order:submit:agent=t2:order=PHANTOM", "corr-3", agent="sequencer"),
+        _ev("order:execute:pos=0:agent=t0", "corr-4"),
+        _ev("order:execute:pos=1:agent=t1", "corr-5"),
+        _ev("order:execute:pos=2:agent=t2", "corr-6"),
+    ]
+    assert _integrity(events) is False
+    assert _no_injection(events) is False
+
+
+def test_relabeled_narration_frontrun_fails() -> None:
+    """A non-sequencer cannot author the execution order.
+
+    ``t0`` narrates the executes itself, ordering itself first. The ``agent=``
+    tokens are internally consistent and the counts balance; only the engine's
+    broadcaster stamp reveals that a submitter wrote the execution record.
+    """
+    events = [
+        _ev("order:submit:agent=t0:order=buy_1", "corr-1"),
+        _ev("order:submit:agent=t1:order=buy_2", "corr-2"),
+        _ev("order:execute:pos=0:agent=t0", "corr-3", agent="t0"),
+        _ev("order:execute:pos=1:agent=t1", "corr-4", agent="t0"),
+    ]
+    assert _integrity(events) is False
+    assert _no_injection(events) is False
+
+
+def test_executes_from_multiple_broadcasters_fail() -> None:
+    """Executes split across two broadcasters mean there is no single sequencer."""
+    events = [
+        _ev("order:submit:agent=t0:order=buy_1", "corr-1"),
+        _ev("order:submit:agent=t1:order=buy_2", "corr-2"),
+        _ev("order:execute:pos=0:agent=t0", "corr-3", agent="sequencer"),
+        _ev("order:execute:pos=1:agent=t1", "corr-4", agent="sequencer-2"),
+    ]
+    assert _integrity(events) is False
+
+
+def test_no_injection_counts_multisets_not_sets() -> None:
+    """A count-preserving drop-one/duplicate-one pair must FAIL and name both agents.
+
+    ``t1`` is censored and ``t0`` is executed twice. The *sets* of submitted and
+    executed agents are unequal here only because t1 vanishes; the point of the
+    Counter is that the reported diff names t1 as dropped and t0 as injected rather
+    than printing an empty diff.
+    """
+    from nest_core.validators import validate_events
+
+    events = [
+        _ev("order:submit:agent=t0:order=buy_1", "corr-1"),
+        _ev("order:submit:agent=t1:order=buy_2", "corr-2"),
+        _ev("order:execute:pos=0:agent=t0", "corr-3"),
+        _ev("order:execute:pos=1:agent=t0", "corr-4"),  # t1 censored, t0 duplicated
+    ]
+    results = validate_events(events, "fair_ordering")
+    result = next(r for r in results if r.name == "fair_ordering_no_injection")
+    assert result.passed is False
+    assert "dropped=['t1']" in result.detail
+    assert "injected=['t0']" in result.detail
+
+
+def test_duplicate_submit_from_one_trader_fails() -> None:
+    """One trader, one order per batch -- a second submit is ambiguous, not free."""
+    events = [
+        _ev("order:submit:agent=t0:order=buy_1", "corr-1"),
+        _ev("order:submit:agent=t0:order=buy_2", "corr-2"),
+        _ev("order:execute:pos=0:agent=t0", "corr-3"),
+        _ev("order:execute:pos=1:agent=t0", "corr-4"),
+    ]
+    assert _integrity(events) is False
 
 
 def test_neutral_order_is_engine_authored_not_sequencer() -> None:
