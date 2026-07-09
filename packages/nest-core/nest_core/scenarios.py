@@ -197,3 +197,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("capability_spoofing", capability_spoofing_factory)
+    elif name == "split_settlement":
+        from nest_core.scenarios_builtin.split_settlement import (
+            split_settlement_factory,
+        )
+
+        register_scenario("split_settlement", split_settlement_factory)
