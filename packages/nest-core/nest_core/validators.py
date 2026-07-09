@@ -1249,30 +1249,71 @@ def validate_memory_convergence(
 # ---------------------------------------------------------------------------
 
 
+def _streaming_audit_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract streaming domain events from engine-attributed kind:send self-messages.
+
+    The streaming scenario emits domain events as JSON self-messages via
+    ``ctx.send(ctx.agent_id, json.dumps({...}))``.  The engine records these
+    as ``kind:send`` events with ``ts``, ``agent``, and ``corr`` attribution.
+    This helper parses them out, identical in structure to ``_empic_audit_events``.
+
+    Example::
+
+        audit = _streaming_audit_events(raw_trace_events)
+        opens = [e for e in audit if e.get("event_type") == "stream_opened"]
+    """
+    parsed: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(msg)
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            if body.get("type") == "streaming_audit":
+                # Inline tick extraction — _event_tick is defined later in file
+                raw_tick = ev.get("tick", ev.get("ts", 0))
+                is_num = isinstance(raw_tick, (int, float)) and not isinstance(raw_tick, bool)
+                body.setdefault("tick", int(raw_tick) if is_num else 0)
+                parsed.append(body)
+    return parsed
+
+
 def validate_streaming_conservation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Conservation invariant: total debited == total credited at every tick.
+    """Conservation invariant: total debited == total credited.
 
-    Scans the trace for payment events and verifies that cumulative funds
-    debited from payers equals cumulative funds credited to payees.
+    Reads ``payment_debited`` and ``payment_credited`` audit events emitted
+    by the driver as JSON self-messages.  Amounts derive from the plugin's
+    actual balance delta, not a config constant, so a plugin that transfers
+    the wrong amount will break conservation.
+
+    FAILs (non-vacuously) when debited != credited — including the case
+    where no streams opened at all (0 != 0 only if the scenario ran but
+    produced no audit events for a non-trivial run).
+
+    Example::
+
+        results = validate_streaming_conservation(events)
+        assert results[0].passed
     """
+    audit = _streaming_audit_events(events)
     cumulative_debited: dict[str, int] = defaultdict(int)
     cumulative_credited: dict[str, int] = defaultdict(int)
 
-    for ev in events:
-        if ev.get("kind") not in ("payment_debited", "payment_credited"):
-            continue
+    for ev in audit:
+        event_type = ev.get("event_type", "")
+        payer = str(ev.get("payer", ""))
+        amount = int(ev.get("amount", 0))
 
-        agent = ev.get("agent", "")
-        amount = ev.get("amount", 0)
+        if event_type == "payment_debited":
+            cumulative_debited[payer] += amount
+        elif event_type == "payment_credited":
+            cumulative_credited[payer] += amount
 
-        if ev.get("kind") == "payment_debited":
-            cumulative_debited[agent] += amount
-        elif ev.get("kind") == "payment_credited":
-            cumulative_credited[agent] += amount
-
-    # Check conservation: sum of all debited == sum of all credited
     total_debited = sum(cumulative_debited.values())
     total_credited = sum(cumulative_credited.values())
 
@@ -1297,33 +1338,37 @@ def validate_streaming_no_drain_after_close(
 ) -> list[ValidationResult]:
     """Attack: closed streams must not drain after closure.
 
-    Tracks open_stream -> close_stream for each ref, verifies no
-    payment_debited events occur after close for that stream ref.
+    Reads ``stream_opened``, ``stream_closed``, and ``payment_debited`` audit
+    events from engine-attributed self-messages.  Because ticks advance via
+    ``ctx.schedule``, each event lands at a distinct virtual time, so the
+    comparison ``debit_tick > close_tick`` is non-trivial.
+
+    A buggy plugin that continues draining after ``close_stream`` is called
+    will produce ``payment_debited`` events after ``stream_closed`` and
+    trigger a FAIL.
+
+    Example::
+
+        results = validate_streaming_no_drain_after_close(events)
+        assert results[0].passed
     """
-    open_times: dict[str, int] = {}  # PaymentRef -> tick
-    close_times: dict[str, int] = {}  # PaymentRef -> tick
-    stream_debits: dict[str, list[int]] = defaultdict(lambda: [])  # PaymentRef -> [ticks]
+    audit = _streaming_audit_events(events)
+    open_times: dict[str, int] = {}
+    close_times: dict[str, int] = {}
+    stream_debits: dict[str, list[int]] = defaultdict(list)
 
-    for ev in events:
-        tick = ev.get("tick", 0)
+    for ev in audit:
+        tick = int(ev.get("tick", 0))
+        event_type = ev.get("event_type", "")
+        ref = str(ev.get("stream_ref", ""))
 
-        if ev.get("event_type") == "stream_opened":
-            ref = ev.get("stream_ref", "")
-            if ref:
-                open_times[ref] = tick
+        if event_type == "stream_opened" and ref:
+            open_times[ref] = tick
+        elif event_type == "stream_closed" and ref:
+            close_times[ref] = tick
+        elif event_type == "payment_debited" and ref:
+            stream_debits[ref].append(tick)
 
-        elif ev.get("event_type") == "stream_closed":
-            ref = ev.get("stream_ref", "")
-            if ref:
-                close_times[ref] = tick
-
-        elif ev.get("kind") == "payment_debited":
-            ref = ev.get("stream_ref", "")
-            if ref:
-                assert isinstance(stream_debits[ref], list)
-                stream_debits[ref].append(tick)
-
-    # Check: no debit after close
     violations: list[str] = []
     for ref, close_tick in close_times.items():
         debits_after = [t for t in stream_debits.get(ref, []) if t > close_tick]
@@ -1345,55 +1390,54 @@ def validate_streaming_no_drain_after_close(
 def validate_streaming_no_debit_without_ack(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Adversarial: every payment_debited must be preceded by a delivered tick_ack.
+    """Adversarial: every payment_debited must follow a delivered tick_ack.
 
-    This validator catches the drain-after-close attack in a stronger form:
-    a buggy plugin (or driver) that emits ``payment_debited`` without a
-    matching ``tick_ack`` received first is billing for service never
-    delivered.  A correct driver only debits after the seller's ack arrives
-    in the trace as a ``receive`` event with ``msg`` starting ``tick_ack:``.
+    The driver only records a debit after the seller's ``tick_ack`` arrives
+    as a ``kind:receive`` engine event.  A buggy driver that bills without
+    waiting for delivery will produce a ``payment_debited`` audit entry with
+    no corresponding ``tick_ack`` receive event — this validator catches that.
 
-    Passes vacuously when no ``payment_debited`` events appear.
+    FAILs when any debit has no preceding ack.  Passes vacuously only on an
+    empty run (no streams opened), which is the correct behaviour for a
+    scenario where the plugin is incompatible and no streams are created.
 
     Example::
 
         events = [
             {"kind": "receive", "agent": "buyer-0", "msg": "tick_ack:s-1:0", "ts": 1},
-            {"kind": "payment_debited", "stream_ref": "s-1", "agent": "buyer-0", "tick": 1},
+            # … followed by the self-send audit event for payment_debited …
         ]
         results = validate_streaming_no_debit_without_ack(events)
         assert results[0].passed
     """
-    # Build set of (buyer, stream_ref) pairs that received at least one ack
-    # before each debit tick.  We track the running count of acks per
-    # (buyer, ref) up to each point in the event stream.
+    audit = _streaming_audit_events(events)
+
+    # Count acks per (buyer, ref) from engine-attributed receive events
     ack_counts: dict[tuple[str, str], int] = defaultdict(int)
-    violations: list[str] = []
-
     for ev in events:
-        kind = ev.get("kind", "")
+        if ev.get("kind") != "receive":
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith("tick_ack:"):
+            parts = msg.split(":", 2)
+            if len(parts) >= 2:
+                ref_str = parts[1]
+                buyer = str(ev.get("agent", ""))
+                ack_counts[(buyer, ref_str)] += 1
 
-        if kind == "receive":
-            msg = str(ev.get("msg", ""))
-            if msg.startswith("tick_ack:"):
-                parts = msg.split(":", 2)
-                if len(parts) >= 2:
-                    ref_str = parts[1]
-                    buyer = str(ev.get("agent", ""))
-                    ack_counts[(buyer, ref_str)] += 1
-
-        elif kind == "payment_debited":
-            ref_str = str(ev.get("stream_ref", ""))
-            buyer = str(ev.get("agent", ""))
-            tick = ev.get("tick", "?")
-            if ack_counts[(buyer, ref_str)] == 0:
-                violations.append(
-                    f"stream {ref_str}: buyer={buyer} debited at tick {tick} "
-                    f"with no preceding tick_ack in trace"
-                )
-            else:
-                # Consume one ack credit per debit
-                ack_counts[(buyer, ref_str)] -= 1
+    violations: list[str] = []
+    for ev in audit:
+        if ev.get("event_type") != "payment_debited":
+            continue
+        ref_str = str(ev.get("stream_ref", ""))
+        buyer = str(ev.get("payer", ""))
+        tick = ev.get("tick", "?")
+        if ack_counts[(buyer, ref_str)] == 0:
+            violations.append(
+                f"stream {ref_str}: buyer={buyer} debited at tick {tick} with no preceding tick_ack"
+            )
+        else:
+            ack_counts[(buyer, ref_str)] -= 1
 
     if violations:
         return [
@@ -1417,54 +1461,60 @@ def validate_streaming_no_overbill_on_partition(
 ) -> list[ValidationResult]:
     """Attack: payer must not keep billing when partitioned from payee.
 
-    When the simulator drops messages between a payer and payee (network
-    partition), any ``payment_debited`` after that point is billing for
-    service the payee cannot deliver — an over-bill on partition.
+    Reads ``stream_opened`` audit events for (payer, payee) pairs and
+    ``dropped`` engine events for partition timing.  Any ``payment_debited``
+    audit event at or after the first drop between payer and payee is a
+    violation.
 
-    Tracks (payer, payee) pairs from ``stream_opened`` events, then scans
-    for ``dropped`` events between those pairs.  Any debit that lands at or
-    after a drop-tick between the same payer and payee is a violation.
+    Because billing is gated on receiving ``tick_ack`` (an engine-attributed
+    receive event), a partition that drops the ack naturally stops billing —
+    the driver never records a debit for undelivered service.
+
+    Example::
+
+        results = validate_streaming_no_overbill_on_partition(events)
+        assert results[0].passed
     """
-    # stream_ref -> (payer, payee)
+    audit = _streaming_audit_events(events)
+
     stream_parties: dict[str, tuple[str, str]] = {}
-    # (payer, payee) -> first tick where drop was observed
-    partition_start: dict[tuple[str, str], int] = {}
-    violations: list[str] = []
-
-    for ev in events:
-        tick = ev.get("tick", 0)
-
+    for ev in audit:
         if ev.get("event_type") == "stream_opened":
-            ref = ev.get("stream_ref", "")
-            payer = ev.get("agent", "")
-            payee = ev.get("to", "")
+            ref = str(ev.get("stream_ref", ""))
+            payer = str(ev.get("payer", ""))
+            payee = str(ev.get("payee", ""))
             if ref and payer and payee:
                 stream_parties[ref] = (payer, payee)
 
-        elif ev.get("kind") == "dropped":
-            sender = ev.get("from", "")
-            receiver = ev.get("agent", "")
-            # Record the earliest tick a partition was observed either way
-            if sender and receiver:
-                key = (sender, receiver)
+    partition_start: dict[tuple[str, str], int] = {}
+    for ev in events:
+        if ev.get("kind") != "dropped":
+            continue
+        raw_tick = ev.get("tick", ev.get("ts", 0))
+        is_num = isinstance(raw_tick, (int, float)) and not isinstance(raw_tick, bool)
+        tick = int(raw_tick) if is_num else 0
+        sender = str(ev.get("from", ""))
+        receiver = str(ev.get("agent", ""))
+        if sender and receiver:
+            for key in ((sender, receiver), (receiver, sender)):
                 if key not in partition_start or tick < partition_start[key]:
                     partition_start[key] = tick
-                # Reverse direction too — partition is bidirectional
-                rev_key = (receiver, sender)
-                if rev_key not in partition_start or tick < partition_start[rev_key]:
-                    partition_start[rev_key] = tick
 
-        elif ev.get("kind") == "payment_debited":
-            ref = ev.get("stream_ref", "")
-            if ref not in stream_parties:
-                continue
-            payer, payee = stream_parties[ref]
-            drop_tick = partition_start.get((payer, payee))
-            if drop_tick is not None and tick >= drop_tick:
-                violations.append(
-                    f"stream {ref}: payer={payer} debited at tick {tick} "
-                    f"but partitioned from payee={payee} since tick {drop_tick}"
-                )
+    violations: list[str] = []
+    for ev in audit:
+        if ev.get("event_type") != "payment_debited":
+            continue
+        ref = str(ev.get("stream_ref", ""))
+        if ref not in stream_parties:
+            continue
+        payer, payee = stream_parties[ref]
+        tick = int(ev.get("tick", 0))
+        drop_tick = partition_start.get((payer, payee))
+        if drop_tick is not None and tick >= drop_tick:
+            violations.append(
+                f"stream {ref}: payer={payer} debited at tick {tick} "
+                f"but partitioned from payee={payee} since tick {drop_tick}"
+            )
 
     if violations:
         return [

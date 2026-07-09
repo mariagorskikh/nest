@@ -1,19 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 """Streaming payments scenario — buyers open metered streams to sellers.
 
-Each buyer opens one stream to a randomly chosen seller.  Billing is
-driven by a request/ack exchange: the buyer sends ``tick_req`` to the
-seller, the seller delivers the service and replies ``tick_ack``, and
-only on receipt of the ack does the buyer call ``tick_stream`` and emit
-``payment_debited``/``payment_credited``.  A network partition drops the
-ack before it arrives, so the buyer stops billing — no over-bill on
-partition.
+Protocol per tick::
 
-The adversarial validator ``validate_streaming_no_drain_after_close``
-is exercised by the scenario: buyers close their stream cleanly after
-``rounds`` acks, so any buggy plugin that continued debiting after
-``close_stream`` would produce ``payment_debited`` events after the
-``stream_closed`` marker and trigger a FAIL.
+    buyer  --tick_req:{ref}:{seq}-->  seller
+    seller --tick_ack:{ref}:{seq}-->  buyer   (service delivered)
+    buyer reads plugin state (balance delta), audits payment_debited/credited,
+    then sends the next tick_req.
+
+Domain events are written as JSON self-messages via ``ctx.send(ctx.agent_id, ...)``
+so the engine records them as engine-attributed ``kind:send`` events with ``ts``,
+``agent``, and ``corr`` fields — the same pattern used by the EMPIC scenario.
+Validators parse them via ``_streaming_audit_events()``.
+
+Two cancellation paths are exercised:
+
+* **Natural terminus:** stream reaches ``max_total``; ``tick_stream`` returns
+  False and the buyer calls ``close_stream``.
+* **Mid-stream cancellation:** buyers whose index is even cancel after half of
+  ``rounds`` acks regardless of remaining balance.
 
 Example::
 
@@ -23,44 +28,45 @@ Example::
 from __future__ import annotations
 
 import contextlib
+import json
 from typing import Any
 
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, PaymentRef
 
+_AUDIT_TYPE = "streaming_audit"
 
-def _emit(ctx: AgentContext, event: dict[str, Any]) -> None:
-    """Write a structured domain event to the trace via ctx.emit if available.
 
-    Degrades silently when called against a mock context that lacks ``emit``.
+async def _audit(ctx: AgentContext, data: dict[str, Any]) -> None:
+    """Send a JSON self-message that the engine records as a kind:send event.
+
+    Validators read these via ``_streaming_audit_events()``.
 
     Example::
 
-        _emit(ctx, {"event_type": "stream_opened", "stream_ref": "s-1",
-                    "agent": "buyer-0", "to": "seller-2", "tick": 0})
+        await _audit(ctx, {"event_type": "stream_opened", "stream_ref": "s-1",
+                           "payer": "buyer-0", "payee": "seller-2"})
     """
-    emit_fn = getattr(ctx, "emit", None)
-    if emit_fn is not None:
-        emit_fn(event)
+    event = {"type": _AUDIT_TYPE, "tick": int(ctx.time), **data}
+    await ctx.send(ctx.agent_id, json.dumps(event, sort_keys=True).encode())
 
 
 class StreamingBuyerAgent(StateMachineAgent):
     """Buyer that gates each tick on a seller ack to prevent over-billing.
 
-    Protocol per tick::
+    Billing is never speculative: the buyer only records a debit after the
+    seller replies ``tick_ack``, and derives the debited amount from the
+    plugin's own balance delta rather than a config constant.
 
-        buyer  --tick_req:{ref}:{seq}-->  seller
-        seller --tick_ack:{ref}:{seq}-->  buyer   (service delivered)
-        buyer calls tick_stream() and emits payment_debited/credited
-
-    A dropped ack means no debit — the buyer never bills for service
-    the seller couldn't deliver.  This is what the
-    ``streaming_no_overbill_on_partition`` validator checks.
+    Every other buyer (even index) cancels its stream mid-way, exercising
+    ``close_stream`` as a genuine early termination rather than a natural
+    terminus.
 
     Example::
 
-        agent = StreamingBuyerAgent(AgentId("buyer-0"), num_sellers=5, rounds=10)
+        agent = StreamingBuyerAgent(AgentId("buyer-0"), num_sellers=5,
+                                    rounds=10, cancel_early=True)
     """
 
     def __init__(
@@ -70,17 +76,17 @@ class StreamingBuyerAgent(StateMachineAgent):
         rounds: int = 100,
         rate_per_tick: int = 10,
         max_total: int = 1000,
+        cancel_early: bool = False,
     ) -> None:
         self._id = agent_id
         self._num_sellers = num_sellers
         self._rounds = rounds
+        self._cancel_rounds = rounds // 2 if cancel_early else rounds
         self._rate_per_tick = rate_per_tick
         self._max_total = max_total
         self._stream_counter = 0
-        # ref -> seller
         self._active_streams: dict[PaymentRef, AgentId] = {}
         self._closed_streams: set[PaymentRef] = set()
-        # ref -> acks received so far
         self._acks: dict[PaymentRef, int] = {}
 
     def _pick_seller(self, ctx: AgentContext) -> AgentId:
@@ -88,7 +94,7 @@ class StreamingBuyerAgent(StateMachineAgent):
         return AgentId(f"seller-{idx}")
 
     async def on_start(self, ctx: AgentContext) -> None:
-        """Open a stream to a random seller and send the first tick request.
+        """Open a stream and send the first tick request.
 
         Example::
 
@@ -111,26 +117,28 @@ class StreamingBuyerAgent(StateMachineAgent):
             )
             self._active_streams[ref] = seller
             self._acks[ref] = 0
-            _emit(
+            await _audit(
                 ctx,
                 {
                     "event_type": "stream_opened",
                     "stream_ref": str(ref),
-                    "agent": str(self._id),
-                    "to": str(seller),
-                    "tick": int(ctx.time),
+                    "payer": str(self._id),
+                    "payee": str(seller),
                 },
             )
-            # First tick request — billing only happens when ack arrives
             await ctx.send(seller, f"tick_req:{ref}:0".encode())
 
-    async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
-        """Handle tick acks from the seller.
+    async def on_message(
+        self,
+        ctx: AgentContext,
+        sender: AgentId,
+        payload: bytes,
+    ) -> None:
+        """Handle tick acks; derive debit from plugin balance delta.
 
-        On each ack the buyer calls ``tick_stream`` (actual money movement)
-        and emits accounting events.  If more acks are still needed, it
-        sends the next ``tick_req``.  A dropped ``tick_req`` or ``tick_ack``
-        ends billing naturally — no extra scheduling needed.
+        On each ack the buyer reads the payer balance before and after calling
+        ``tick_stream``, so the audited amount reflects what the plugin actually
+        moved — not a config constant.
 
         Example::
 
@@ -151,41 +159,54 @@ class StreamingBuyerAgent(StateMachineAgent):
         if ref not in self._active_streams or ref in self._closed_streams:
             return
 
-        # Ack received — service was delivered; now debit
-        still_open = await payments.tick_stream(ref, int(ctx.time))
+        seller = self._active_streams[ref]
 
-        if still_open:
+        # Derive actual amount from balance delta — not the config constant
+        balance_before = payments.balance(self._id)
+        still_open = await payments.tick_stream(ref, int(ctx.time))
+        balance_after = payments.balance(self._id)
+        amount_debited = balance_before - balance_after
+
+        if still_open and amount_debited > 0:
             self._acks[ref] = self._acks.get(ref, 0) + 1
-            seller = self._active_streams[ref]
-            _emit(
+            await _audit(
                 ctx,
                 {
-                    "kind": "payment_debited",
+                    "event_type": "payment_debited",
                     "stream_ref": ref_str,
-                    "agent": str(self._id),
-                    "amount": self._rate_per_tick,
-                    "tick": int(ctx.time),
+                    "payer": str(self._id),
+                    "payee": str(seller),
+                    "amount": amount_debited,
                 },
             )
-            _emit(
+            await _audit(
                 ctx,
                 {
-                    "kind": "payment_credited",
+                    "event_type": "payment_credited",
                     "stream_ref": ref_str,
-                    "agent": str(seller),
-                    "amount": self._rate_per_tick,
-                    "tick": int(ctx.time),
+                    "payer": str(self._id),
+                    "payee": str(seller),
+                    "amount": amount_debited,
                 },
             )
 
             acks_so_far = self._acks[ref]
-            if acks_so_far < self._rounds:
-                # Request next tick — only bills if seller acks
-                await ctx.send(seller, f"tick_req:{ref}:{acks_so_far}".encode())
+            if acks_so_far < self._cancel_rounds:
+                # Use schedule so each tick lands at a later virtual time,
+                # making tick values non-uniform and drain-after-close checkable.
+                await ctx.schedule(1.0, f"next_tick:{ref}:{acks_so_far}".encode())
             else:
                 await self._close(ctx, ref, payments)
         else:
             await self._close(ctx, ref, payments)
+
+    async def on_message_scheduled(
+        self,
+        ctx: AgentContext,
+        sender: AgentId,
+        payload: bytes,
+    ) -> None:
+        """Not used — scheduled messages are handled via on_message."""
 
     async def _close(
         self,
@@ -193,7 +214,7 @@ class StreamingBuyerAgent(StateMachineAgent):
         ref: PaymentRef,
         payments: Any,
     ) -> None:
-        """Close the stream and emit stream_closed.
+        """Close the stream and audit stream_closed.
 
         Example::
 
@@ -202,20 +223,17 @@ class StreamingBuyerAgent(StateMachineAgent):
         if ref in self._closed_streams:
             return
         self._closed_streams.add(ref)
-        seller = self._active_streams.pop(ref, None)
+        self._active_streams.pop(ref, None)
         with contextlib.suppress(ValueError):
             await payments.close_stream(ref)
-        _emit(
+        await _audit(
             ctx,
             {
                 "event_type": "stream_closed",
                 "stream_ref": str(ref),
-                "agent": str(self._id),
-                "tick": int(ctx.time),
+                "payer": str(self._id),
             },
         )
-        if seller is not None:
-            await ctx.send(seller, f"stream_close:{ref}".encode())
 
     async def on_stop(self, ctx: AgentContext) -> None:
         """Close any streams still open when the simulation ends.
@@ -233,9 +251,11 @@ class StreamingBuyerAgent(StateMachineAgent):
 class StreamingSellerAgent(StateMachineAgent):
     """Seller that delivers one unit of service per tick request.
 
-    On each ``tick_req`` the seller performs the service and replies with
-    ``tick_ack``.  The buyer only bills after receiving the ack, so a
-    network partition (dropped ack) stops billing automatically.
+    Replies ``tick_ack`` on each ``tick_req``; the buyer only bills after
+    receiving the ack, so a network partition stops billing automatically.
+
+    Also handles ``next_tick`` self-messages forwarded from the buyer's
+    scheduled wakeup, which triggers sending the next ``tick_req``.
 
     Example::
 
@@ -251,7 +271,7 @@ class StreamingSellerAgent(StateMachineAgent):
         sender: AgentId,
         payload: bytes,
     ) -> None:
-        """Deliver service on tick_req; ack stream close.
+        """Deliver service on tick_req.
 
         Example::
 
@@ -264,8 +284,37 @@ class StreamingSellerAgent(StateMachineAgent):
                 ref_str = parts[1]
                 seq = parts[2]
                 await ctx.send(sender, f"tick_ack:{ref_str}:{seq}".encode())
-        elif msg.startswith("stream_close:"):
-            pass  # nothing to do; stream is already closed by buyer
+
+
+class _TickRelayBuyer(StreamingBuyerAgent):
+    """Buyer that routes scheduled next_tick wakeups to tick_req sends.
+
+    ``ctx.schedule`` delivers back to the same agent; on receipt the buyer
+    reads the ref from the payload and sends the next ``tick_req`` to the
+    seller.
+    """
+
+    async def on_message(
+        self,
+        ctx: AgentContext,
+        sender: AgentId,
+        payload: bytes,
+    ) -> None:
+        msg = payload.decode("utf-8", errors="replace")
+        payments = ctx.plugins.get("payments")
+
+        if msg.startswith("next_tick:") and payments is not None:
+            # Scheduled self-wakeup: send the next tick_req to the seller
+            parts = msg.split(":", 2)
+            if len(parts) >= 2:
+                ref_str = parts[1]
+                ref = PaymentRef(ref_str)
+                if ref in self._active_streams and ref not in self._closed_streams:
+                    seller = self._active_streams[ref]
+                    seq = self._acks.get(ref, 0)
+                    await ctx.send(seller, f"tick_req:{ref_str}:{seq}".encode())
+        else:
+            await super().on_message(ctx, sender, payload)
 
 
 def streaming_payments_factory(
@@ -275,8 +324,9 @@ def streaming_payments_factory(
     """Create buyer and seller agents for the streaming payments scenario.
 
     All agents share a single ``balances`` / ``streams`` dict (shared-ledger
-    pattern from the marketplace factory) so the conservation invariant holds
-    globally.
+    pattern) so the conservation invariant holds globally.  Every other buyer
+    (even index) cancels its stream at half ``rounds`` to exercise mid-stream
+    cancellation.
 
     Example::
 
@@ -306,11 +356,12 @@ def streaming_payments_factory(
     agents: dict[AgentId, StateMachineAgent] = {}
     for aid in seller_ids:
         agents[aid] = StreamingSellerAgent(aid)
-    for aid in buyer_ids:
-        agents[aid] = StreamingBuyerAgent(
+    for i, aid in enumerate(buyer_ids):
+        agents[aid] = _TickRelayBuyer(
             aid,
             num_sellers=seller_count,
             rounds=rounds,
+            cancel_early=(i % 2 == 0),
         )
 
     return agents
@@ -319,8 +370,8 @@ def streaming_payments_factory(
 def _instantiate_plugins(plugins: dict[str, Any], all_ids: list[AgentId]) -> None:
     """Instantiate plugin classes into shared instances in-place.
 
-    Per-agent payment handles share a single ``balances`` and ``streams``
-    dict so wealth is conserved globally across all agents.
+    Per-agent payment handles share a single ``balances`` and ``streams`` dict
+    so wealth is conserved globally.
 
     Example::
 

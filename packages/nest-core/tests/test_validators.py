@@ -692,17 +692,82 @@ class TestValidationResult:
 
 
 class TestStreamingValidators:
-    """Tests for the three streaming payment validators."""
+    """Tests for the streaming payment validators.
+
+    Domain events are encoded as JSON self-messages (kind:send, agent==to)
+    matching the engine-attributed format the scenario factory produces.
+    """
+
+    @staticmethod
+    def _saudit(agent: str, ts: float, **data: Any) -> dict[str, Any]:
+        """Build a streaming_audit self-message as the engine would record it."""
+        import json as _json
+
+        body = {"type": "streaming_audit", "tick": int(ts), **data}
+        return {
+            "kind": "send",
+            "agent": agent,
+            "to": agent,
+            "ts": ts,
+            "msg": _json.dumps(body, sort_keys=True),
+        }
+
+    @staticmethod
+    def _ack(buyer: str, ref: str, seq: int, ts: float) -> dict[str, Any]:
+        """Build an engine-attributed receive event for a tick_ack."""
+        return {
+            "kind": "receive",
+            "agent": buyer,
+            "from": "seller-0",
+            "ts": ts,
+            "msg": f"tick_ack:{ref}:{seq}",
+        }
+
+    @staticmethod
+    def _drop(sender: str, receiver: str, ts: float) -> dict[str, Any]:
+        return {"kind": "dropped", "from": sender, "agent": receiver, "ts": ts}
 
     def test_conservation_passes(self) -> None:
         """Conservation passes when debited == credited."""
         from nest_core.validators import validate_streaming_conservation
 
         events = [
-            {"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0},
-            {"kind": "payment_credited", "agent": "payee", "amount": 100, "tick": 0},
-            {"kind": "payment_debited", "agent": "payer", "amount": 50, "tick": 1},
-            {"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 1},
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=100,
+            ),
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_credited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=100,
+            ),
+            self._saudit(
+                "buyer-0",
+                2,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=50,
+            ),
+            self._saudit(
+                "buyer-0",
+                2,
+                event_type="payment_credited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=50,
+            ),
         ]
         results = validate_streaming_conservation(events)
         assert len(results) == 1
@@ -713,8 +778,24 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_conservation
 
         events = [
-            {"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0},
-            {"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 0},
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=100,
+            ),
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_credited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=50,
+            ),
         ]
         results = validate_streaming_conservation(events)
         assert len(results) == 1
@@ -726,44 +807,146 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_no_drain_after_close
 
         events = [
-            {"event_type": "stream_opened", "stream_ref": "s1", "tick": 0},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 2},
-            {"event_type": "stream_closed", "stream_ref": "s1", "tick": 3},
+            self._saudit(
+                "buyer-0",
+                0,
+                event_type="stream_opened",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+            ),
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
+            self._saudit(
+                "buyer-0",
+                2,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
+            self._saudit(
+                "buyer-0", 3, event_type="stream_closed", stream_ref="s1", payer="buyer-0"
+            ),
         ]
         results = validate_streaming_no_drain_after_close(events)
         assert len(results) == 1
         assert results[0].passed
 
     def test_no_drain_after_close_fails(self) -> None:
-        """Fails when debit occurs after close."""
+        """Fails when debit occurs after close — negative control."""
         from nest_core.validators import validate_streaming_no_drain_after_close
 
         events = [
-            {"event_type": "stream_opened", "stream_ref": "s1", "tick": 0},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
-            {"event_type": "stream_closed", "stream_ref": "s1", "tick": 2},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},  # AFTER close!
+            self._saudit(
+                "buyer-0",
+                0,
+                event_type="stream_opened",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+            ),
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
+            self._saudit(
+                "buyer-0", 2, event_type="stream_closed", stream_ref="s1", payer="buyer-0"
+            ),
+            # Drain-after-close: debit at tick 5 after close at tick 2
+            self._saudit(
+                "buyer-0",
+                5,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
         ]
         results = validate_streaming_no_drain_after_close(events)
         assert len(results) == 1
         assert not results[0].passed
         assert "debited after close" in results[0].detail
 
+    def test_no_debit_without_ack_passes(self) -> None:
+        """Adversarial validator passes when every debit has a preceding ack."""
+        from nest_core.validators import validate_streaming_no_debit_without_ack
+
+        events = [
+            self._ack("buyer-0", "s1", 0, ts=1.0),
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
+        ]
+        results = validate_streaming_no_debit_without_ack(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_no_debit_without_ack_fails(self) -> None:
+        """Adversarial validator FAILs when debit has no preceding ack — negative control."""
+        from nest_core.validators import validate_streaming_no_debit_without_ack
+
+        events = [
+            # No tick_ack receive event before this debit
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
+        ]
+        results = validate_streaming_no_debit_without_ack(events)
+        assert len(results) == 1
+        assert not results[0].passed
+        assert "no preceding tick_ack" in results[0].detail
+
     def test_no_overbill_on_partition_passes(self) -> None:
         """No over-bill passes when drops occur but no debits after."""
         from nest_core.validators import validate_streaming_no_overbill_on_partition
 
         events = [
-            {
-                "event_type": "stream_opened",
-                "stream_ref": "s1",
-                "agent": "payer",
-                "to": "payee",
-                "tick": 0,
-            },
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
-            {"kind": "dropped", "from": "payer", "agent": "payee", "tick": 2},
+            self._saudit(
+                "buyer-0",
+                0,
+                event_type="stream_opened",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+            ),
+            self._ack("buyer-0", "s1", 0, ts=1.0),
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
+            self._drop("buyer-0", "seller-0", ts=2.0),
             # No payment_debited after the partition
         ]
         results = validate_streaming_no_overbill_on_partition(events)
@@ -771,20 +954,39 @@ class TestStreamingValidators:
         assert results[0].passed
 
     def test_no_overbill_on_partition_fails(self) -> None:
-        """Fails when debit occurs after partition between payer and payee."""
+        """Fails when debit occurs after partition — negative control."""
         from nest_core.validators import validate_streaming_no_overbill_on_partition
 
         events = [
-            {
-                "event_type": "stream_opened",
-                "stream_ref": "s1",
-                "agent": "payer",
-                "to": "payee",
-                "tick": 0,
-            },
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
-            {"kind": "dropped", "from": "payer", "agent": "payee", "tick": 3},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},  # OVER-BILL
+            self._saudit(
+                "buyer-0",
+                0,
+                event_type="stream_opened",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+            ),
+            self._ack("buyer-0", "s1", 0, ts=1.0),
+            self._saudit(
+                "buyer-0",
+                1,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
+            self._drop("buyer-0", "seller-0", ts=3.0),
+            self._ack("buyer-0", "s1", 1, ts=4.0),
+            self._saudit(
+                "buyer-0",
+                5,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
         ]
         results = validate_streaming_no_overbill_on_partition(events)
         assert len(results) == 1
@@ -796,19 +998,29 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_no_overbill_on_partition
 
         events = [
-            {
-                "event_type": "stream_opened",
-                "stream_ref": "s1",
-                "agent": "payer",
-                "to": "payee",
-                "tick": 0,
-            },
-            {"kind": "dropped", "from": "other-a", "agent": "other-b", "tick": 2},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},
+            self._saudit(
+                "buyer-0",
+                0,
+                event_type="stream_opened",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+            ),
+            self._drop("other-a", "other-b", ts=2.0),
+            self._ack("buyer-0", "s1", 0, ts=4.0),
+            self._saudit(
+                "buyer-0",
+                5,
+                event_type="payment_debited",
+                stream_ref="s1",
+                payer="buyer-0",
+                payee="seller-0",
+                amount=10,
+            ),
         ]
         results = validate_streaming_no_overbill_on_partition(events)
         assert len(results) == 1
-        assert results[0].passed  # unrelated drop, not a violation
+        assert results[0].passed
 
 
 class TestEscrowValidators:
