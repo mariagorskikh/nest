@@ -1,0 +1,12 @@
+.git/
+.venv/
+**/__pycache__/
+**/*.pyc
+node_modules/
+.pytest_cache/
+.ruff_cache/
+traces/
+jwt_test.jsonl
+run1.jsonl
+run2.jsonl
+marketplace.yaml

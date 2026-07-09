@@ -8,7 +8,6 @@ requires-python = ">=3.12"
 license = "Apache-2.0"
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -78,6 +77,9 @@ dev-dependencies = [
     # nest-cli is a deprecated shim — only installed for the dev test suite
     # so the shim's smoke tests can import it.
     "nest-cli",
+    "fastapi==0.139.0",
+    "uvicorn==0.51.0",
+    "httpx==0.28.1",
 ]
 
 [tool.uv.sources]
@@ -101,6 +103,14 @@ ignore = ["TC001", "TC002", "TC003", "A002"]
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
+exclude = [
+    "**/node_modules",
+    "**/.venv",
+    "**/venv",
+    "**/.git",
+    "**/.next",
+    "**/__pycache__",
+]
 venvPath = "."
 venv = ".venv"
 extraPaths = [
