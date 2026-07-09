@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Nanda Town Authors
 
@@ -8,13 +7,13 @@ AgentCourt: A decentralized agent escrow and dispute resolution service.
 
 from __future__ import annotations
 
-import os
-import uuid
-import time
 import logging
-from enum import Enum
-from typing import Dict, List, Optional
+import os
+import time
+import uuid
+from enum import StrEnum
 from threading import Lock
+
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -31,35 +30,43 @@ app = FastAPI(
 
 # Thread-safe in-memory databases
 db_lock = Lock()
-escrow_db: Dict[str, Escrow] = {}
-dispute_db: Dict[str, Dispute] = {}
+escrow_db: dict[str, Escrow] = {}
+dispute_db: dict[str, Dispute] = {}
 
-class EscrowStatus(str, Enum):
+
+class EscrowStatus(StrEnum):
     HELD = "HELD"
     RELEASED = "RELEASED"
     REFUNDED = "REFUNDED"
     IN_DISPUTE = "IN_DISPUTE"
 
-class DisputeStatus(str, Enum):
+
+class DisputeStatus(StrEnum):
     PENDING = "PENDING"
     RELEASED_BY_VOTE = "RELEASED_BY_VOTE"
     REFUNDED_BY_VOTE = "REFUNDED_BY_VOTE"
+
 
 # Pydantic models for request/response validation
 class EscrowCreateRequest(BaseModel):
     buyer_id: str = Field(..., description="ID of the agent purchasing the service/item.")
     seller_id: str = Field(..., description="ID of the agent selling the service/item.")
     amount: float = Field(..., gt=0, description="Amount of credits/funds to be held in escrow.")
-    timeout_seconds: Optional[float] = Field(
-        3600.0, description="Time in seconds before the escrow automatically expires and can be refunded."
+    timeout_seconds: float | None = Field(
+        3600.0,
+        description="Time in seconds before the escrow automatically expires and can be refunded.",
     )
-    arbitrators: Optional[List[str]] = Field(
+    arbitrators: list[str] | None = Field(
         default_factory=list,
-        description="Optional list of authorized juror agent IDs. If empty, any agent can act as a juror.",
+        description=(
+            "Optional list of authorized juror agent IDs. "
+            "If empty, any agent can act as a juror."
+        ),
     )
-    vote_threshold: Optional[int] = Field(
+    vote_threshold: int | None = Field(
         3, ge=1, description="Number of matching votes required to resolve a dispute."
     )
+
 
 class EscrowResponse(BaseModel):
     id: str
@@ -70,31 +77,47 @@ class EscrowResponse(BaseModel):
     created_at: float
     expires_at: float
     status: EscrowStatus
-    evidence_url: Optional[str] = None
-    evidence_hash: Optional[str] = None
-    arbitrators: List[str]
+    evidence_url: str | None = None
+    evidence_hash: str | None = None
+    arbitrators: list[str]
     vote_threshold: int
 
+
 class EscrowActionRequest(BaseModel):
-    agent_id: str = Field(..., description="ID of the agent initiating the action. Must be authorized for this escrow.")
+    agent_id: str = Field(
+        ...,
+        description="ID of the agent initiating the action. Must be authorized for this escrow.",
+    )
+
 
 class EscrowDisputeRequest(BaseModel):
-    agent_id: str = Field(..., description="ID of the agent raising the dispute. Must be buyer or seller.")
-    evidence_url: Optional[str] = Field(None, description="Optional URL detailing the transaction issue/evidence.")
-    evidence_hash: Optional[str] = Field(None, description="Optional cryptographic hash of the evidence data.")
+    agent_id: str = Field(
+        ..., description="ID of the agent raising the dispute. Must be buyer or seller."
+    )
+    evidence_url: str | None = Field(
+        None, description="Optional URL detailing the transaction issue/evidence."
+    )
+    evidence_hash: str | None = Field(
+        None, description="Optional cryptographic hash of the evidence data."
+    )
+
 
 class JurorVoteRequest(BaseModel):
     juror_id: str = Field(..., description="ID of the juror agent casting the vote.")
     vote: str = Field(..., description="Vote outcome. Must be either 'RELEASE' or 'REFUND'.")
-    rationale: str = Field(..., min_length=10, description="Plain English reasoning explaining the juror's vote.")
+    rationale: str = Field(
+        ..., min_length=10, description="Plain English reasoning explaining the juror's vote."
+    )
+
 
 class DisputeResponse(BaseModel):
     escrow_id: str
     buyer_votes: int
     seller_votes: int
-    votes: Dict[str, str]
+    votes: dict[str, str]
     status: DisputeStatus
-    resolved_at: Optional[float] = None
+    resolved_at: float | None = None
+
 
 # Internal Python representations
 class Escrow:
@@ -104,7 +127,7 @@ class Escrow:
         seller_id: str,
         amount: float,
         timeout_seconds: float,
-        arbitrators: List[str],
+        arbitrators: list[str],
         vote_threshold: int,
     ):
         self.id = str(uuid.uuid4())[:8]  # short readable uuid
@@ -115,8 +138,8 @@ class Escrow:
         self.created_at = time.time()
         self.expires_at = self.created_at + timeout_seconds
         self.status = EscrowStatus.HELD
-        self.evidence_url: Optional[str] = None
-        self.evidence_hash: Optional[str] = None
+        self.evidence_url: str | None = None
+        self.evidence_hash: str | None = None
         self.arbitrators = arbitrators
         self.vote_threshold = vote_threshold
 
@@ -140,14 +163,15 @@ class Escrow:
             vote_threshold=self.vote_threshold,
         )
 
+
 class Dispute:
     def __init__(self, escrow_id: str):
         self.escrow_id = escrow_id
         self.buyer_votes = 0  # votes for REFUND
         self.seller_votes = 0  # votes for RELEASE
-        self.votes: Dict[str, str] = {}  # juror_id -> vote_type
+        self.votes: dict[str, str] = {}  # juror_id -> vote_type
         self.status = DisputeStatus.PENDING
-        self.resolved_at: Optional[float] = None
+        self.resolved_at: float | None = None
 
     def to_response(self) -> DisputeResponse:
         return DisputeResponse(
@@ -159,12 +183,14 @@ class Dispute:
             resolved_at=self.resolved_at,
         )
 
+
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     """
     Redirects root requests to the /skill.md document.
     """
     return RedirectResponse(url="/skill.md")
+
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
@@ -175,8 +201,9 @@ async def health_check():
         "status": "healthy",
         "service": "AgentCourt Escrow & Arbitration Court",
         "timestamp": time.time(),
-        "version": "1.0.0"
+        "version": "1.0.0",
     }
+
 
 @app.post("/escrow", response_model=EscrowResponse, status_code=status.HTTP_201_CREATED)
 async def create_escrow(req: EscrowCreateRequest):
@@ -193,8 +220,12 @@ async def create_escrow(req: EscrowCreateRequest):
             vote_threshold=req.vote_threshold or 3,
         )
         escrow_db[escrow.id] = escrow
-        logger.info(f"Created Escrow {escrow.id}: Buyer={escrow.buyer_id}, Seller={escrow.seller_id}, Amount={escrow.amount}")
+        logger.info(
+            f"Created Escrow {escrow.id}: Buyer={escrow.buyer_id}, "
+            f"Seller={escrow.seller_id}, Amount={escrow.amount}"
+        )
         return escrow.to_response()
+
 
 @app.get("/escrow/{escrow_id}", response_model=EscrowResponse)
 async def get_escrow(escrow_id: str):
@@ -204,10 +235,10 @@ async def get_escrow(escrow_id: str):
     with db_lock:
         if escrow_id not in escrow_db:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Escrow ID {escrow_id} not found."
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Escrow ID {escrow_id} not found."
             )
         return escrow_db[escrow_id].to_response()
+
 
 @app.post("/escrow/{escrow_id}/release", response_model=EscrowResponse)
 async def release_escrow(escrow_id: str, req: EscrowActionRequest):
@@ -217,29 +248,29 @@ async def release_escrow(escrow_id: str, req: EscrowActionRequest):
     with db_lock:
         if escrow_id not in escrow_db:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Escrow ID {escrow_id} not found."
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Escrow ID {escrow_id} not found."
             )
         escrow = escrow_db[escrow_id]
-        
+
         # Verify dynamic timeout
         if escrow.status == EscrowStatus.HELD and time.time() > escrow.expires_at:
             escrow.status = EscrowStatus.REFUNDED
-            
+
         if escrow.status != EscrowStatus.HELD:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Escrow is not in HELD status. Current status: {escrow.status.value}"
+                detail=f"Escrow is not in HELD status. Current status: {escrow.status.value}",
             )
         if req.agent_id != escrow.buyer_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only the buyer can release the escrow funds."
+                detail="Only the buyer can release the escrow funds.",
             )
-            
+
         escrow.status = EscrowStatus.RELEASED
         logger.info(f"Escrow {escrow_id} successfully RELEASED to Seller={escrow.seller_id}")
         return escrow.to_response()
+
 
 @app.post("/escrow/{escrow_id}/refund", response_model=EscrowResponse)
 async def refund_escrow(escrow_id: str, req: EscrowActionRequest):
@@ -249,20 +280,19 @@ async def refund_escrow(escrow_id: str, req: EscrowActionRequest):
     with db_lock:
         if escrow_id not in escrow_db:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Escrow ID {escrow_id} not found."
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Escrow ID {escrow_id} not found."
             )
         escrow = escrow_db[escrow_id]
-        
+
         # Check timeout expiration
         is_expired = time.time() > escrow.expires_at
-        
+
         if escrow.status != EscrowStatus.HELD:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Escrow is not in HELD status. Current status: {escrow.status.value}"
+                detail=f"Escrow is not in HELD status. Current status: {escrow.status.value}",
             )
-            
+
         # Refunder must be the seller, OR the buyer AFTER expiration
         if req.agent_id == escrow.seller_id:
             escrow.status = EscrowStatus.REFUNDED
@@ -274,12 +304,10 @@ async def refund_escrow(escrow_id: str, req: EscrowActionRequest):
             detail_msg = "Only the seller can issue a refund, or buyer after timeout."
             if req.agent_id == escrow.buyer_id and not is_expired:
                 detail_msg = "Escrow has not expired yet. Buyer cannot claim refund before timeout."
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=detail_msg
-            )
-            
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail_msg)
+
         return escrow.to_response()
+
 
 @app.post("/escrow/{escrow_id}/dispute", response_model=EscrowResponse)
 async def dispute_escrow(escrow_id: str, req: EscrowDisputeRequest):
@@ -289,48 +317,49 @@ async def dispute_escrow(escrow_id: str, req: EscrowDisputeRequest):
     with db_lock:
         if escrow_id not in escrow_db:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Escrow ID {escrow_id} not found."
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Escrow ID {escrow_id} not found."
             )
         escrow = escrow_db[escrow_id]
-        
+
         # Verify dynamic timeout
         if escrow.status == EscrowStatus.HELD and time.time() > escrow.expires_at:
             escrow.status = EscrowStatus.REFUNDED
-            
+
         if escrow.status != EscrowStatus.HELD:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Escrow cannot be disputed. Current status: {escrow.status.value}"
+                detail=f"Escrow cannot be disputed. Current status: {escrow.status.value}",
             )
         if req.agent_id not in (escrow.buyer_id, escrow.seller_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only the buyer or seller involved in the escrow can raise a dispute."
+                detail="Only the buyer or seller involved in the escrow can raise a dispute.",
             )
-            
+
         escrow.status = EscrowStatus.IN_DISPUTE
         escrow.evidence_url = req.evidence_url
         escrow.evidence_hash = req.evidence_hash
-        
+
         # Initialize dispute record
         dispute_db[escrow_id] = Dispute(escrow_id)
         logger.info(f"Escrow {escrow_id} marked IN_DISPUTE by agent {req.agent_id}.")
         return escrow.to_response()
 
-@app.get("/disputes", response_model=List[EscrowResponse])
+
+@app.get("/disputes", response_model=list[EscrowResponse])
 async def list_disputes():
     """
     Lists all active escrow contracts in dispute that need juror arbitration.
     """
     with db_lock:
-        active_disputes = []
+        active_disputes: list[EscrowResponse] = []
         for escrow in escrow_db.values():
             # Trigger expiration check if applicable
             escrow_res = escrow.to_response()
             if escrow_res.status == EscrowStatus.IN_DISPUTE:
                 active_disputes.append(escrow_res)
         return active_disputes
+
 
 @app.post("/disputes/{escrow_id}/vote", response_model=DisputeResponse)
 async def vote_on_dispute(escrow_id: str, req: JurorVoteRequest):
@@ -341,82 +370,88 @@ async def vote_on_dispute(escrow_id: str, req: JurorVoteRequest):
     with db_lock:
         if escrow_id not in escrow_db:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Escrow ID {escrow_id} not found."
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Escrow ID {escrow_id} not found."
             )
         escrow = escrow_db[escrow_id]
-        
+
         if escrow.status != EscrowStatus.IN_DISPUTE:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Escrow is not active in dispute. Current status: {escrow.status.value}"
+                detail=f"Escrow is not active in dispute. Current status: {escrow.status.value}",
             )
-            
+
         dispute = dispute_db.get(escrow_id)
         if not dispute:
             # Fallback initialization in case DB got out of sync
             dispute = Dispute(escrow_id)
             dispute_db[escrow_id] = dispute
-            
+
         if dispute.status != DisputeStatus.PENDING:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Dispute is already resolved."
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Dispute is already resolved."
             )
-            
+
         # Verify juror eligibility if designated arbitrators list is set
         if escrow.arbitrators and req.juror_id not in escrow.arbitrators:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Juror {req.juror_id} is not an authorized arbitrator for this escrow."
+                detail=f"Juror {req.juror_id} is not an authorized arbitrator for this escrow.",
             )
-            
+
         # Ensure juror cannot vote twice
         if req.juror_id in dispute.votes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Juror {req.juror_id} has already cast a vote for this dispute."
+                detail=f"Juror {req.juror_id} has already cast a vote for this dispute.",
             )
-            
+
         # Process vote
         vote_type = req.vote.upper().strip()
         if vote_type not in ("RELEASE", "REFUND"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Vote must be 'RELEASE' or 'REFUND'."
+                detail="Vote must be 'RELEASE' or 'REFUND'.",
             )
-            
+
         dispute.votes[req.juror_id] = vote_type
         if vote_type == "RELEASE":
             dispute.seller_votes += 1
         else:
             dispute.buyer_votes += 1
-            
-        logger.info(f"Juror {req.juror_id} voted {vote_type} on Escrow {escrow_id}. Rationale: {req.rationale}")
-        
+
+        logger.info(
+            f"Juror {req.juror_id} voted {vote_type} on Escrow {escrow_id}. "
+            f"Rationale: {req.rationale}"
+        )
+
         # Check if resolution threshold has been met
         if dispute.seller_votes >= escrow.vote_threshold:
             dispute.status = DisputeStatus.RELEASED_BY_VOTE
             dispute.resolved_at = time.time()
             escrow.status = EscrowStatus.RELEASED
-            logger.info(f"Dispute on Escrow {escrow_id} resolved as RELEASED to seller by juror majority.")
+            logger.info(
+                f"Dispute on Escrow {escrow_id} resolved as RELEASED to seller by juror majority."
+            )
         elif dispute.buyer_votes >= escrow.vote_threshold:
             dispute.status = DisputeStatus.REFUNDED_BY_VOTE
             dispute.resolved_at = time.time()
             escrow.status = EscrowStatus.REFUNDED
-            logger.info(f"Dispute on Escrow {escrow_id} resolved as REFUNDED to buyer by juror majority.")
-            
+            logger.info(
+                f"Dispute on Escrow {escrow_id} resolved as REFUNDED to buyer by juror majority."
+            )
+
         return dispute.to_response()
+
 
 @app.get("/skill.md", response_class=PlainTextResponse)
 async def serve_skill_md():
     """
-    Serves the SKILL.md documentation directly. 
+    Serves the SKILL.md documentation directly.
     This allows agents to fetch the documentation dynamically at runtime.
     """
     skill_path = os.path.join(os.path.dirname(__file__), "SKILL.md")
     if os.path.exists(skill_path):
-        with open(skill_path, "r", encoding="utf-8") as f:
+        with open(skill_path, encoding="utf-8") as f:
             return f.read()
     # In-code fallback if file is somehow missing
     return "# AgentCourt\nBase URL: https://agentcourt.onrender.com\n"

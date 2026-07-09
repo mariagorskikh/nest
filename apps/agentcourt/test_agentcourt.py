@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Nanda Town Authors
 
@@ -9,17 +9,21 @@ Automated unit and integration tests for the AgentCourt service.
 from __future__ import annotations
 
 import time
+
 import pytest
 from fastapi.testclient import TestClient
-from .main import app, escrow_db, dispute_db
+
+from .main import app, dispute_db, escrow_db
 
 client = TestClient(app)
+
 
 @pytest.fixture(autouse=True)
 def clear_db():
     """Clears databases between tests."""
     escrow_db.clear()
     dispute_db.clear()
+
 
 def test_health_check():
     """Verify the health check endpoint returns 200 and correct structure."""
@@ -28,6 +32,7 @@ def test_health_check():
     data = response.json()
     assert data["status"] == "healthy"
     assert "version" in data
+
 
 def test_escrow_happy_path():
     """Verify creation, retrieval, and buyer-release of funds."""
@@ -38,7 +43,7 @@ def test_escrow_happy_path():
         "amount": 100.0,
         "timeout_seconds": 120.0,
         "arbitrators": ["j-1", "j-2"],
-        "vote_threshold": 2
+        "vote_threshold": 2,
     }
     response = client.post("/escrow", json=create_req)
     assert response.status_code == 201
@@ -64,6 +69,7 @@ def test_escrow_happy_path():
     response = client.post(f"/escrow/{escrow_id}/release", json=release_req)
     assert response.status_code == 400
 
+
 def test_escrow_seller_refund():
     """Verify creation and direct refund by the seller."""
     create_req = {
@@ -79,6 +85,7 @@ def test_escrow_seller_refund():
     response = client.post(f"/escrow/{escrow_id}/refund", json=refund_req)
     assert response.status_code == 200
     assert response.json()["status"] == "REFUNDED"
+
 
 def test_escrow_buyer_refund_expiration():
     """Verify buyer can only refund after expiration timer completes."""
@@ -104,6 +111,7 @@ def test_escrow_buyer_refund_expiration():
     assert response.status_code == 200
     assert response.json()["status"] == "REFUNDED"
 
+
 def test_escrow_dispute_and_arbitration():
     """Verify raising a dispute and resolving it via juror votes."""
     create_req = {
@@ -112,17 +120,13 @@ def test_escrow_dispute_and_arbitration():
         "amount": 300.0,
         "timeout_seconds": 60.0,
         "arbitrators": ["j-1", "j-2", "j-3"],
-        "vote_threshold": 2
+        "vote_threshold": 2,
     }
     response = client.post("/escrow", json=create_req)
     escrow_id = response.json()["id"]
 
     # 1. Raise dispute
-    dispute_req = {
-        "agent_id": "buyer-1",
-        "evidence_url": "http://logs",
-        "evidence_hash": "hash"
-    }
+    dispute_req = {"agent_id": "buyer-1", "evidence_url": "http://logs", "evidence_hash": "hash"}
     response = client.post(f"/escrow/{escrow_id}/dispute", json=dispute_req)
     assert response.status_code == 200
     assert response.json()["status"] == "IN_DISPUTE"
@@ -138,7 +142,7 @@ def test_escrow_dispute_and_arbitration():
     vote_req = {
         "juror_id": "unauthorized-agent",
         "vote": "RELEASE",
-        "rationale": "I think the seller did a good job overall."
+        "rationale": "I think the seller did a good job overall.",
     }
     response = client.post(f"/disputes/{escrow_id}/vote", json=vote_req)
     assert response.status_code == 403
@@ -165,6 +169,7 @@ def test_escrow_dispute_and_arbitration():
     # 7. Check escrow status updated to RELEASED
     response = client.get(f"/escrow/{escrow_id}")
     assert response.json()["status"] == "RELEASED"
+
 
 def test_serve_skill_md():
     """Verify the skill.md server returns the content of the documentation."""
