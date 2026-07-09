@@ -165,17 +165,20 @@ class SybilResistantTrust:
             if reporter in ring_members:
                 weight *= self._collusion_penalty
 
+            # If reporter has a negative opinion, weight it 3.0x more heavily
+            # to quickly contain cheaters and prevent collusion overrides.
+            if opinion_score < 0.0:
+                weight *= 3.0
+
             weighted_sum += opinion_score * weight
             total_weight += weight
 
-        avg_opinion = weighted_sum / total_weight if total_weight > 0 else 0.0
         # Map aggregate opinion to [0, 1].
-        # We scale by the number of distinct reporters (up to a limit)
-        # to allow positive/negative build-up.
-        distinct_count = len(self._distinct_reporters.get(agent, set()))
-        scaled_opinion = avg_opinion * math.sqrt(distinct_count)
-        final_score = 0.5 + 0.5 * math.tanh(scaled_opinion)
+        # We use the weighted sum of opinions directly, which scales naturally
+        # with the number of reporters and their weights/credibility!
+        final_score = 0.5 + 0.5 * math.tanh(2.0 * weighted_sum)
 
+        distinct_count = len(self._distinct_reporters.get(agent, set()))
         confidence = min(1.0, distinct_count / max(1, self._min_reporters))
 
         return final_score, confidence, len(reports)

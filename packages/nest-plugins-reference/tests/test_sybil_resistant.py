@@ -295,40 +295,39 @@ async def test_implements_trust_protocol() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sybil_flood_validator_fails_against_naive() -> None:
-    """The flood validator should detect unopposed flood patterns in traces."""
+async def test_sybil_flood_validator_fails_on_too_many_cheats() -> None:
+    """The flood validator should FAIL when there are too many cheats."""
     from nest_core.validators import validate_sybil_flood_resistance
 
-    # Simulate trace events: one reporter floods good reports, no bad reports
     events: list[dict[str, object]] = []
-    for i in range(10):
+    for i in range(12):
         events.append(
             {
                 "kind": "send",
                 "agent": "sybil-0",
-                "to": "observer-0",
-                "msg": f"report:{i}:honest-0:good",
+                "to": "honest-0",
+                "msg": f"cheat:{i}:sybil-0",
             }
         )
 
     results = validate_sybil_flood_resistance(events)
     assert len(results) == 1
-    assert not results[0].passed, "flood validator should FAIL on unopposed flood"
+    assert not results[0].passed
 
 
 @pytest.mark.asyncio
-async def test_sybil_flood_validator_passes_with_diverse_reporters() -> None:
-    """The flood validator should PASS when reports come from diverse sources."""
+async def test_sybil_flood_validator_passes_on_few_cheats() -> None:
+    """The flood validator should PASS when cheats are mitigated."""
     from nest_core.validators import validate_sybil_flood_resistance
 
     events: list[dict[str, object]] = []
-    for i in range(10):
+    for i in range(2):
         events.append(
             {
                 "kind": "send",
-                "agent": f"reporter-{i}",
-                "to": "observer-0",
-                "msg": f"report:{i}:honest-0:good",
+                "agent": "sybil-0",
+                "to": "honest-0",
+                "msg": f"cheat:{i}:sybil-0",
             }
         )
 
@@ -338,33 +337,39 @@ async def test_sybil_flood_validator_passes_with_diverse_reporters() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sybil_score_integrity_validator() -> None:
-    """Honest-only deliverers should have non-negative score in traces."""
-    from nest_core.validators import validate_sybil_score_integrity
+async def test_sybil_collusion_validator_passes_with_refusal() -> None:
+    """The collusion validator should PASS when there is a refusal in the trace."""
+    from nest_core.validators import validate_sybil_collusion_ring
 
-    events: list[dict[str, object]] = []
-    # Honest agent delivers
-    events.append(
+    events = [
         {
             "kind": "send",
             "agent": "honest-0",
-            "to": "buyer-0",
-            "msg": "deliver:1:honest-0",
+            "to": "sybil-0",
+            "msg": "refuse:1:honest-0",
         }
-    )
-    # Gets good report
-    events.append(
-        {
-            "kind": "send",
-            "agent": "buyer-0",
-            "to": "observer-0",
-            "msg": "report:1:honest-0:good",
-        }
-    )
-
-    results = validate_sybil_score_integrity(events)
+    ]
+    results = validate_sybil_collusion_ring(events)
     assert len(results) == 1
     assert results[0].passed
+
+
+@pytest.mark.asyncio
+async def test_sybil_collusion_validator_fails_without_refusal() -> None:
+    """The collusion validator should FAIL when there are no refusals in the trace."""
+    from nest_core.validators import validate_sybil_collusion_ring
+
+    events = [
+        {
+            "kind": "send",
+            "agent": "honest-0",
+            "to": "sybil-0",
+            "msg": "deliver:1:honest-0",
+        }
+    ]
+    results = validate_sybil_collusion_ring(events)
+    assert len(results) == 1
+    assert not results[0].passed
 
 
 # ---------------------------------------------------------------------------

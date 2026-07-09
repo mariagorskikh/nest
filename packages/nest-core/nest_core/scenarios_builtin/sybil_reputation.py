@@ -50,6 +50,22 @@ class HonestTrader(StateMachineAgent):
         self._rounds = rounds
         self._round = 0
 
+    async def _select_trusted_peer(self, ctx: AgentContext) -> AgentId:
+        """Filter peers by reputation if trust plugin is available."""
+        trust = ctx.plugins.get("trust")
+        if not trust:
+            return ctx.rng.choice(self._peers)
+
+        eligible_peers: list[AgentId] = []
+        for peer in self._peers:
+            rep = await trust.score(peer)
+            if rep.score >= 0.45:
+                eligible_peers.append(peer)
+
+        if not eligible_peers:
+            return ctx.rng.choice(self._peers)
+        return ctx.rng.choice(eligible_peers)
+
     async def on_start(self, ctx: AgentContext) -> None:
         """Initiate the first trade with a random peer.
 
@@ -58,7 +74,7 @@ class HonestTrader(StateMachineAgent):
             await agent.on_start(ctx)
         """
         self._round = 1
-        peer = ctx.rng.choice(self._peers)
+        peer = await self._select_trusted_peer(ctx)
         await ctx.send(peer, f"trade:{self._round}:{self._id}".encode())
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
@@ -73,6 +89,13 @@ class HonestTrader(StateMachineAgent):
             parts = msg.split(":")
             if len(parts) >= 3:
                 rnd = parts[1]
+                # Check reputation before delivering
+                trust = ctx.plugins.get("trust")
+                if trust:
+                    rep = await trust.score(sender)
+                    if rep.score < 0.45:
+                        await ctx.send(sender, f"refuse:{rnd}:{self._id}".encode())
+                        return
                 await ctx.send(sender, f"deliver:{rnd}:{self._id}".encode())
         elif msg.startswith("deliver:"):
             parts = msg.split(":")
@@ -84,7 +107,7 @@ class HonestTrader(StateMachineAgent):
                 )
                 self._round += 1
                 if self._round <= self._rounds:
-                    peer = ctx.rng.choice(self._peers)
+                    peer = await self._select_trusted_peer(ctx)
                     await ctx.send(peer, f"trade:{self._round}:{self._id}".encode())
         elif msg.startswith("cheat:"):
             parts = msg.split(":")
@@ -96,8 +119,14 @@ class HonestTrader(StateMachineAgent):
                 )
                 self._round += 1
                 if self._round <= self._rounds:
-                    peer = ctx.rng.choice(self._peers)
+                    peer = await self._select_trusted_peer(ctx)
                     await ctx.send(peer, f"trade:{self._round}:{self._id}".encode())
+        elif msg.startswith("refuse:"):
+            # Refused by peer, try next round with a new trusted peer
+            self._round += 1
+            if self._round <= self._rounds:
+                peer = await self._select_trusted_peer(ctx)
+                await ctx.send(peer, f"trade:{self._round}:{self._id}".encode())
 
 
 class SybilAttacker(StateMachineAgent):
@@ -179,7 +208,7 @@ class SybilAttacker(StateMachineAgent):
                     await ctx.send(sender, f"cheat:{rnd}:{self._id}".encode())
                 else:
                     await ctx.send(sender, f"deliver:{rnd}:{self._id}".encode())
-        elif msg.startswith("deliver:") or msg.startswith("cheat:"):
+        elif msg.startswith("deliver:") or msg.startswith("cheat:") or msg.startswith("refuse:"):
             self._round += 1
             if self._round <= self._rounds:
                 peer = ctx.rng.choice(self._peers)
@@ -231,6 +260,21 @@ class SybilObserver(StateMachineAgent):
             self._scores[agent_str] = 0
         self._scores[agent_str] += 1 if outcome == "good" else -2
 
+        # Update the trust layer
+        trust = ctx.plugins.get("trust")
+        if trust:
+            from nest_core.types import Evidence
+
+            kind = "positive" if outcome == "good" else "negative"
+            await trust.report(
+                AgentId(agent_str),
+                Evidence(
+                    reporter=sender,
+                    subject=AgentId(agent_str),
+                    kind=kind,
+                ),
+            )
+
         if self._scores[agent_str] <= -3 and agent_str not in self._warned:
             self._warned.add(agent_str)
             await ctx.broadcast(f"warning:{_rnd}:{agent_str}:untrusted".encode())
@@ -255,6 +299,11 @@ def sybil_reputation_factory(
 
         agents = sybil_reputation_factory(config, plugins)
     """
+    # Instantiate the trust class if it is not already an instance
+    trust_cls = plugins.get("trust")
+    if trust_cls and isinstance(trust_cls, type):
+        plugins["trust"] = trust_cls()
+
     task_config = config.task.config
     rounds = task_config.get("rounds", 5)
     sybil_target_str = task_config.get("sybil_target", "honest-0")
