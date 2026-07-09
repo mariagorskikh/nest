@@ -3,6 +3,7 @@
 """Generate JSONL trace fixtures for the nest-dashboard visualizer."""
 
 from __future__ import annotations
+
 import asyncio
 import shutil
 import sys
