@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { listSkills, type Skill } from "@/lib/skills";
+import { HackathonPhases } from "@/components/hackathon-phases";
 import { CodeBlock } from "./code-block";
 import { SubmitForm } from "./submit-form";
 
@@ -128,6 +129,30 @@ export default async function SkillsPage() {
 
       <div className="mx-auto max-w-3xl px-6 pb-24 sm:px-10">
         {/* ---------------------------------------------------------- */}
+        {/*  SUBMIT FORM (moved to top of page)                          */}
+        {/* ---------------------------------------------------------- */}
+        <Section eyebrow="Submit it" title="Add your SkillMD">
+          <p className="mb-7 text-[1.05rem] leading-[1.7] text-ink-500">
+            Three ways to send it: a public link to the file, a GitHub repo, or
+            paste the text. We save it to the registry so agents can find it.
+          </p>
+          <div className="rounded-3xl border border-cream-400/70 bg-cream-200/50 p-7 sm:p-9">
+            <SubmitForm />
+          </div>
+        </Section>
+
+        <div className="h-px bg-cream-400/70" />
+
+        {/* ---------------------------------------------------------- */}
+        {/*  TWO-PHASE HACKATHON BLOCK                                   */}
+        {/* ---------------------------------------------------------- */}
+        <section className="py-10">
+          <HackathonPhases />
+        </section>
+
+        <div className="h-px bg-cream-400/70" />
+
+        {/* ---------------------------------------------------------- */}
         {/*  WHAT IS IT                                                  */}
         {/* ---------------------------------------------------------- */}
         <Section eyebrow="The idea" title="What’s a SkillMD?">
@@ -246,21 +271,6 @@ export default async function SkillsPage() {
             need, show one example call and answer, and spell out the steps in
             plain words.
           </p>
-        </Section>
-
-        <div className="h-px bg-cream-400/70" />
-
-        {/* ---------------------------------------------------------- */}
-        {/*  SUBMIT FORM                                                 */}
-        {/* ---------------------------------------------------------- */}
-        <Section eyebrow="Submit it" title="Add your SkillMD">
-          <p className="mb-7 text-[1.05rem] leading-[1.7] text-ink-500">
-            Three ways to send it: a public link to the file, a GitHub repo, or
-            paste the text. We save it to the registry so agents can find it.
-          </p>
-          <div className="rounded-3xl border border-cream-400/70 bg-cream-200/50 p-7 sm:p-9">
-            <SubmitForm />
-          </div>
         </Section>
 
         <div className="h-px bg-cream-400/70" />

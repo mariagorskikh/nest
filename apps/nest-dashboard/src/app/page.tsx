@@ -6,6 +6,8 @@ import { liveAgentChat, experiments, scenarioColors } from '@/lib/demo-data';
 import type { AgentMessage } from '@/lib/demo-data';
 import { MiniMap } from '@/components/mini-map';
 import { ImagePlaceholder } from '@/components/image-placeholder';
+import { HackathonFaq } from '@/components/hackathon-faq';
+import { hackathonEvent, hackathonFaqs } from '@/lib/hackathon-event';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -132,10 +134,70 @@ export default function Home() {
       </section>
 
       {/* ============================================================ */}
+      {/*  NANDAHACK — event callout                                     */}
+      {/* ============================================================ */}
+      <section className="border-y border-rust/30 bg-cream-50">
+        <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-16 md:py-20">
+          <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-start">
+            <div>
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-rust animate-pulse-dot" />
+                <span className="eyebrow text-rust">
+                  NandaHack &middot; happening now
+                </span>
+              </div>
+              <h2 className="font-display mt-6 text-[clamp(2.2rem,4.6vw,3.8rem)] leading-[1.03] tracking-[-0.015em] text-ink-900">
+                A hackathon you can<br />
+                join from <span className="italic text-ink-700">anywhere.</span>
+              </h2>
+              <p className="mt-6 max-w-xl text-[1.1rem] leading-[1.6] text-ink-500">
+                {hackathonEvent.tagline}{' '}
+                Teams build agentic AI apps in the
+                Nanda Town sandbox &mdash; fully virtual, {hackathonEvent.virtualWindow},
+                with an optional in-person finale at MIT Media Lab.
+              </p>
+
+              <div className="mt-8 flex flex-wrap gap-3">
+                <Link href="/hackathon" className="btn-primary">
+                  Hackathon details &amp; FAQs
+                </Link>
+                <a
+                  href={hackathonEvent.officialUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-secondary"
+                >
+                  Official site
+                </a>
+              </div>
+
+              <dl className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-6 border-t border-cream-400/70 pt-6 max-w-xl">
+                <EventDate label="Submissions due" value="Fri, Jul 10" hint="12:00 PM ET" />
+                <EventDate label="Summit & finale" value="Sat, Jul 11" hint="MIT Media Lab · optional" />
+              </dl>
+            </div>
+
+            <div className="lg:pt-14">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-300 mb-4">
+                Quick answers
+              </p>
+              <HackathonFaq entries={hackathonFaqs.slice(0, 3)} />
+              <Link
+                href="/hackathon#faq"
+                className="mt-5 inline-flex items-center text-[0.9rem] font-medium text-ink-500 hover:text-ink-900 transition-colors"
+              >
+                All FAQs &rarr;
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ============================================================ */}
       {/*  HERO VISUAL — live map                                        */}
       {/* ============================================================ */}
       <section className="relative">
-        <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pb-24">
+        <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-24">
           <div className="grid gap-8 lg:grid-cols-[1.4fr_1fr]">
             <Link
               href="/agents"
@@ -145,7 +207,7 @@ export default function Home() {
               <MiniMap width={780} height={440} />
               <div className="mt-4 flex items-center justify-between px-1">
                 <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-300">
-                  Live agent network · synthetic feed
+                  Live agent network
                 </span>
                 <span className="text-[0.85rem] text-ink-400 group-hover:text-ink-900 transition-colors">
                   Open map &rarr;
@@ -472,6 +534,30 @@ function Stat({ label, value }: { label: string; value: string }) {
       </dt>
       <dd className="mt-2 font-display text-[1.65rem] leading-none text-ink-900">
         {value}
+      </dd>
+    </div>
+  );
+}
+
+function EventDate({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+}) {
+  return (
+    <div>
+      <dt className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-300">
+        {label}
+      </dt>
+      <dd className="mt-2">
+        <span className="block font-display text-[1.45rem] leading-none text-ink-900">
+          {value}
+        </span>
+        <span className="mt-1.5 block text-[0.82rem] text-ink-400">{hint}</span>
       </dd>
     </div>
   );

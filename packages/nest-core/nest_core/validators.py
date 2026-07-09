@@ -274,11 +274,21 @@ def validate_auction_winner_highest(
                 winners[item] = (bidder, amount)
 
     violations: list[str] = []
-    for item, (_winner, winning_amount) in winners.items():
-        for bidder, amount in bids.get(item, []):
-            if amount > winning_amount:
+    for item, (winner, winning_amount) in winners.items():
+        item_bids = bids.get(item, [])
+        # The invariant is about the winner's REAL bid, not the announced
+        # amount. Trusting the announced amount lets an auctioneer award a low
+        # bidder while announcing a figure inflated past every real bid, and the
+        # check would pass. Use the winner's own highest observed bid; fall back
+        # to the announced amount only when the winner's bid was not observed
+        # (e.g. dropped under message loss), so this never fails a valid trace.
+        winner_bids = [amount for bidder, amount in item_bids if bidder == winner]
+        effective_winner_bid = max(winner_bids) if winner_bids else winning_amount
+        for bidder, amount in item_bids:
+            if amount > effective_winner_bid:
                 violations.append(
-                    f"item {item}: winner bid {winning_amount} but {bidder} bid {amount}"
+                    f"item {item}: winner {winner} bid {effective_winner_bid} "
+                    f"but {bidder} bid {amount}"
                 )
                 break
 
@@ -1407,6 +1417,968 @@ def validate_streaming_no_overbill_on_partition(
 
 
 # ---------------------------------------------------------------------------
+# EMPIC escrow/streaming payments validators
+# ---------------------------------------------------------------------------
+
+
+def _event_tick(ev: dict[str, Any]) -> int:
+    raw = ev.get("tick", ev.get("ts", 0))
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    if isinstance(raw, str):
+        with contextlib.suppress(ValueError):
+            return int(float(raw))
+    return 0
+
+
+def _empic_audit_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(msg)
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            if body.get("type") == "empic_audit":
+                body.setdefault("tick", _event_tick(ev))
+                parsed.append(body)
+    return parsed
+
+
+def _empic_message_events(
+    events: list[dict[str, Any]],
+    msg_type: str,
+) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(msg)
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            if body.get("type") != msg_type:
+                continue
+            body.setdefault("tick", _event_tick(ev))
+            body.setdefault("_sender", str(ev.get("agent", "")))
+            body.setdefault("_receiver", str(ev.get("to", "")))
+            parsed.append(body)
+    return parsed
+
+
+def _empic_ref(ev: dict[str, Any]) -> str:
+    value = ev.get("payment_ref")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _empic_delivery_id(ev: dict[str, Any]) -> str:
+    value = ev.get("delivery_id")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _empic_amounts_by_ref(
+    audit: list[dict[str, Any]],
+    event_type: str,
+) -> dict[str, int]:
+    totals: dict[str, int] = defaultdict(int)
+    for ev in audit:
+        if ev.get("event_type") != event_type:
+            continue
+        ref = _empic_ref(ev)
+        if ref:
+            totals[ref] += _safe_amount(ev.get("amount"))
+    return totals
+
+
+def validate_empic_escrow_conservation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every escrowed credit is either released or refunded per payment.
+
+    This checks the EMPIC shadow ledger from audit messages by ``payment_ref``:
+    consumer debits into escrow must equal provider releases plus consumer
+    refunds for each funded payment, not only globally.
+
+    Example::
+
+        result = validate_empic_escrow_conservation(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    debited = _empic_amounts_by_ref(audit, "empic_escrow_debited")
+    released = _empic_amounts_by_ref(audit, "empic_escrow_released")
+    refunded = _empic_amounts_by_ref(audit, "empic_escrow_refunded")
+    refs = sorted(set(debited) | set(released) | set(refunded))
+    violations = [
+        f"{ref}: debited={debited.get(ref, 0)} released={released.get(ref, 0)} "
+        f"refunded={refunded.get(ref, 0)}"
+        for ref in refs
+        if debited.get(ref, 0) != released.get(ref, 0) + refunded.get(ref, 0)
+    ]
+    if violations:
+        return [
+            ValidationResult(
+                "empic_escrow_conservation",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    total_debited = sum(debited.values())
+    total_released = sum(released.values())
+    total_refunded = sum(refunded.values())
+    return [
+        ValidationResult(
+            "empic_escrow_conservation",
+            True,
+            f"{len(refs)} refs, debited={total_debited}, "
+            f"released={total_released}, refunded={total_refunded}",
+        )
+    ]
+
+
+def validate_empic_no_release_without_accepted_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Provider payment release requires accepted delivery evidence.
+
+    Example::
+
+        result = validate_empic_no_release_without_accepted_delivery(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    accepted_deliveries = {
+        (_empic_ref(ev), _empic_delivery_id(ev))
+        for ev in audit
+        if ev.get("event_type") == "empic_delivery_evaluated"
+        and ev.get("accepted") is True
+        and _empic_ref(ev)
+        and _empic_delivery_id(ev)
+    }
+    violations: list[str] = []
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = _empic_ref(ev)
+        delivery_id = _empic_delivery_id(ev)
+        if not ref or not delivery_id or (ref, delivery_id) not in accepted_deliveries:
+            violations.append(
+                f"release ref={ref or '<missing>'} delivery={delivery_id or '<missing>'}"
+            )
+
+    if violations:
+        return [
+            ValidationResult(
+                "empic_no_release_without_accepted_delivery",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_no_release_without_accepted_delivery",
+            True,
+            f"verified {len(accepted_deliveries)} accepted deliveries",
+        )
+    ]
+
+
+def validate_empic_invalid_delivery_not_paid(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Rejected delivery evidence must not be credited to a provider.
+
+    Example::
+
+        result = validate_empic_invalid_delivery_not_paid(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    rejected = {
+        (_empic_ref(ev), _empic_delivery_id(ev))
+        for ev in audit
+        if ev.get("event_type") == "empic_delivery_evaluated"
+        and ev.get("accepted") is False
+        and _empic_ref(ev)
+        and _empic_delivery_id(ev)
+    }
+    paid = {
+        (_empic_ref(ev), _empic_delivery_id(ev))
+        for ev in audit
+        if ev.get("event_type") == "empic_escrow_released"
+        and _empic_ref(ev)
+        and _empic_delivery_id(ev)
+    }
+    violations = sorted(rejected & paid)
+    if violations:
+        return [
+            ValidationResult(
+                "empic_invalid_delivery_not_paid",
+                False,
+                f"rejected deliveries were paid: {violations}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_invalid_delivery_not_paid",
+            True,
+            f"verified {len(rejected)} rejected deliveries",
+        )
+    ]
+
+
+def validate_empic_delivery_policy_integrity(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Consumer acceptance must match delivery payload and declared policy.
+
+    Example::
+
+        result = validate_empic_delivery_policy_integrity(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    deliveries = {
+        (_empic_ref(ev), _empic_delivery_id(ev)): ev
+        for ev in _empic_message_events(events, "empic_delivery")
+        if _empic_ref(ev) and _empic_delivery_id(ev)
+    }
+    policies = {
+        _empic_ref(ev): ev
+        for ev in audit
+        if ev.get("event_type") == "empic_acceptance_policy" and _empic_ref(ev)
+    }
+    checked = 0
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_delivery_evaluated":
+            continue
+        ref = _empic_ref(ev)
+        delivery_id = _empic_delivery_id(ev)
+        if not ref or not delivery_id:
+            violations.append("delivery evaluation missing payment_ref or delivery_id")
+            continue
+        delivery = deliveries.get((ref, delivery_id))
+        policy_event = policies.get(ref)
+        if delivery is None:
+            violations.append(f"{ref}/{delivery_id}: evaluated delivery not found")
+            continue
+        if policy_event is None:
+            violations.append(f"{ref}/{delivery_id}: acceptance policy not found")
+            continue
+
+        expected, reason = _empic_policy_accepts(delivery, policy_event, _event_tick(ev))
+        observed = ev.get("accepted") is True
+        checked += 1
+        if observed != expected:
+            violations.append(
+                f"{ref}/{delivery_id}: observed accepted={observed}, "
+                f"policy accepted={expected} ({reason})"
+            )
+
+    if violations:
+        return [ValidationResult("empic_delivery_policy_integrity", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_delivery_policy_integrity",
+            True,
+            f"checked {checked} delivery evaluations",
+        )
+    ]
+
+
+def validate_empic_pubsub_billing_caps(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Pubsub releases must respect rate-per-tick, max-total, and accepted evidence.
+
+    Example::
+
+        result = validate_empic_pubsub_billing_caps(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    stream_refs: set[str] = set()
+    streams: dict[str, tuple[int, int]] = {}
+    accepted: dict[str, set[str]] = defaultdict(set)
+    released: dict[str, int] = defaultdict(int)
+    violations: list[str] = []
+
+    for ev in audit:
+        event_type = ev.get("event_type")
+        ref = _empic_ref(ev)
+        if not ref:
+            continue
+        if event_type == "empic_stream_opened":
+            stream_refs.add(ref)
+            rate = _safe_amount(ev.get("rate_per_tick"))
+            max_total = _safe_amount(ev.get("max_total") or ev.get("amount"))
+            if rate <= 0 or max_total <= 0:
+                violations.append(f"{ref}: invalid stream terms rate={rate} max_total={max_total}")
+            else:
+                streams[ref] = (rate, max_total)
+            continue
+
+        is_pubsub_ref = ref in stream_refs or ev.get("mode") == "pubsub"
+        if (
+            event_type == "empic_delivery_evaluated"
+            and ev.get("accepted") is True
+            and is_pubsub_ref
+        ):
+            delivery_id = _empic_delivery_id(ev)
+            if delivery_id:
+                accepted[ref].add(delivery_id)
+        elif event_type == "empic_escrow_released" and is_pubsub_ref:
+            amount = _safe_amount(ev.get("amount"))
+            delivery_id = _empic_delivery_id(ev)
+            terms = streams.get(ref)
+            if terms is None:
+                violations.append(f"{ref}: pubsub release without stream_opened")
+                continue
+            rate, _max_total = terms
+            if amount > rate:
+                violations.append(
+                    f"{ref}/{delivery_id or '<missing>'}: release {amount} > rate {rate}"
+                )
+            released[ref] += amount
+
+    for ref, (rate, max_total) in streams.items():
+        released_total = released.get(ref, 0)
+        accepted_cap = rate * len(accepted.get(ref, set()))
+        if released_total > max_total:
+            violations.append(f"{ref}: released {released_total} > max_total {max_total}")
+        if released_total > accepted_cap:
+            violations.append(
+                f"{ref}: released {released_total} > accepted delivery cap {accepted_cap}"
+            )
+
+    if violations:
+        return [ValidationResult("empic_pubsub_billing_caps", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_pubsub_billing_caps",
+            True,
+            f"checked {len(streams)} pubsub streams",
+        )
+    ]
+
+
+def validate_empic_max_spend_enforced(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Funded escrow amount must not exceed the consumer's declared budget.
+
+    Example::
+
+        result = validate_empic_max_spend_enforced(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    max_spend_by_ref: dict[str, int] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_acceptance_policy":
+            continue
+        ref = _empic_ref(ev)
+        if not ref:
+            continue
+        max_spend = _optional_amount(ev.get("max_spend"))
+        policy_raw = ev.get("policy")
+        if max_spend is None and isinstance(policy_raw, dict):
+            max_spend = _optional_amount(cast("dict[str, Any]", policy_raw).get("max_spend"))
+        if max_spend is not None:
+            max_spend_by_ref[ref] = max_spend
+
+    for ev in audit:
+        event_type = ev.get("event_type")
+        if event_type not in {"empic_escrow_debited", "empic_stream_opened"}:
+            continue
+        ref = _empic_ref(ev)
+        max_spend = max_spend_by_ref.get(ref)
+        if not ref or max_spend is None:
+            continue
+        amount = _safe_amount(ev.get("max_total") or ev.get("amount"))
+        if amount > max_spend:
+            violations.append(f"{ref}: funded {amount} exceeds declared max_spend {max_spend}")
+
+    if violations:
+        return [ValidationResult("empic_max_spend_enforced", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_max_spend_enforced",
+            True,
+            f"checked {len(max_spend_by_ref)} consumer policies",
+        )
+    ]
+
+
+def validate_empic_all_escrows_terminal(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every funded escrow must finish with complete release/refund accounting.
+
+    Example::
+
+        result = validate_empic_all_escrows_terminal(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    debited = _empic_amounts_by_ref(audit, "empic_escrow_debited")
+    released = _empic_amounts_by_ref(audit, "empic_escrow_released")
+    refunded = _empic_amounts_by_ref(audit, "empic_escrow_refunded")
+    stream_refs = {
+        _empic_ref(ev)
+        for ev in audit
+        if ev.get("event_type") == "empic_stream_opened" and _empic_ref(ev)
+    }
+    closed_refs = {
+        _empic_ref(ev)
+        for ev in audit
+        if ev.get("event_type") == "empic_stream_closed" and _empic_ref(ev)
+    }
+    violations: list[str] = []
+
+    for ref, debit in sorted(debited.items()):
+        release = released.get(ref, 0)
+        refund = refunded.get(ref, 0)
+        if release + refund != debit:
+            violations.append(
+                f"{ref}: not terminal debited={debit} released={release} refunded={refund}"
+            )
+        if ref in stream_refs and refund > 0 and ref not in closed_refs:
+            violations.append(f"{ref}: pubsub refund without stream close")
+        if ref not in stream_refs and release == 0 and refund == 0:
+            violations.append(f"{ref}: pull escrow has no release or refund")
+
+    if violations:
+        return [ValidationResult("empic_all_escrows_terminal", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_all_escrows_terminal",
+            True,
+            f"verified {len(debited)} funded escrows",
+        )
+    ]
+
+
+def validate_empic_no_duplicate_settlement(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Payment refs and delivery evidence must not be replayed for settlement.
+
+    Example::
+
+        result = validate_empic_no_duplicate_settlement(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    debits: dict[str, int] = defaultdict(int)
+    releases: dict[tuple[str, str], int] = defaultdict(int)
+    refunds: dict[str, int] = defaultdict(int)
+    evaluations: dict[tuple[str, str], int] = defaultdict(int)
+    violations: list[str] = []
+
+    for ev in audit:
+        ref = _empic_ref(ev)
+        event_type = ev.get("event_type")
+        if event_type == "empic_escrow_debited":
+            if not ref:
+                violations.append("escrow debit missing payment_ref")
+            else:
+                debits[ref] += 1
+        elif event_type == "empic_escrow_released":
+            delivery_id = _empic_delivery_id(ev)
+            if ref and delivery_id:
+                releases[(ref, delivery_id)] += 1
+        elif event_type == "empic_escrow_refunded" and ref:
+            refunds[ref] += 1
+        elif event_type == "empic_delivery_evaluated":
+            delivery_id = _empic_delivery_id(ev)
+            if ref and delivery_id:
+                evaluations[(ref, delivery_id)] += 1
+
+    violations.extend(
+        f"{ref}: duplicate escrow debit" for ref, count in debits.items() if count > 1
+    )
+    violations.extend(
+        f"{ref}/{delivery_id}: duplicate release"
+        for (ref, delivery_id), count in releases.items()
+        if count > 1
+    )
+    violations.extend(f"{ref}: duplicate refund" for ref, count in refunds.items() if count > 1)
+    violations.extend(
+        f"{ref}/{delivery_id}: duplicate delivery evaluation"
+        for (ref, delivery_id), count in evaluations.items()
+        if count > 1
+    )
+
+    if violations:
+        return [ValidationResult("empic_no_duplicate_settlement", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_no_duplicate_settlement",
+            True,
+            f"checked {len(debits)} payment refs and {len(evaluations)} delivery evaluations",
+        )
+    ]
+
+
+def validate_empic_provider_service_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Payments and releases must bind to the provider registered for the service.
+
+    Example::
+
+        result = validate_empic_provider_service_binding(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    service_provider: dict[str, str] = {}
+    payment_binding: dict[str, tuple[str, str]] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_service_registered":
+            continue
+        service_id = _safe_text(ev.get("service_id"))
+        provider = _safe_text(ev.get("provider"))
+        if service_id and provider:
+            service_provider[service_id] = provider
+
+    for ev in audit:
+        if ev.get("event_type") not in {"empic_escrow_debited", "empic_stream_opened"}:
+            continue
+        ref = _empic_ref(ev)
+        service_id = _safe_text(ev.get("service_id"))
+        provider = _safe_text(ev.get("provider"))
+        if not ref or not service_id or not provider:
+            violations.append(f"{ref or '<missing>'}: debit missing service/provider binding")
+            continue
+        registered = service_provider.get(service_id)
+        if registered is None:
+            violations.append(f"{ref}: service {service_id} was not registered")
+        elif registered != provider:
+            violations.append(
+                f"{ref}: debit provider {provider} does not match registered {registered}"
+            )
+        old = payment_binding.get(ref)
+        if old is not None and old != (service_id, provider):
+            violations.append(
+                f"{ref}: inconsistent payment binding {old} vs {(service_id, provider)}"
+            )
+        payment_binding[ref] = (service_id, provider)
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = _empic_ref(ev)
+        service_id = _safe_text(ev.get("service_id"))
+        provider = _safe_text(ev.get("provider"))
+        expected = payment_binding.get(ref)
+        if expected is None:
+            violations.append(f"{ref or '<missing>'}: release without payment binding")
+            continue
+        if (service_id, provider) != expected:
+            violations.append(
+                f"{ref}: release binding {(service_id, provider)} does not match {expected}"
+            )
+
+    if violations:
+        return [ValidationResult("empic_provider_service_binding", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_provider_service_binding",
+            True,
+            f"verified {len(payment_binding)} payment bindings",
+        )
+    ]
+
+
+def validate_empic_payment_participant_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Payment refs must not change consumer, provider, service, or mode.
+
+    Example::
+
+        result = validate_empic_payment_participant_binding(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    tracked_types = {
+        "empic_acceptance_policy",
+        "empic_escrow_debited",
+        "empic_stream_opened",
+        "empic_delivery_evaluated",
+        "empic_escrow_released",
+        "empic_escrow_refunded",
+        "empic_stream_closed",
+    }
+    context_by_ref: dict[str, dict[str, str]] = defaultdict(dict)
+    checked_refs: set[str] = set()
+    violations: list[str] = []
+
+    for ev in audit:
+        event_type = str(ev.get("event_type") or "")
+        if event_type not in tracked_types:
+            continue
+        ref = _empic_ref(ev)
+        if not ref:
+            violations.append(f"{event_type}: missing payment_ref")
+            continue
+        checked_refs.add(ref)
+
+        payer = _safe_text(ev.get("payer"))
+        consumer_id = _safe_text(ev.get("consumer_id"))
+        if payer and consumer_id and payer != consumer_id:
+            violations.append(f"{ref}: payer {payer} does not match consumer_id {consumer_id}")
+        if payer and not consumer_id:
+            consumer_id = payer
+        if consumer_id and not payer:
+            payer = consumer_id
+
+        observed = {
+            "service_id": _safe_text(ev.get("service_id")),
+            "payer": payer,
+            "consumer_id": consumer_id,
+            "provider": _safe_text(ev.get("provider")),
+            "mode": _safe_text(ev.get("mode")),
+        }
+        if event_type in {
+            "empic_acceptance_policy",
+            "empic_escrow_debited",
+            "empic_stream_opened",
+            "empic_escrow_released",
+            "empic_escrow_refunded",
+            "empic_stream_closed",
+        }:
+            missing = [field for field, value in observed.items() if not value]
+            if missing:
+                violations.append(f"{ref}: {event_type} missing {missing}")
+
+        context = context_by_ref[ref]
+        for field, value in observed.items():
+            if not value:
+                continue
+            existing = context.get(field)
+            if existing is not None and existing != value:
+                violations.append(f"{ref}: {field} changed from {existing} to {value}")
+            else:
+                context[field] = value
+
+    if violations:
+        return [
+            ValidationResult(
+                "empic_payment_participant_binding",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_payment_participant_binding",
+            True,
+            f"verified {len(checked_refs)} payment participant bindings",
+        )
+    ]
+
+
+_EMPIC_FORBIDDEN_SECRET_KEYS = {
+    "api_key",
+    "api_key_secret",
+    "bearer_token",
+    "coinbase_secret",
+    "password",
+    "private_key",
+    "secret",
+    "secret_key",
+    "service_api_key",
+    "stripe_secret_key",
+    "wallet_auth_token",
+    "wallet_secret",
+}
+
+_PRIVATE_KEY_SENTINEL = "-----begin " + "private key-----"
+_PAYMENT_SECRET_PREFIXES = ("sk_" + "live_", "sk_" + "test_")
+
+
+def validate_empic_no_secret_material(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """EMPIC traces must contain only replay-safe public metadata.
+
+    Example::
+
+        result = validate_empic_no_secret_material(events)[0]
+    """
+    violations: list[str] = []
+    checked = 0
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(_message_body(ev))
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            msg_type = str(body.get("type") or "")
+            if not msg_type.startswith("empic_"):
+                continue
+            checked += 1
+            violations.extend(_empic_secret_violations(body, path=msg_type))
+
+    if violations:
+        return [
+            ValidationResult(
+                "empic_no_secret_material",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_no_secret_material",
+            True,
+            f"checked {checked} EMPIC trace messages",
+        )
+    ]
+
+
+def validate_empic_no_drain_after_close(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Pubsub streams must not release funds after close.
+
+    Example::
+
+        result = validate_empic_no_drain_after_close(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    close_tick: dict[str, int] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") == "empic_stream_closed":
+            ref = str(ev.get("payment_ref", ""))
+            if ref:
+                close_tick[ref] = _event_tick(ev)
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = str(ev.get("payment_ref", ""))
+        closed_at = close_tick.get(ref)
+        if closed_at is not None and _event_tick(ev) > closed_at:
+            violations.append(f"{ref} released at {_event_tick(ev)} after close at {closed_at}")
+
+    if violations:
+        return [ValidationResult("empic_no_drain_after_close", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_no_drain_after_close",
+            True,
+            f"verified {len(close_tick)} closed pubsub streams",
+        )
+    ]
+
+
+def validate_empic_no_overbill_on_partition(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Pubsub streams must not release funds after a partitioned delivery edge.
+
+    Example::
+
+        result = validate_empic_no_overbill_on_partition(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    stream_parties: dict[str, tuple[str, str]] = {}
+    partition_start: dict[tuple[str, str], int] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") == "empic_stream_opened":
+            ref = str(ev.get("payment_ref", ""))
+            payer = str(ev.get("payer", ""))
+            provider = str(ev.get("provider", ""))
+            if ref and payer and provider:
+                stream_parties[ref] = (payer, provider)
+
+    for ev in events:
+        if ev.get("kind") != "dropped":
+            continue
+        sender = str(ev.get("from", ""))
+        receiver = str(ev.get("agent", ""))
+        if not sender or not receiver:
+            continue
+        tick = _event_tick(ev)
+        for edge in ((sender, receiver), (receiver, sender)):
+            old = partition_start.get(edge)
+            if old is None or tick < old:
+                partition_start[edge] = tick
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = str(ev.get("payment_ref", ""))
+        parties = stream_parties.get(ref)
+        if parties is None:
+            continue
+        payer, provider = parties
+        drop_tick = partition_start.get((payer, provider))
+        if drop_tick is not None and _event_tick(ev) >= drop_tick:
+            violations.append(
+                f"{ref} released at {_event_tick(ev)} after {payer}<->{provider} "
+                f"partition at {drop_tick}"
+            )
+
+    if violations:
+        return [ValidationResult("empic_no_overbill_on_partition", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_no_overbill_on_partition",
+            True,
+            f"verified {len(stream_parties)} pubsub streams",
+        )
+    ]
+
+
+def _empic_policy_accepts(
+    delivery: dict[str, Any],
+    policy_event: dict[str, Any],
+    current_tick: int,
+) -> tuple[bool, str]:
+    data_raw = delivery.get("data")
+    if not isinstance(data_raw, dict):
+        return False, "missing data object"
+    data = cast("dict[str, Any]", data_raw)
+
+    policy_raw = policy_event.get("policy")
+    policy = cast("dict[str, Any]", policy_raw) if isinstance(policy_raw, dict) else {}
+
+    if _policy_flag(policy, "bind_service_id") and _safe_text(
+        delivery.get("service_id")
+    ) != _safe_text(policy_event.get("service_id")):
+        return False, "service_id mismatch"
+    if _policy_flag(policy, "bind_provider_id") and _safe_text(
+        delivery.get("provider_id")
+    ) != _safe_text(policy_event.get("provider")):
+        return False, "provider_id mismatch"
+    if _policy_flag(policy, "bind_consumer_id"):
+        expected_consumer = _safe_text(policy_event.get("consumer_id")) or _safe_text(
+            policy_event.get("payer")
+        )
+        if _safe_text(delivery.get("consumer_id")) != expected_consumer:
+            return False, "consumer_id mismatch"
+    if _policy_flag(policy, "bind_request_params"):
+        expected_params = policy_event.get("request_params")
+        if delivery.get("request_params") != expected_params:
+            return False, "request_params mismatch"
+
+    required = policy.get("required_fields", [])
+    if isinstance(required, list):
+        for field in cast("list[object]", required):
+            if isinstance(field, str) and field not in data:
+                return False, f"missing field {field}"
+
+    ranges = policy.get("numeric_ranges", {})
+    if isinstance(ranges, dict):
+        for field_raw, bounds_raw in cast("dict[object, object]", ranges).items():
+            if not isinstance(field_raw, str) or not isinstance(bounds_raw, dict):
+                continue
+            bounds = cast("dict[str, object]", bounds_raw)
+            value = _safe_float(data.get(field_raw))
+            if value is None:
+                return False, f"{field_raw} is not numeric"
+            min_value = _safe_float(bounds.get("min"))
+            max_value = _safe_float(bounds.get("max"))
+            if min_value is not None and value < min_value:
+                return False, f"{field_raw} below minimum"
+            if max_value is not None and value > max_value:
+                return False, f"{field_raw} above maximum"
+
+    max_age = _safe_amount(policy.get("max_age_ticks"))
+    data_tick = _safe_amount(data.get("tick"))
+    if data_tick > current_tick:
+        return False, "delivery tick is in the future"
+    if max_age >= 0 and current_tick - data_tick > max_age:
+        return False, "delivery stale"
+
+    return True, "accepted"
+
+
+def _policy_flag(policy: dict[str, Any], key: str) -> bool:
+    value = policy.get(key, True)
+    return value if isinstance(value, bool) else True
+
+
+def _empic_secret_violations(value: object, *, path: str) -> list[str]:
+    violations: list[str] = []
+    if isinstance(value, dict):
+        for key_raw, child in cast("dict[object, object]", value).items():
+            key = str(key_raw)
+            normalized = key.lower().replace("-", "_")
+            child_path = f"{path}.{key}"
+            if normalized in _EMPIC_FORBIDDEN_SECRET_KEYS or normalized.endswith("_secret"):
+                violations.append(f"{child_path}: forbidden secret field")
+            violations.extend(_empic_secret_violations(child, path=child_path))
+    elif isinstance(value, list):
+        for index, item in enumerate(cast("list[object]", value)):
+            violations.extend(_empic_secret_violations(item, path=f"{path}[{index}]"))
+    elif isinstance(value, str):
+        lowered = value.lower()
+        if _PRIVATE_KEY_SENTINEL in lowered:
+            violations.append(f"{path}: private key material")
+        elif lowered.startswith("bearer "):
+            violations.append(f"{path}: bearer token material")
+        elif value.startswith(_PAYMENT_SECRET_PREFIXES):
+            violations.append(f"{path}: payment provider secret key material")
+    return violations
+
+
+def _safe_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _safe_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return float(value)
+    return None
+
+
+def _optional_amount(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return int(value)
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return int(float(value))
+    return None
+
+
+def _safe_amount(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return int(value)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Comms schema-versioning validators (adversarial)
 # ---------------------------------------------------------------------------
 
@@ -1670,6 +2642,130 @@ def validate_comms_no_silent_drop(
 
 
 # ---------------------------------------------------------------------------
+# Comms downgrade-attack validator (adversarial)
+# ---------------------------------------------------------------------------
+# Ground truth for "was this envelope tampered?" is recomputed from the bytes a
+# receiver actually saw, independent of the decoder under test: an envelope that
+# carries an ``auth_tag`` is authentic iff that tag still covers its canonical
+# content. A comms layer passes iff it *rejects* every envelope whose tag no
+# longer verifies (rollback / field-strip) while still *accepting* the authentic
+# ones. ``versioned`` and ``nest_native`` have no tag concept, so they accept the
+# tampered copies and fail; ``authenticated`` rejects them and passes.
+
+
+def _collect_downgrade_wire(
+    events: list[dict[str, Any]],
+) -> dict[str, bool]:
+    """Map each delivered tagged envelope id to whether its ``auth_tag`` verifies.
+
+    Only envelopes that actually carry a tag are judged; untagged legacy traffic
+    is out of scope for this check. ``True`` means authentic (tag matches the
+    recomputed value), ``False`` means tampered.
+
+    Example::
+
+        authentic_by_id = _collect_downgrade_wire(events)
+    """
+    from nest_plugins_reference.comms.authenticated import (
+        AUTH_TAG_FIELD,
+        expected_auth_tag,
+    )
+
+    authentic: dict[str, bool] = {}
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        env = _parse_comms_envelope(str(ev.get("msg", "")))
+        if env is None or AUTH_TAG_FIELD not in env:
+            continue
+        mid = str(env.get("id"))
+        carried = str(env.get(AUTH_TAG_FIELD))
+        authentic[mid] = carried == expected_auth_tag(env)
+    return authentic
+
+
+def validate_comms_downgrade_resistance(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must reject envelopes whose authentication tag no longer covers them.
+
+    Catches the *silent-downgrade* attack: an on-path adversary rewrites an
+    authentic envelope (rolls ``schema_version`` back, or strips a field) and
+    leaves the stale tag in place. ``authenticated`` recomputes the tag and
+    refuses the forgery; ``versioned``/``nest_native`` have no tag and accept it.
+
+    Example::
+
+        results = validate_comms_downgrade_resistance(events)
+    """
+    authentic = _collect_downgrade_wire(events)
+    acks = _collect_comms_acks(events)
+    if not authentic:
+        return [
+            ValidationResult("comms_downgrade_resistance", False, "no tagged envelopes in trace")
+        ]
+    violations: list[str] = []
+    tampered_checked = 0
+    for mid, is_authentic in authentic.items():
+        if is_authentic:
+            continue
+        tampered_checked += 1
+        status = acks.get(mid)
+        outcome = status[0] if status is not None else "no ack"
+        if not outcome.startswith("rejected"):
+            violations.append(f"{mid}: tampered envelope not rejected (got {outcome})")
+    if violations:
+        return [ValidationResult("comms_downgrade_resistance", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_downgrade_resistance",
+            True,
+            f"{tampered_checked} tampered envelope(s) correctly rejected",
+        )
+    ]
+
+
+def validate_comms_authentic_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must still accept *authentic* envelopes (no false positives).
+
+    The liveness counterpart to
+    :func:`validate_comms_downgrade_resistance`: a plugin must not "pass" the
+    security check by rejecting everything. Every delivered envelope whose tag
+    verifies has to be accepted, so tamper-evidence does not break the honest
+    rolling-upgrade traffic it rides alongside.
+
+    Example::
+
+        results = validate_comms_authentic_delivery(events)
+    """
+    authentic = _collect_downgrade_wire(events)
+    acks = _collect_comms_acks(events)
+    if not authentic:
+        return [ValidationResult("comms_authentic_delivery", False, "no tagged envelopes in trace")]
+    violations: list[str] = []
+    honest_checked = 0
+    for mid, is_authentic in authentic.items():
+        if not is_authentic:
+            continue
+        honest_checked += 1
+        status = acks.get(mid)
+        outcome = status[0] if status is not None else "no ack"
+        if outcome != "accepted":
+            violations.append(f"{mid}: authentic envelope not accepted (got {outcome})")
+    if violations:
+        return [ValidationResult("comms_authentic_delivery", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_authentic_delivery",
+            True,
+            f"{honest_checked} authentic envelope(s) correctly accepted",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Receipt-reputation (collusion-ring) validators
 # ---------------------------------------------------------------------------
 
@@ -1709,6 +2805,252 @@ def _collect_scores(events: list[dict[str, Any]]) -> dict[str, tuple[float, floa
             continue
         scores[agent] = (score, confidence, role)
     return scores
+
+
+# ---------------------------------------------------------------------------
+# Escrow validators
+#
+# The escrow scenario broadcasts structured ``escrow:<kind>:<fields>`` events,
+# one per state transition, parsed by the validators below. The four checks
+# together catch the attacks the default ``prepaid_credits`` plugin would not
+# block: payouts without delivery, releases by non-payers, arbitration outside
+# the bps range, and broken state-machine transitions.
+# ---------------------------------------------------------------------------
+
+
+def _parse_escrow_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Parse trace broadcasts of the form ``escrow:<kind>:k=v:k=v...``.
+
+    Returns one dict per matching event with ``kind`` and parsed ``key=value``
+    fields. Non-matching broadcasts are skipped silently.
+    """
+    out: list[dict[str, str]] = []
+    for ev in events:
+        # Only inspect broadcast emissions (sender-recorded). Filter out the
+        # per-recipient "deliver" copies of the same payload so a 9-agent
+        # mesh does not multiply each escrow event by 8.
+        if ev.get("kind") != "broadcast":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("escrow:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 2:
+            continue
+        parsed: dict[str, str] = {"kind": parts[1], "agent": str(ev.get("agent", ""))}
+        for piece in parts[2:]:
+            if "=" in piece:
+                k, _, v = piece.partition("=")
+                parsed[k] = v
+        out.append(parsed)
+    return out
+
+
+def validate_escrow_state_machine(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every per-escrow transition sequence is a legal state-machine path.
+
+    Legal sequences (per escrow ``ref``):
+
+    * ``opened -> delivered -> released``
+    * ``opened -> delivered -> disputed -> arbitrated``
+    * ``opened -> refunded``
+
+    Any transition outside this graph (e.g. ``opened -> released`` with no
+    ``delivered``, or two ``released`` for the same ref) is a failure.
+    """
+    legal: dict[str, set[str]] = {
+        "_initial": {"opened"},
+        "opened": {"delivered", "refunded"},
+        "delivered": {"released", "disputed"},
+        "disputed": {"arbitrated"},
+        "released": set(),
+        "arbitrated": set(),
+        "refunded": set(),
+    }
+    state: dict[str, str] = {}
+    violations: list[str] = []
+    for ev in _parse_escrow_events(events):
+        ref = ev.get("ref", "")
+        kind = ev["kind"]
+        prev = state.get(ref, "_initial")
+        if kind not in legal.get(prev, set()):
+            violations.append(f"ref={ref!r}: illegal transition {prev!r} -> {kind!r}")
+            continue
+        state[ref] = kind
+    if violations:
+        return [ValidationResult("escrow_state_machine", False, "; ".join(violations))]
+    if not state:
+        return [
+            ValidationResult(
+                "escrow_state_machine",
+                False,
+                "no escrow lifecycle events observed in trace -- plugin lacks escrow protocol",
+            )
+        ]
+    return [
+        ValidationResult(
+            "escrow_state_machine",
+            True,
+            f"{len(state)} escrows transitioned only along legal edges",
+        )
+    ]
+
+
+def validate_escrow_role_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every state-changing event is broadcast by the role authorized to make it.
+
+    * ``opened`` MUST be broadcast by the named ``payer``.
+    * ``delivered`` MUST be broadcast by the named ``payee``.
+    * ``released``, ``disputed``, ``refunded`` MUST be broadcast by the
+      named ``payer`` (from the originating ``opened``).
+    * ``arbitrated`` MUST be broadcast by the named ``arbiter``.
+
+    Detects forged-actor attacks: a non-payee posting a fake delivery, a
+    third party trying to release someone else's escrow, etc.
+    """
+    parsed = _parse_escrow_events(events)
+    parties: dict[str, dict[str, str]] = {}
+    violations: list[str] = []
+    for ev in parsed:
+        ref = ev.get("ref", "")
+        kind = ev["kind"]
+        actor = ev.get("agent", "")
+        if kind == "opened":
+            parties[ref] = {
+                "payer": ev.get("payer", ""),
+                "payee": ev.get("payee", ""),
+                "arbiter": ev.get("arbiter", ""),
+            }
+            if actor != ev.get("payer", ""):
+                violations.append(
+                    f"ref={ref!r}: opened by {actor!r} but payer is {ev.get('payer', '')!r}"
+                )
+            continue
+        named = parties.get(ref)
+        if named is None:
+            violations.append(f"ref={ref!r}: {kind!r} without prior opened")
+            continue
+        if kind == "delivered" and actor != named["payee"]:
+            violations.append(
+                f"ref={ref!r}: delivered by {actor!r} but payee is {named['payee']!r}"
+            )
+        elif kind in ("released", "disputed", "refunded") and actor != named["payer"]:
+            violations.append(f"ref={ref!r}: {kind!r} by {actor!r} but payer is {named['payer']!r}")
+        elif kind == "arbitrated" and actor != named["arbiter"]:
+            violations.append(
+                f"ref={ref!r}: arbitrated by {actor!r} but arbiter is {named['arbiter']!r}"
+            )
+    if violations:
+        return [ValidationResult("escrow_role_binding", False, "; ".join(violations))]
+    if not parties:
+        return [
+            ValidationResult(
+                "escrow_role_binding",
+                False,
+                "no escrow opened events observed -- plugin lacks escrow protocol",
+            )
+        ]
+    return [
+        ValidationResult(
+            "escrow_role_binding",
+            True,
+            f"{len(parsed)} escrow events all signed by the correct role-holder",
+        )
+    ]
+
+
+def validate_escrow_bps_in_range(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every ``arbitrated`` event carries ``payee_bps`` strictly in ``[0, 10000]``.
+
+    Catches an arbiter (or a forged arbitrate broadcast) that attempts to
+    settle outside the allowed split window -- either negative (paying the
+    payee a negative share) or over 10000 (paying more than was escrowed).
+    """
+    parsed = _parse_escrow_events(events)
+    violations: list[str] = []
+    checked = 0
+    for ev in parsed:
+        if ev["kind"] != "arbitrated":
+            continue
+        checked += 1
+        raw = ev.get("payee_bps", "")
+        try:
+            bps = int(raw)
+        except ValueError:
+            violations.append(f"ref={ev.get('ref', '')!r}: non-integer payee_bps={raw!r}")
+            continue
+        if not 0 <= bps <= 10_000:
+            violations.append(f"ref={ev.get('ref', '')!r}: payee_bps={bps} outside [0, 10000]")
+    if violations:
+        return [ValidationResult("escrow_bps_in_range", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "escrow_bps_in_range",
+            True,
+            f"{checked} arbitration verdicts all within [0, 10000]",
+        )
+    ]
+
+
+def validate_escrow_no_payout_without_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No ``released`` or ``arbitrated`` may occur for a ref that wasn't delivered.
+
+    The escrow protocol's whole point is that the payee cannot be paid
+    until they post a delivery proof. A plugin that ships funds without
+    a preceding ``delivered`` event for the same ref bypasses the
+    contract.
+
+    Also catches the most common ``prepaid_credits`` failure mode in
+    this scenario: the plugin has no escrow concept, so the buyer falls
+    back to ``pay()``, which credits the payee with no delivery proof
+    in the trace.
+    """
+    parsed = _parse_escrow_events(events)
+    delivered: set[str] = set()
+    violations: list[str] = []
+    saw_payout = False
+    for ev in parsed:
+        ref = ev.get("ref", "")
+        kind = ev["kind"]
+        if kind == "delivered":
+            delivered.add(ref)
+        elif kind in ("released", "arbitrated"):
+            saw_payout = True
+            if ref not in delivered:
+                violations.append(f"ref={ref!r}: {kind!r} settled without prior delivered event")
+    if violations:
+        return [
+            ValidationResult(
+                "escrow_no_payout_without_delivery",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    if not saw_payout:
+        return [
+            ValidationResult(
+                "escrow_no_payout_without_delivery",
+                False,
+                "no escrow payouts observed -- plugin lacks escrow protocol",
+            )
+        ]
+    return [
+        ValidationResult(
+            "escrow_no_payout_without_delivery",
+            True,
+            "every payout was preceded by a matching delivered event",
+        )
+    ]
 
 
 def validate_receipt_reputation_ring_severed(
@@ -1837,6 +3179,1439 @@ def validate_receipt_reputation_honest_confidence(
 
 
 # ---------------------------------------------------------------------------
+# Rogue-trusted-agent (pre-action permit gate) validators
+#
+# The rogue_trusted_agent scenario broadcasts ``:``-delimited lines (see
+# nest_core.scenarios_builtin.rogue_trusted_agent). A veteran with a strong
+# in-policy record makes one out-of-policy attempt; the trace self-declares it
+# with a ``rogue_attempt:`` line so these validators need no policy table. Under
+# a plugin with a pre-action gate the attempt is refused (``permit:...:denied``
+# + ``blocked:``) and never runs; under a plugin with no gate it ``exec:``s.
+# ---------------------------------------------------------------------------
+
+# The veteran must have executed at least this many in-policy actions before the
+# rogue attempt, so "a high-reputation agent is still refused" is grounded.
+_ROGUE_MIN_REPUTATION = 3
+
+
+def _rogue_declaration(events: list[dict[str, Any]]) -> tuple[str, str, str] | None:
+    """Return the first declared rogue ``(agent, verb, resource)``, or ``None``.
+
+    Example::
+
+        pair = _rogue_declaration(events)
+    """
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("rogue_attempt:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 4:
+            return parts[1], parts[2], parts[3]
+    return None
+
+
+def _rogue_triples(events: list[dict[str, Any]], prefix: str) -> list[tuple[str, str, str]]:
+    """Collect ``(agent, verb, resource)`` triples from lines with ``prefix``.
+
+    Preserves trace order. Used for ``exec:`` and ``blocked:`` lines and, with a
+    trailing field trimmed, for the ``permit:`` lines.
+
+    Example::
+
+        execs = _rogue_triples(events, "exec:")
+    """
+    out: list[tuple[str, str, str]] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith(prefix):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 4:
+            out.append((parts[1], parts[2], parts[3]))
+    return out
+
+
+def _rogue_permits(events: list[dict[str, Any]]) -> list[tuple[str, str, str, str]]:
+    """Collect ``(agent, verb, resource, outcome)`` from ``permit:`` lines.
+
+    ``permit_env:`` lines are excluded — their prefix is not ``permit:``.
+
+    Example::
+
+        decisions = _rogue_permits(events)
+    """
+    out: list[tuple[str, str, str, str]] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("permit:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 5:
+            out.append((parts[1], parts[2], parts[3], parts[4]))
+    return out
+
+
+def validate_rogue_trusted_agent_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The declared out-of-policy attempt is refused and never executes.
+
+    Reads the trace the scenario emits — never a policy table — and holds iff:
+
+    * a ``rogue_attempt:`` line declares the veteran's out-of-policy pair,
+    * **no** ``exec:`` line runs that pair (it did not execute), and
+    * a ``permit:...:denied`` line refused that exact pair.
+
+    ``score_average`` FAILS this: with no pre-action gate the veteran acts
+    unconditionally, so an ``exec:`` line for the rogue pair is present.
+    ``aae_permit_gate`` PASSES: it returns a signed denial and the action is
+    blocked. A trace that never declared a rogue attempt also fails — without
+    crashing on either layer.
+
+    Example::
+
+        results = validate_rogue_trusted_agent_blocked(events)
+    """
+    rogue = _rogue_declaration(events)
+    if rogue is None:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                "no rogue_attempt declared in trace",
+            )
+        ]
+    agent, verb, resource = rogue
+    executed = rogue in _rogue_triples(events, "exec:")
+    denied = any(
+        (a, v, r) == rogue and outcome == "denied" for a, v, r, outcome in _rogue_permits(events)
+    )
+
+    if executed:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                f"rogue action executed: {agent} ran {verb} on {resource} "
+                "(no pre-action gate refused it)",
+            )
+        ]
+    if not denied:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                f"rogue action neither executed nor refused: {agent} {verb} {resource} "
+                "has no signed denial",
+            )
+        ]
+    return [
+        ValidationResult(
+            "rogue_trusted_agent_blocked",
+            True,
+            f"rogue action refused and blocked: {agent} denied {verb} on {resource}",
+        )
+    ]
+
+
+def validate_rogue_trusted_agent_reputation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Reputation was earned first, and no in-policy action was refused.
+
+    Two defense-in-depth invariants that ground the demonstration:
+
+    * the veteran executed at least ``_ROGUE_MIN_REPUTATION`` in-policy actions
+      *before* its rogue attempt — so "a high-reputation agent is still refused"
+      is real, not asserted, and
+    * every refusal in the trace names the declared rogue pair — a permit gate
+      that spuriously denied an in-policy action would be caught here.
+
+    Holds under both layers (it does not depend on the rogue being blocked), so
+    it corroborates the primary check rather than duplicating it. Never crashes.
+
+    Example::
+
+        results = validate_rogue_trusted_agent_reputation(events)
+    """
+    rogue = _rogue_declaration(events)
+    if rogue is None:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_reputation",
+                False,
+                "no rogue_attempt declared in trace",
+            )
+        ]
+    veteran, _verb, _resource = rogue
+
+    # In-policy executions by the veteran, in trace order, before the rogue pair.
+    prior = 0
+    for a, v, r in _rogue_triples(events, "exec:"):
+        if (a, v, r) == rogue:
+            break
+        if a == veteran:
+            prior += 1
+
+    problems: list[str] = []
+    if prior < _ROGUE_MIN_REPUTATION:
+        problems.append(
+            f"veteran executed only {prior} in-policy action(s) before the rogue attempt "
+            f"(need >= {_ROGUE_MIN_REPUTATION} to prove reputation is irrelevant)"
+        )
+    spurious = [
+        (a, v, r)
+        for a, v, r, outcome in _rogue_permits(events)
+        if outcome == "denied" and (a, v, r) != rogue
+    ]
+    if spurious:
+        problems.append(
+            "in-policy actions spuriously denied: "
+            + ", ".join(f"{a}:{v}:{r}" for a, v, r in sorted(set(spurious)))
+        )
+
+    if problems:
+        return [ValidationResult("rogue_trusted_agent_reputation", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "rogue_trusted_agent_reputation",
+            True,
+            f"veteran earned {prior} in-policy actions; every refusal was the declared rogue pair",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Multi-attribute negotiation (Pareto) validators
+# ---------------------------------------------------------------------------
+
+# Float-noise tolerance for the dominance relation. ">=" is read as ">= -eps"
+# and ">" as "> +eps", so reconstruction rounding (utilities are rebuilt from
+# the 6-dp weights in the trace) never fabricates or hides a violation.
+_PARETO_EPS = 1e-9
+
+
+class _AgentUtility:
+    """One agent's additive multi-attribute utility, reconstructed from the trace.
+
+    Reproduces the plugin's scoring *verbatim* (Keeney & Raiffa additive MAUT):
+    inputs are clamped into the feasible ranges, then each issue's normalized
+    value function is weighted and summed. The directional convention matches
+    the plugin exactly (the buyer values low price / short deadline, the seller
+    high price / long deadline) so a bundle scores identically here and inside
+    ``ParetoNegotiation``.
+
+    Example::
+
+        u = _AgentUtility("buyer", 0.9, 0.1, 50, 150, 1, 30, 0.0)
+        u.utility(50, 1)  # 1.0
+    """
+
+    def __init__(
+        self,
+        side: str,
+        w_price: float,
+        w_deadline: float,
+        plo: int,
+        phi: int,
+        dlo: int,
+        dhi: int,
+        reservation: float,
+    ) -> None:
+        self.side = side
+        self.w_price = w_price
+        self.w_deadline = w_deadline
+        self.plo = plo
+        self.phi = phi
+        self.dlo = dlo
+        self.dhi = dhi
+        self.reservation = reservation
+
+    def utility(self, price: int, deadline: int) -> float:
+        """Return this agent's utility for a (price, deadline) bundle."""
+        p = max(self.plo, min(self.phi, price))
+        d = max(self.dlo, min(self.dhi, deadline))
+        if self.side == "buyer":
+            f_price = (self.phi - p) / (self.phi - self.plo)
+            f_deadline = (self.dhi - d) / (self.dhi - self.dlo)
+        else:
+            f_price = (p - self.plo) / (self.phi - self.plo)
+            f_deadline = (d - self.dlo) / (self.dhi - self.dlo)
+        return self.w_price * f_price + self.w_deadline * f_deadline
+
+
+class _MarketSession:
+    """Everything a single negotiation session contributed to the trace.
+
+    ``bundles`` is the set of every (price, deadline) exchanged in the session,
+    the trace-observed evidence the dominance frontier is computed from.
+    ``buyer``/``seller`` are resolved from the ``side`` tag on the offers.
+
+    Example::
+
+        sess = _MarketSession()
+        sess.bundles.add((55, 30))
+    """
+
+    def __init__(self) -> None:
+        self.bundles: set[tuple[int, int]] = set()
+        self.buyer: str | None = None
+        self.seller: str | None = None
+        self.agreement: tuple[int, int, str] | None = None
+        self.breakdown: bool = False
+
+
+def _collect_agent_utilities(events: list[dict[str, Any]]) -> dict[str, _AgentUtility]:
+    """Parse ``mautil:`` frames into per-agent utility reconstructors.
+
+    Frames are ``mautil:<agent>:<side>:<w_price>:<w_deadline>:<plo>:<phi>:<dlo>:
+    <dhi>:<reservation>``. Malformed frames (short split, non-numeric fields,
+    unknown side, or a degenerate range that would divide by zero) are skipped.
+
+    Example::
+
+        utils = _collect_agent_utilities(events)
+    """
+    utils: dict[str, _AgentUtility] = {}
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("mautil:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 10:
+            continue
+        agent, side = parts[1], parts[2]
+        if side not in ("buyer", "seller"):
+            continue
+        try:
+            w_price = float(parts[3])
+            w_deadline = float(parts[4])
+            plo, phi, dlo, dhi = int(parts[5]), int(parts[6]), int(parts[7]), int(parts[8])
+            reservation = float(parts[9])
+        except ValueError:
+            continue
+        if phi <= plo or dhi <= dlo:
+            continue
+        utils[agent] = _AgentUtility(side, w_price, w_deadline, plo, phi, dlo, dhi, reservation)
+    return utils
+
+
+def _collect_market_sessions(events: list[dict[str, Any]]) -> dict[str, _MarketSession]:
+    """Group ``offer:``/``agree:``/``breakdown:`` frames by session id.
+
+    Example::
+
+        sessions = _collect_market_sessions(events)
+    """
+    sessions: dict[str, _MarketSession] = defaultdict(_MarketSession)
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        parts = msg.split(":")
+        if msg.startswith("offer:") and len(parts) >= 7:
+            sid, agent, side = parts[1], parts[2], parts[3]
+            try:
+                price, deadline = int(parts[5]), int(parts[6])
+            except ValueError:
+                continue
+            sess = sessions[sid]
+            sess.bundles.add((price, deadline))
+            if side == "buyer":
+                sess.buyer = agent
+            elif side == "seller":
+                sess.seller = agent
+        elif msg.startswith("agree:") and len(parts) >= 5:
+            sid, accepting = parts[1], parts[4]
+            try:
+                price, deadline = int(parts[2]), int(parts[3])
+            except ValueError:
+                continue
+            sess = sessions[sid]
+            sess.agreement = (price, deadline, accepting)
+            sess.bundles.add((price, deadline))
+        elif msg.startswith("breakdown:") and len(parts) >= 3:
+            sessions[parts[1]].breakdown = True
+    return dict(sessions)
+
+
+def _pareto_dominates(ub_x: float, us_x: float, ub_y: float, us_y: float) -> bool:
+    """Return whether bundle X Pareto-dominates bundle Y (Zlotkin & Rosenschein Eq.4).
+
+    X dominates Y iff X is no worse for *either* party and strictly better for at
+    least one (Zlotkin & Rosenschein 1996; Royal Holloway negotiation notes,
+    Eq. 4). The ``>=`` comparisons are relaxed by ``_PARETO_EPS`` and the ``>``
+    comparisons tightened by it, so float reconstruction noise cannot manufacture
+    or mask a violation.
+
+    Example::
+
+        assert _pareto_dominates(0.9, 0.9, 0.9, 0.8)
+    """
+    no_worse = ub_x >= ub_y - _PARETO_EPS and us_x >= us_y - _PARETO_EPS
+    strictly_better = ub_x > ub_y + _PARETO_EPS or us_x > us_y + _PARETO_EPS
+    return no_worse and strictly_better
+
+
+def validate_multi_attribute_pareto_optimal(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No concluded agreement is Pareto-dominated by another bundle it exchanged.
+
+    For every session that reached an ``agree:`` outcome, this reconstructs both
+    parties' utilities (from their ``mautil:`` frames) and FAILS if any *other*
+    bundle exchanged in the same session dominates the agreement under
+    :func:`_pareto_dominates`. A ``breakdown:`` session is **not** a failure: a
+    bilateral negotiation can legitimately reach no deal.
+
+    Scope is deliberately *trace-evidence-bounded*: the frontier is computed from
+    the bundles actually observed on the wire, never from the full feasible grid.
+    An agreement this validator passes could in principle still be dominated by a
+    feasible bundle that was never offered, consistent with Nanda Town's rule
+    that validators judge trace evidence, not theorems. The adversarial power is
+    real nonetheless: the reference ``alternating_offers`` plugin never reads
+    ``conditions['deadline_days']``, so it accepts (or holds out for) a
+    price-acceptable bundle while a same-or-better-price, longer-deadline bundle
+    sits in the very same exchange, a bundle that dominates the agreement and
+    trips this check. ``ParetoNegotiation`` passes because its trade-off
+    counteroffers move along the iso-utility curve toward the opponent's revealed
+    preference, settling on a non-dominated logroll.
+
+    Guards against a vacuous pass: if no agreement was scorable, it FAILS with
+    ``"scenario exercised no negotiation"`` (mirrors the receipt-reputation guard).
+
+    Example::
+
+        results = validate_multi_attribute_pareto_optimal(events)
+    """
+    utils = _collect_agent_utilities(events)
+    sessions = _collect_market_sessions(events)
+
+    scored = 0
+    violations: list[str] = []
+    for sid in sorted(sessions):
+        sess = sessions[sid]
+        if sess.agreement is None or sess.buyer is None or sess.seller is None:
+            continue
+        buyer_u = utils.get(sess.buyer)
+        seller_u = utils.get(sess.seller)
+        if buyer_u is None or seller_u is None:
+            continue
+
+        scored += 1
+        a_price, a_deadline, _accepting = sess.agreement
+        ub_star = buyer_u.utility(a_price, a_deadline)
+        us_star = seller_u.utility(a_price, a_deadline)
+
+        for xp, xd in sorted(sess.bundles):
+            if (xp, xd) == (a_price, a_deadline):
+                continue
+            ub_x = buyer_u.utility(xp, xd)
+            us_x = seller_u.utility(xp, xd)
+            if _pareto_dominates(ub_x, us_x, ub_star, us_star):
+                violations.append(
+                    f"session {sid}: agreement ({a_price},{a_deadline}) "
+                    f"u_buyer={ub_star:.6f} u_seller={us_star:.6f} dominated by "
+                    f"({xp},{xd}) u_buyer={ub_x:.6f} u_seller={us_x:.6f}"
+                )
+                break
+
+    if scored == 0:
+        return [
+            ValidationResult(
+                "multi_attribute_pareto_optimal",
+                False,
+                "scenario exercised no negotiation",
+            )
+        ]
+    if violations:
+        return [ValidationResult("multi_attribute_pareto_optimal", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "multi_attribute_pareto_optimal",
+            True,
+            f"{scored} agreement(s) non-dominated by any exchanged bundle",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Provenance supply-chain validators
+# ---------------------------------------------------------------------------
+
+
+def _provenance_field_msg(events: list[dict[str, Any]], prefix: str) -> list[list[str]]:
+    """Collect ``|``-delimited fields from every send carrying ``prefix``.
+
+    The ``provenance_supply_chain`` scenario uses ``|`` (not ``:``) as its
+    field delimiter, since its payloads are ``df://sha256-<hex>`` URLs that
+    already contain a colon.
+
+    Example::
+
+        rows = _provenance_field_msg(events, "chain_ok|")
+    """
+    rows: list[list[str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith(prefix):
+            rows.append(msg.split("|"))
+    return rows
+
+
+def validate_provenance_chain_integrity(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The verifier walks the full parent chain back to the source without a break.
+
+    Example::
+
+        results = validate_provenance_chain_integrity(events)
+    """
+    broken = _provenance_field_msg(events, "chain_broken|")
+    if broken:
+        detail = "; ".join(f"{row[1]} could not resolve parent {row[2]}" for row in broken)
+        return [ValidationResult("provenance_chain_integrity", False, detail)]
+    ok = _provenance_field_msg(events, "chain_ok|")
+    if not ok:
+        return [ValidationResult("provenance_chain_integrity", False, "no chain_ok recorded")]
+    depth = ok[0][2]
+    return [
+        ValidationResult(
+            "provenance_chain_integrity",
+            True,
+            f"chain resolved to depth {depth}",
+        )
+    ]
+
+
+def validate_multi_attribute_individually_rational(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every agreement clears both parties' reservation utility.
+
+    Reconstructs each party's utility for the agreed bundle and FAILS if either
+    falls below its declared reservation (within ``_PARETO_EPS``). This catches a
+    degenerate "agree to anything" plugin that closes a deal one side strictly
+    prefers to walk away from. Like the Pareto check it guards against a vacuous
+    pass: if no agreement was scorable it FAILS with
+    ``"scenario exercised no negotiation"``.
+
+    Example::
+
+        results = validate_multi_attribute_individually_rational(events)
+    """
+    utils = _collect_agent_utilities(events)
+    sessions = _collect_market_sessions(events)
+
+    scored = 0
+    offenders: list[str] = []
+    for sid in sorted(sessions):
+        sess = sessions[sid]
+        if sess.agreement is None or sess.buyer is None or sess.seller is None:
+            continue
+        buyer_u = utils.get(sess.buyer)
+        seller_u = utils.get(sess.seller)
+        if buyer_u is None or seller_u is None:
+            continue
+
+        scored += 1
+        a_price, a_deadline, _accepting = sess.agreement
+        ub = buyer_u.utility(a_price, a_deadline)
+        us = seller_u.utility(a_price, a_deadline)
+        if ub < buyer_u.reservation - _PARETO_EPS:
+            offenders.append(
+                f"session {sid}: buyer u={ub:.6f} < reservation {buyer_u.reservation:.6f}"
+            )
+        if us < seller_u.reservation - _PARETO_EPS:
+            offenders.append(
+                f"session {sid}: seller u={us:.6f} < reservation {seller_u.reservation:.6f}"
+            )
+
+    if scored == 0:
+        return [
+            ValidationResult(
+                "multi_attribute_individually_rational",
+                False,
+                "scenario exercised no negotiation",
+            )
+        ]
+    if offenders:
+        return [
+            ValidationResult("multi_attribute_individually_rational", False, "; ".join(offenders))
+        ]
+    return [
+        ValidationResult(
+            "multi_attribute_individually_rational",
+            True,
+            f"{scored} agreement(s) individually rational for both parties",
+        )
+    ]
+
+
+def validate_provenance_substitution_resistant(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An outsider republishing different content must not land on the source's URL.
+
+    Catches the *substitution* attack: a name-addressed registry
+    (``datafacts_v1``) lets anyone overwrite ``df://<name>`` with new bytes;
+    a content-addressed one (``cid_facts``) cannot alias two different
+    contents onto the same URL.
+
+    Example::
+
+        results = validate_provenance_substitution_resistant(events)
+    """
+    rows = _provenance_field_msg(events, "attack_substitution|")
+    if not rows:
+        return [ValidationResult("provenance_substitution_resistant", False, "no attack recorded")]
+    source_url, attacker_url, collided = rows[0][1], rows[0][2], rows[0][3]
+    if collided != "0":
+        return [
+            ValidationResult(
+                "provenance_substitution_resistant",
+                False,
+                f"attacker's republish landed on the source URL {source_url} "
+                f"(attacker url {attacker_url})",
+            )
+        ]
+    return [
+        ValidationResult(
+            "provenance_substitution_resistant",
+            True,
+            f"attacker's differing content resolved to a distinct URL ({attacker_url})",
+        )
+    ]
+
+
+def validate_provenance_freshness_unforgeable(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A freshness claim signed by someone other than the owner must be rejected.
+
+    Catches the *stale-claim* attack: an unauthenticated wall-clock check
+    (``datafacts_v1``) treats any recent republish as proof of freshness,
+    regardless of who did it; a signature-backed check (``cid_facts``) only
+    accepts a proof whose signer is the dataset's declared owner.
+
+    Example::
+
+        results = validate_provenance_freshness_unforgeable(events)
+    """
+    rows = _provenance_field_msg(events, "attack_forged_freshness|")
+    if not rows:
+        return [ValidationResult("provenance_freshness_unforgeable", False, "no attack recorded")]
+    url, fresh = rows[0][1], rows[0][2]
+    if fresh != "0":
+        return [
+            ValidationResult(
+                "provenance_freshness_unforgeable",
+                False,
+                f"forged freshness claim for {url} was accepted",
+            )
+        ]
+    return [
+        ValidationResult(
+            "provenance_freshness_unforgeable",
+            True,
+            f"forged freshness claim for {url} was correctly rejected",
+        )
+    ]
+
+
+def validate_provenance_chain_unforgeable(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A dataset declaring a never-published parent must be rejected at publish time.
+
+    Catches *provenance washing*: a registry with no lineage concept
+    (``datafacts_v1``) accepts a "derived" dataset whose claimed parent does
+    not exist anywhere in the trace; ``cid_facts`` refuses to publish it.
+
+    Example::
+
+        results = validate_provenance_chain_unforgeable(events)
+    """
+    rows = _provenance_field_msg(events, "attack_provenance|")
+    if not rows:
+        return [ValidationResult("provenance_chain_unforgeable", False, "no attack recorded")]
+    phantom_parent, rejected = rows[0][1], rows[0][2]
+    if rejected != "1":
+        return [
+            ValidationResult(
+                "provenance_chain_unforgeable",
+                False,
+                f"publish with phantom parent {phantom_parent} was not rejected",
+            )
+        ]
+    return [
+        ValidationResult(
+            "provenance_chain_unforgeable",
+            True,
+            f"publish with phantom parent {phantom_parent} was correctly rejected",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# BFT HotStuff validators
+# ---------------------------------------------------------------------------
+
+_STUCK_VIEW_K_TICKS = 300
+
+
+def validate_bft_no_conflicting_commits(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No two honest replicas commit conflicting values for the same view.
+
+    Reads ``result:<view>:committed:<accepts>/<total>:<block_hash>:<value>``
+    lines, each announced independently by the replica that observed the
+    commit QC (not just the leader's say-so). Conflicts are keyed on
+    ``block_hash`` -- the field that comes straight from the commit QC and
+    is therefore identical across every honest replica for a given view --
+    rather than ``value``, since a replica that only saw the commit QC (not
+    the original PREPARE, e.g. after being partitioned away) may not know
+    the plaintext value but still agrees on the hash. A trace with zero
+    commits is itself a failure -- it means no quorum-backed progress was
+    ever observed, which is also why this validator FAILS against a
+    ``contract_net``-coordinated trace (no ``result:...committed`` lines
+    exist at all).
+
+    Example::
+
+        results = validate_bft_no_conflicting_commits(events)
+    """
+    commits_by_view: dict[str, dict[str, str]] = defaultdict(dict)
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("result:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 6 or parts[2] != "committed":
+            continue
+        view, block_hash_hex = parts[1], parts[4]
+        commits_by_view[view][str(ev.get("agent", ""))] = block_hash_hex
+
+    if not commits_by_view:
+        return [
+            ValidationResult("bft_no_conflicting_commits", False, "no commits observed in trace")
+        ]
+
+    violations: list[str] = []
+    for view, by_agent in commits_by_view.items():
+        distinct = set(by_agent.values())
+        if len(distinct) > 1:
+            violations.append(f"view {view}: conflicting commits {by_agent}")
+
+    if violations:
+        return [ValidationResult("bft_no_conflicting_commits", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "bft_no_conflicting_commits",
+            True,
+            f"checked {len(commits_by_view)} committed view(s), no conflicts",
+        )
+    ]
+
+
+def validate_bft_no_equivocation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No leader sends two different PREPARE proposals in the same view.
+
+    Reads ``prepare:<view>:<block_hash>:<value>:<justify_qc>`` lines, grouped
+    by ``(sender, view)``. More than one distinct ``block_hash`` from the
+    same sender in the same view means that leader equivocated.
+
+    Example::
+
+        results = validate_bft_no_equivocation(events)
+    """
+    hashes_by_leader_view: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("prepare:"):
+            continue
+        parts = msg.split(":", 4)
+        if len(parts) < 3:
+            continue
+        view, block_hash_hex = parts[1], parts[2]
+        key = (str(ev.get("agent", "")), view)
+        hashes_by_leader_view[key].add(block_hash_hex)
+
+    violations = [
+        f"leader {leader} view {view}: sent conflicting proposals {hashes}"
+        for (leader, view), hashes in hashes_by_leader_view.items()
+        if len(hashes) > 1
+    ]
+
+    if violations:
+        return [ValidationResult("bft_no_equivocation", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "bft_no_equivocation",
+            True,
+            f"checked {len(hashes_by_leader_view)} (leader, view) proposal(s), no equivocation",
+        )
+    ]
+
+
+def validate_bft_forged_quorum(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every broadcast commit QC is backed by >= 2f+1 distinct signers.
+
+    Reads ``qc:<phase>:<view>:<block_hash>:<f>:<voter1>=<sig1>,...`` lines.
+    Distinct voter tokens are counted after deduplication, so padding the
+    same signer twice to inflate the count is itself caught as a forgery.
+
+    Example::
+
+        results = validate_bft_forged_quorum(events)
+    """
+    violations: list[str] = []
+    checked = 0
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("qc:"):
+            continue
+        parts = msg.split(":", 5)
+        if len(parts) != 6:
+            continue
+        phase, view, block_hash_hex, f_str, votes_str = (
+            parts[1],
+            parts[2],
+            parts[3],
+            parts[4],
+            parts[5],
+        )
+        try:
+            f_value = int(f_str)
+        except ValueError:
+            continue
+        required = 2 * f_value + 1
+        voters = {entry.partition("=")[0] for entry in votes_str.split(",") if entry}
+        checked += 1
+        if len(voters) < required:
+            violations.append(
+                f"{phase} qc view {view} block {block_hash_hex}: "
+                f"{len(voters)} distinct signers, needed {required}"
+            )
+
+    if violations:
+        return [ValidationResult("bft_forged_quorum", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "bft_forged_quorum",
+            True,
+            f"checked {checked} broadcast QC(s), all backed by a real quorum",
+        )
+    ]
+
+
+def validate_bft_no_stuck_view(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Commit progress resumes within K ticks of the network healing.
+
+    Baseline is the simulator's ``partition_healed`` marker if present,
+    else ``ts=0`` (so the same validator also covers the byzantine scenario,
+    which has no partition). Fails if no ``result:...committed`` line
+    appears within ``_STUCK_VIEW_K_TICKS`` ticks after the baseline.
+
+    Example::
+
+        results = validate_bft_no_stuck_view(events)
+    """
+    baseline = 0.0
+    for ev in events:
+        if ev.get("kind") == "partition_healed":
+            baseline = float(ev.get("ts", 0.0))
+            break
+
+    commit_ticks: list[float] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("result:") and ":committed:" in msg:
+            commit_ticks.append(float(ev.get("ts", 0.0)))
+
+    if not commit_ticks:
+        return [ValidationResult("bft_no_stuck_view", False, "no commits observed in trace")]
+
+    window_end = baseline + _STUCK_VIEW_K_TICKS
+    in_window = [t for t in commit_ticks if baseline <= t <= window_end]
+    if not in_window:
+        return [
+            ValidationResult(
+                "bft_no_stuck_view",
+                False,
+                f"no commit within {_STUCK_VIEW_K_TICKS} ticks of baseline ts={baseline}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "bft_no_stuck_view",
+            True,
+            f"commit progress resumed at ts={min(in_window)} (baseline ts={baseline})",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Failure-detection validators
+# ---------------------------------------------------------------------------
+
+
+_MAX_PLAUSIBLE_GAP = 22.0
+"""Longest silence (logical time) that a *live* peer can plausibly produce.
+
+Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with ``hb_max == 20`` and
+zero message drop, so consecutive observer receipts from a living peer are at
+most 20 apart.  A 2-unit margin gives 22: if the observer received a heartbeat
+within this window, the peer was provably alive and any suspicion of it is a
+false positive.
+"""
+
+_ACCURACY_WARMUP = 100.0
+"""Logical time before which suspicions are ignored for the accuracy check.
+
+An accrual detector needs a handful of inter-arrival samples before its score
+is meaningful; this window lets every detector populate its history before its
+verdicts are held against it.
+"""
+
+
+def _parse_fd_record(ev: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the decoded JSON dict if *ev* is an ``fd:*`` broadcast, else ``None``.
+
+    Example::
+
+        rec = _parse_fd_record(event)
+    """
+    if ev.get("kind") != "broadcast":
+        return None
+    msg = str(ev.get("msg", ""))
+    if '"fd"' not in msg:
+        return None
+    try:
+        obj = json.loads(msg)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return cast("dict[str, Any]", obj)
+
+
+def _fd_observer_ids(events: list[dict[str, Any]]) -> set[str]:
+    """Return the set of agent ids that emit ``fd:status`` broadcasts."""
+    observers: set[str] = set()
+    for ev in events:
+        rec = _parse_fd_record(ev)
+        if rec is not None and rec.get("fd") == "status":
+            agent = ev.get("agent")
+            if isinstance(agent, str):
+                observers.add(agent)
+    return observers
+
+
+def _fd_statuses(events: list[dict[str, Any]]) -> dict[str, list[tuple[float, bool]]]:
+    """Return peer -> sorted ``(ts, suspected)`` from ``fd:status`` broadcasts."""
+    statuses: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+    for ev in events:
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "status":
+            continue
+        peer = rec.get("peer")
+        suspected = rec.get("suspected")
+        ts = ev.get("ts")
+        if isinstance(peer, str) and isinstance(suspected, bool) and isinstance(ts, (int, float)):
+            statuses[peer].append((float(ts), suspected))
+    for peer in statuses:
+        statuses[peer].sort(key=lambda item: item[0])
+    return statuses
+
+
+def _fd_transitions(
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, list[tuple[float, bool]]], float]:
+    """Return (peer -> sorted ``(ts, reachable)`` markers, max ts over all events)."""
+    transitions: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+    last_ts = 0.0
+    for ev in events:
+        ts = ev.get("ts")
+        if isinstance(ts, (int, float)):
+            last_ts = max(last_ts, float(ts))
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "phase":
+            continue
+        peer = rec.get("peer")
+        reachable = rec.get("reachable")
+        if isinstance(peer, str) and isinstance(reachable, bool) and isinstance(ts, (int, float)):
+            transitions[peer].append((float(ts), reachable))
+    for peer in transitions:
+        transitions[peer].sort(key=lambda item: item[0])
+    return transitions, last_ts
+
+
+def _fd_hb_receipts(events: list[dict[str, Any]], observer_ids: set[str]) -> dict[str, list[float]]:
+    """Return peer -> sorted receipt timestamps of that peer's heartbeats at an observer."""
+    receipts: dict[str, list[float]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        agent = ev.get("agent")
+        if agent not in observer_ids:
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("FDHB|"):
+            continue
+        sender = ev.get("from")
+        ts = ev.get("ts")
+        if isinstance(sender, str) and isinstance(ts, (int, float)):
+            receipts[sender].append(float(ts))
+    for peer in receipts:
+        receipts[peer].sort()
+    return receipts
+
+
+def _segments_for_peer(
+    transitions: list[tuple[float, bool]], last_ts: float
+) -> list[tuple[float, float, bool]]:
+    """Expand reachability markers into ``(start, end, reachable)`` segments."""
+    if not transitions:
+        return []
+    segments: list[tuple[float, float, bool]] = []
+    for idx, (ts, reachable) in enumerate(transitions):
+        end = transitions[idx + 1][0] if idx + 1 < len(transitions) else last_ts
+        segments.append((ts, end, reachable))
+    return segments
+
+
+def _in_any_interval(t: float, intervals: list[tuple[float, float]]) -> bool:
+    """Return whether *t* falls within any ``[start, end]`` interval."""
+    return any(start <= t <= end for start, end in intervals)
+
+
+def _last_leq(sorted_ts: list[float], t: float) -> float | None:
+    """Return the largest timestamp ``<= t`` in *sorted_ts*, or ``None``."""
+    found: float | None = None
+    for ts in sorted_ts:
+        if ts <= t:
+            found = ts
+        else:
+            break
+    return found
+
+
+def validate_failure_detection_completeness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every peer that truly goes silent is eventually -- and still -- suspected.
+
+    For each unreachable segment in the ground-truth ``fd:phase`` markers, the
+    detector must report the peer suspected at some status update inside the
+    segment and still have it suspected at the last in-segment update.  A trace
+    with no unreachable segment at all is a scenario setup failure.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+
+    outage_segments: dict[str, list[tuple[float, float]]] = {}
+    for peer, peer_transitions in transitions.items():
+        downs = [
+            (start, end)
+            for start, end, reachable in _segments_for_peer(peer_transitions, last_ts)
+            if not reachable
+        ]
+        if downs:
+            outage_segments[peer] = downs
+
+    if not outage_segments:
+        return [
+            ValidationResult(
+                "failure_detection_completeness",
+                False,
+                "no unreachable fd:phase segment found in trace",
+            )
+        ]
+
+    failures: list[str] = []
+    checked = 0
+    for peer, downs in outage_segments.items():
+        peer_statuses = statuses.get(peer, [])
+        for u_start, u_end in downs:
+            checked += 1
+            in_window = [(t, s) for (t, s) in peer_statuses if u_start < t <= u_end]
+            if not in_window:
+                failures.append(f"{peer}: no status during outage [{u_start}, {u_end}]")
+                continue
+            if not any(s for _, s in in_window):
+                failures.append(f"{peer}: never suspected during outage [{u_start}, {u_end}]")
+                continue
+            if not in_window[-1][1]:
+                failures.append(f"{peer}: not suspected at outage end [{u_start}, {u_end}]")
+
+    if failures:
+        return [ValidationResult("failure_detection_completeness", False, "; ".join(failures))]
+    return [
+        ValidationResult(
+            "failure_detection_completeness",
+            True,
+            f"all {checked} outage segment(s) detected and still suspected at end",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Portable-reputation (PARC) migration validators
+#
+# The parc_migration scenario broadcasts one ``admit:<agent>:<decision>:
+# <reason>:<role>`` line per border decision. The six checks below each pin
+# one attack class the naive signature-trusting gate would miss (or one
+# retention property a degenerate deny-everything gate would break). Together
+# they prove the headline invariant: a valid signature is not admission.
+# ---------------------------------------------------------------------------
+
+
+def _collect_admissions(
+    events: list[dict[str, Any]],
+) -> dict[str, tuple[bool, str, str]]:
+    """Parse ``admit:<agent>:<granted|denied>:<reason>:<role>`` trace lines.
+
+    Returns ``agent -> (admitted, reason, role)`` using the last decision per
+    agent. Decisions come from the live gate against the configured trust
+    plugin, so this dict is what lets the validators discriminate between a
+    recomputing gate and a naive one.
+
+    Example::
+
+        admissions = _collect_admissions(events)
+    """
+    admissions: dict[str, tuple[bool, str, str]] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("admit:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 5:
+            continue
+        agent, decision, reason, role = parts[1], parts[2], parts[3], parts[4]
+        admissions[agent] = (decision == "granted", reason, role)
+    return admissions
+
+
+def _admissions_for_role(
+    events: list[dict[str, Any]],
+    role: str,
+) -> dict[str, tuple[bool, str]]:
+    """The ``agent -> (admitted, reason)`` decisions for one population role.
+
+    Example::
+
+        ring = _admissions_for_role(events, "ring")
+    """
+    return {
+        agent: (admitted, reason)
+        for agent, (admitted, reason, r) in _collect_admissions(events).items()
+        if r == role
+    }
+
+
+def _validate_role_denied(
+    events: list[dict[str, Any]],
+    *,
+    name: str,
+    role: str,
+    expected_reason: str,
+) -> list[ValidationResult]:
+    """Shared check: every agent of ``role`` is denied with ``expected_reason``.
+
+    Fails when the population was never exercised (no decisions observed for
+    the role — a gate that crashes or stays silent must not pass), when any
+    member was admitted, or when the denial carries the wrong reason (a gate
+    that denies for an accidental reason is not demonstrating the defense the
+    validator is named for).
+
+    Example::
+
+        results = _validate_role_denied(events, name="parc_forgery_rejected",
+                                        role="forged",
+                                        expected_reason="proof_invalid")
+    """
+    decisions = _admissions_for_role(events, role)
+    if not decisions:
+        return [ValidationResult(name, False, f"no admission decisions observed for role {role!r}")]
+    problems: list[str] = []
+    for agent, (admitted, reason) in sorted(decisions.items()):
+        if admitted:
+            problems.append(f"{agent} was admitted")
+        elif reason != expected_reason:
+            problems.append(f"{agent} denied with {reason!r}, expected {expected_reason!r}")
+    if problems:
+        return [ValidationResult(name, False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            name,
+            True,
+            f"{len(decisions)} {role} agent(s) denied with {expected_reason!r}",
+        )
+    ]
+
+
+def validate_failure_detection_accuracy(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Live peers are not falsely suspected; recovered peers are cleared.
+
+    Accuracy: after a warm-up, while a peer is provably reachable -- it is inside
+    a reachable ``fd:phase`` segment *and* the observer received a heartbeat from
+    it no longer than ``_MAX_PLAUSIBLE_GAP`` ago -- the detector must not suspect
+    it.  A tight fixed timeout violates this on the upper tail of normal
+    heartbeat jitter; an accrual detector does not.
+
+    Recovery: a peer that genuinely went down and came back must end its final
+    reachable segment un-suspected.
+
+    Returns two results: ``failure_detection_accuracy`` and
+    ``failure_detection_recovery``.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+    observer_ids = _fd_observer_ids(events)
+    receipts = _fd_hb_receipts(events, observer_ids)
+    watched = sorted(statuses.keys())
+
+    # ----- accuracy: no false suspicion of a provably-live peer -----
+    reachable_intervals: dict[str, list[tuple[float, float]]] = {}
+    for peer in watched:
+        segments = _segments_for_peer(transitions.get(peer, []), last_ts)
+        if segments:
+            reachable_intervals[peer] = [
+                (start, end) for start, end, reachable in segments if reachable
+            ]
+        else:
+            reachable_intervals[peer] = [(0.0, last_ts)]
+
+    false_positives: list[str] = []
+    for peer in watched:
+        intervals = reachable_intervals[peer]
+        peer_receipts = receipts.get(peer, [])
+        for t, suspected in statuses.get(peer, []):
+            if not suspected or t < _ACCURACY_WARMUP:
+                continue
+            if not _in_any_interval(t, intervals):
+                continue
+            recent = _last_leq(peer_receipts, t)
+            if recent is not None and (t - recent) <= _MAX_PLAUSIBLE_GAP:
+                false_positives.append(
+                    f"{peer}: suspected at t={t} but a heartbeat arrived {round(t - recent, 3)} ago"
+                )
+
+    if false_positives:
+        accuracy = ValidationResult("failure_detection_accuracy", False, "; ".join(false_positives))
+    else:
+        accuracy = ValidationResult(
+            "failure_detection_accuracy",
+            True,
+            f"no false suspicion of a provably-live peer across {len(watched)} peer(s)",
+        )
+
+    # ----- recovery: a healed peer ends un-suspected -----
+    recovery_failures: list[str] = []
+    recovered_peers = 0
+    for peer in watched:
+        segments = _segments_for_peer(transitions.get(peer, []), last_ts)
+        if not any(not reachable for _, _, reachable in segments):
+            continue
+        final_reachable: tuple[float, float] | None = None
+        seen_down = False
+        for start, end, reachable in segments:
+            if not reachable:
+                seen_down = True
+                final_reachable = None
+            elif seen_down:
+                final_reachable = (start, end)
+        if final_reachable is None:
+            recovery_failures.append(f"{peer}: no reachable segment after final outage")
+            continue
+        recovered_peers += 1
+        r_start, r_end = final_reachable
+        in_window = [(t, s) for (t, s) in statuses.get(peer, []) if r_start <= t <= r_end]
+        if not in_window:
+            recovery_failures.append(f"{peer}: no status after recovery [{r_start}, {r_end}]")
+            continue
+        if in_window[-1][1]:
+            recovery_failures.append(f"{peer}: still suspected at end of recovery segment")
+
+    if recovery_failures:
+        recovery = ValidationResult(
+            "failure_detection_recovery", False, "; ".join(recovery_failures)
+        )
+    elif recovered_peers == 0:
+        recovery = ValidationResult(
+            "failure_detection_recovery",
+            False,
+            "no peer recovered from an outage in trace",
+        )
+    else:
+        recovery = ValidationResult(
+            "failure_detection_recovery",
+            True,
+            f"all {recovered_peers} recovered peer(s) cleared by end",
+        )
+
+    return [accuracy, recovery]
+
+
+def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Every honest migrant is admitted — the gate retains genuine reputation.
+
+    Guards against the degenerate defense: a gate that denies everything
+    trivially "catches" every attack. Portability only holds if honest
+    credentials actually cross the border.
+
+    Example::
+
+        results = validate_parc_honest_admitted(events)
+    """
+    decisions = _admissions_for_role(events, "honest")
+    if not decisions:
+        return [
+            ValidationResult(
+                "parc_honest_admitted", False, "no admission decisions observed for role 'honest'"
+            )
+        ]
+    denied = {a: reason for a, (admitted, reason) in decisions.items() if not admitted}
+    if denied:
+        detail = ", ".join(f"{a} ({reason})" for a, reason in sorted(denied.items()))
+        return [ValidationResult("parc_honest_admitted", False, f"honest denied: {detail}")]
+    return [
+        ValidationResult("parc_honest_admitted", True, f"{len(decisions)} honest agent(s) admitted")
+    ]
+
+
+def validate_parc_forgery_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A credential with tampered proof bytes is denied as ``proof_invalid``.
+
+    The naive gate never checks the proof against the recomputed canonical
+    payload, so the forged credential sails through it.
+
+    Example::
+
+        results = validate_parc_forgery_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_forgery_rejected",
+        role="forged",
+        expected_reason="proof_invalid",
+    )
+
+
+def validate_parc_inflation_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """An inflated score from a *trusted* issuer is denied as ``score_mismatch``.
+
+    The headline property: the credential's signature is genuine and its
+    issuer is trusted, yet recomputing the nanda-rep/0.2 scores from the
+    carried receipts exposes the inflated claim. A gate that trusts signed
+    claims (the naive baseline) admits it and FAILS this validator.
+
+    Example::
+
+        results = validate_parc_inflation_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_inflation_rejected",
+        role="inflated",
+        expected_reason="score_mismatch",
+    )
+
+
+def validate_parc_ring_severed(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Wash-ring members are denied via whole-graph severance at the border.
+
+    Each ring member's *inline* credential is individually corroborated (a
+    single-subject ledger is a star and cannot show the ring), so inline
+    recomputation alone admits it. Only re-running collusion severance over
+    the originating domain's published ledger reveals the isolated dense
+    component — the reason must therefore be ``severed_below_threshold``.
+
+    Example::
+
+        results = validate_parc_ring_severed(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_ring_severed",
+        role="ring",
+        expected_reason="severed_below_threshold",
+    )
+
+
+def validate_parc_replay_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A stolen (genuine) credential presented by a non-subject is denied.
+
+    The credential itself verifies — it was honestly issued to someone else.
+    Admission must bind the presenter to ``credentialSubject.id``
+    (``replay_presenter_mismatch``), or any bystander can borrow reputation.
+
+    Example::
+
+        results = validate_parc_replay_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_replay_rejected",
+        role="replay",
+        expected_reason="replay_presenter_mismatch",
+    )
+
+
+def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A credential signed with a rotated-out issuer key is denied as ``stale_key``.
+
+    The signature bytes are cryptographically valid under the old key; what
+    fails is the identity layer's key-rotation window as-of the credential's
+    ``validFrom`` tick. This is the cross-layer check a trust plugin that
+    ignores the identity layer cannot perform.
+
+    Example::
+
+        results = validate_parc_stale_key_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_stale_key_rejected",
+        role="stale",
+        expected_reason="stale_key",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -1845,6 +4620,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,
+    ],
+    "comms_downgrade": [
+        validate_comms_downgrade_resistance,
+        validate_comms_authentic_delivery,
     ],
     "marketplace": [
         validate_marketplace_no_double_sell,
@@ -1887,8 +4666,61 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_streaming_no_drain_after_close,
         validate_streaming_no_overbill_on_partition,
     ],
+    "empic_payments": [
+        validate_empic_escrow_conservation,
+        validate_empic_no_release_without_accepted_delivery,
+        validate_empic_invalid_delivery_not_paid,
+        validate_empic_delivery_policy_integrity,
+        validate_empic_pubsub_billing_caps,
+        validate_empic_max_spend_enforced,
+        validate_empic_all_escrows_terminal,
+        validate_empic_no_duplicate_settlement,
+        validate_empic_provider_service_binding,
+        validate_empic_payment_participant_binding,
+        validate_empic_no_secret_material,
+        validate_empic_no_drain_after_close,
+        validate_empic_no_overbill_on_partition,
+    ],
     "receipt_reputation": [
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
+    ],
+    "multi_attribute_market": [
+        validate_multi_attribute_pareto_optimal,
+        validate_multi_attribute_individually_rational,
+    ],
+    "provenance_supply_chain": [
+        validate_provenance_chain_integrity,
+        validate_provenance_substitution_resistant,
+        validate_provenance_freshness_unforgeable,
+        validate_provenance_chain_unforgeable,
+    ],
+    "bft_hotstuff": [
+        validate_bft_no_conflicting_commits,
+        validate_bft_no_equivocation,
+        validate_bft_forged_quorum,
+        validate_bft_no_stuck_view,
+    ],
+    "escrow_marketplace": [
+        validate_escrow_state_machine,
+        validate_escrow_role_binding,
+        validate_escrow_bps_in_range,
+        validate_escrow_no_payout_without_delivery,
+    ],
+    "failure_detection": [
+        validate_failure_detection_completeness,
+        validate_failure_detection_accuracy,
+    ],
+    "parc_migration": [
+        validate_parc_honest_admitted,
+        validate_parc_forgery_rejected,
+        validate_parc_inflation_rejected,
+        validate_parc_ring_severed,
+        validate_parc_replay_rejected,
+        validate_parc_stale_key_rejected,
+    ],
+    "rogue_trusted_agent": [
+        validate_rogue_trusted_agent_blocked,
+        validate_rogue_trusted_agent_reputation,
     ],
 }

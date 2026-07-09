@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: Apache-2.0
+# Provenance scenario: a diamond dataset pipeline, then four attacks.
+#
+#                source-0
+#               /        \
+#          refine-a      refine-b
+#               \        /
+#              aggregate-0   (join: parents = [refine-a, refine-b])
+#                   |
+#                verify-0
+#
+# Each hop publishes a dataset declaring its upstream input(s) as provenance
+# parents. verify-0 walks the whole DAG back to the root, then runs
+# substitution, forged-freshness, and broken-provenance attacks as an outsider.
+#
+# Verify::
+#
+#     nest run scenarios/provenance_supply_chain.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/provenance_supply_chain.jsonl'), 'provenance_supply_chain')]"
+#
+# Swap `layers.datafacts` to `datafacts_v1` to see the adversarial validators
+# flip to FAIL -- that plugin has no content-addressing, signed freshness, or
+# provenance concept at all.
+name: provenance_supply_chain
+description: "Diamond dataset pipeline with provenance; an outsider then attempts substitution, forged-freshness, and broken-provenance attacks."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 5
+  brain: state-machine
+  roles:
+    - name: source
+      count: 1
+    - name: refine
+      count: 2
+    - name: aggregate
+      count: 1
+    - name: verify
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: cid_facts
+
+task:
+  type: provenance_supply_chain
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/provenance_supply_chain.jsonl
