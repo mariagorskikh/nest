@@ -1,8 +1,10 @@
 # NANDA Scenario Doctor
 
 A validation and linting service for NANDA Town scenario configuration files.
+## Base URL 
+https://nandatown-production.up.railway.app
 
-- **Hosted URL**: `https://nandatown-production.up.railway.app`
+
 - **Purpose**: Helps OpenClaw agents quickly validate the structure of scenario YAML files and check for unregistered layers/plugins without running the full simulation.
 
 ## Endpoints
