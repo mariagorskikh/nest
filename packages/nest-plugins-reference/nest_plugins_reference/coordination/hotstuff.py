@@ -27,11 +27,12 @@ Example::
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Sequence
 from typing import Any
 
 from nest_core.types import AgentId, Outcome, Round, Task, Vote
+
+from ._ids import derive_round_id
 
 
 class HotStuff:
@@ -52,15 +53,22 @@ class HotStuff:
         self._agent_id = agent_id
         self._f = f
         self._replica_ids = list(replica_ids) if replica_ids is not None else [agent_id]
+        self._round_seq = 0
 
     async def propose(self, task: Task) -> Round:
         """Propose a task as a single-view HotStuff round.
+
+        The round id is derived deterministically from the proposing replica,
+        the task, and a monotonic per-proposer sequence number, so a seeded run
+        replays byte-for-byte (ADR-004) instead of drawing a fresh ``uuid4``
+        each run. See :func:`._ids.derive_round_id`.
 
         Example::
 
             rnd = await coord.propose(task)
         """
-        round_id = str(uuid.uuid4())
+        self._round_seq += 1
+        round_id = derive_round_id(self._agent_id, task.id, self._round_seq)
         return Round(
             id=round_id,
             task=task,
