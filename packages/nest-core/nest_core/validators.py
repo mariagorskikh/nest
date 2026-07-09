@@ -787,7 +787,7 @@ def validate_supply_chain_no_lost(
 def validate_reputation_scoring(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Reputation scores decrease for agents that cheat."""
+    """Validate that every cheating agent receives a corresponding bad report."""
     # Track scores: agent -> score
     scores: dict[str, int] = defaultdict(int)
     cheaters: set[str] = set()
@@ -809,9 +809,8 @@ def validate_reputation_scoring(
 
     violations: list[str] = []
 
-    # The core invariant: agents with bad reports should have lower scores
-    # than they would without those reports.  We verify that at least one
-    # "bad" report exists for every cheater.
+   # The core invariant: every agent that emits a "cheat:" event should
+   # receive at least one corresponding "report:...:bad" event.
     bad_agents_with_reports: set[str] = set()
     for ev in events:
         if ev.get("kind") != "send":
