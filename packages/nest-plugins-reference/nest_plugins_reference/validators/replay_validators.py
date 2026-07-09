@@ -18,9 +18,7 @@ from pathlib import Path
 from nest_plugins_reference.validators.gossip_validators import ValidatorReport
 
 
-def check_replay_rejected_in_trace(
-    trace_path: Path, scenario_name: str
-) -> ValidatorReport:
+def check_replay_rejected_in_trace(trace_path: Path, scenario_name: str) -> ValidatorReport:
     """Validate that replay_safe rejects replays in the trace.
 
     Reads the JSONL trace and checks for replay rejection events.

@@ -123,9 +123,7 @@ class ReplaySafeComms(AuthenticatedComms):
         version = str(data.get("schema_version", "1.0"))
 
         if _parse_major(version) > SCHEMA_MAJOR:
-            raise UnsupportedSchemaError(
-                version, f"this build speaks major {SCHEMA_MAJOR}"
-            )
+            raise UnsupportedSchemaError(version, f"this build speaks major {SCHEMA_MAJOR}")
 
         self._verify_tag(data, version)
         return self._process_sequence_and_build(data, version)
@@ -139,9 +137,7 @@ class ReplaySafeComms(AuthenticatedComms):
         if seq is None:
             if not self._require_auth:
                 return self._build_message(data)
-            raise ReplayError(
-                version, "missing_sequence", "envelope has no sequence number"
-            )
+            raise ReplayError(version, "missing_sequence", "envelope has no sequence number")
 
         if not isinstance(seq, int) or seq < 0:
             raise ReplayError(
@@ -191,11 +187,7 @@ class ReplaySafeComms(AuthenticatedComms):
             next_expected += 1
 
     def _build_message(self, data: dict[str, Any]) -> Message:
-        unknown = {
-            k: v
-            for k, v in data.items()
-            if k not in KNOWN_FIELDS and k != SEQUENCE_FIELD
-        }
+        unknown = {k: v for k, v in data.items() if k not in KNOWN_FIELDS and k != SEQUENCE_FIELD}
         meta: dict[str, Any] = dict(data.get("metadata") or {})
         meta["schema_version"] = str(data.get("schema_version", "1.0"))
         meta["kind"] = str(data.get("kind", "message"))
