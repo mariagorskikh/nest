@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# Failure-detection scenario: silence that heals, with a ground-truth oracle.
+#
+# 3 agents, no partitions, zero message drop:
+#   * observer-0 — runs a FailureDetector and reports suspicion per watched peer
+#   * target-0   — heartbeat emitter that goes silent in [silent_from, silent_until)
+#                  and then resumes (a transient crash that heals)
+#   * peer-0     — heartbeat emitter that is never silent (always-alive control)
+#
+# Emitters heartbeat on a jittered interval uniform(hb_min, hb_max).  A naive
+# fixed-timeout detector set just above the mean (see the `heartbeat` plugin,
+# e.g. timeout 16) mistakes the upper tail of that jitter for a crash and
+# false-suspects a provably-alive peer; the adaptive phi-accrual detector learns
+# the inter-arrival distribution and stays quiet through the jitter while still
+# catching the genuine outage.  The accuracy validator separates the two.
+#
+# message_drop is 0, so heartbeats and status reports need no redundancy and the
+# run is byte-for-byte deterministic for a fixed seed (the only randomness is
+# each emitter's seeded RNG drawing its jittered interval; no wall-clock reads).
+name: failure_detection
+description: "3 agents; a peer goes silent then heals; phi-accrual beats a fixed timeout."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 3
+  brain: state-machine
+  roles:
+    - name: observer
+      count: 1
+    - name: target
+      count: 1
+    - name: peer
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: failure_detection
+  config:
+    hb_min: 10.0
+    hb_max: 20.0
+    eval_interval: 3.0
+    silent_from: 200.0
+    silent_until: 320.0
+    fd_plugin: phi_accrual
+    fd_params:
+      window_size: 200
+      min_samples: 5
+      min_std: 1.0
+      threshold: 8.0
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1200"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/failure_detection.jsonl

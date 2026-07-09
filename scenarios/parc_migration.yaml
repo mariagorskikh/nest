@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable-reputation migration: agents earn cross-signed receipts in trust
+# domain A, then migrate to domain B carrying signed PARC credentials. B's
+# admission gate RECOMPUTES the committed Merkle root and nanda-rep/0.2 scores
+# from the carried receipts instead of trusting the signed claims, and re-runs
+# whole-graph collusion severance over domain A's published ledger.
+#
+# Under `trust: parc` all six parc_migration adversarial validators PASS:
+# honest agents are admitted while the forged, replayed, stale-key, inflated,
+# and wash-ring credentials are each denied with a typed reason. Set
+# `task.config.naive_gate: true` (the gate trusts signed claims) and the
+# inflation + ring validators FAIL -- the differential proof that a valid
+# signature is not admission. Swap `trust: score_average` and every validator
+# fails: no credentials can even be built.
+name: parc_migration
+description: "10 migrants (4 honest, 3-ring, forger, replayer, stale-key, inflated), 2 issuers, 1 gate."
+
+tier: 1
+seed: 42
+
+agents:
+  # 4 honest + 3 ring + forger + replayer + stale + inflated + 2 auditors + 1 gate = 13
+  count: 13
+  brain: state-machine
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  # The cross-layer composition: credentials are signed through the rotating
+  # identity layer and verified against genuine key-rotation windows.
+  identity: ed25519_rotating
+  registry: in_memory
+  auth: jwt
+  # The whole point: parc exports portable credentials and recomputes them at
+  # admission. Switch to `score_average` to watch every validator fail.
+  trust: parc
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: parc_migration
+  config:
+    min_reputation_score: 0.2
+    naive_gate: false
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/parc_migration.jsonl
