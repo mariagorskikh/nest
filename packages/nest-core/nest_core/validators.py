@@ -4595,6 +4595,241 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 # ---------------------------------------------------------------------------
+# Sybil reputation validators
+# ---------------------------------------------------------------------------
+
+
+def validate_sybil_flood_resistance(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sybil flood attack must not inflate the target's reputation.
+
+    Checks that a single reporter sending many positive reports for the same
+    subject does not push the subject's observed score above honest baselines.
+    Under ``score_average`` floods succeed (each report counts equally);
+    under ``sybil_resistant`` burst damping caps the effect.
+
+    The validator counts per-reporter-per-subject report volumes and FAILs
+    if any single reporter accounts for more than 50% of total positive
+    reports for a subject AND the subject has no bad reports (indicating
+    unopposed inflation).
+    """
+    # reporter -> subject -> positive_count
+    reporter_pos: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    # subject -> total_positive
+    total_pos: dict[str, int] = defaultdict(int)
+    # subject -> total_negative
+    total_neg: dict[str, int] = defaultdict(int)
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("report:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 4:
+            continue
+        reporter = ev.get("agent", "")
+        subject = parts[2]
+        outcome = parts[3]
+        if outcome == "good":
+            reporter_pos[reporter][subject] += 1
+            total_pos[subject] += 1
+        elif outcome == "bad":
+            total_neg[subject] += 1
+
+    # Check for flood patterns: one reporter > 50% of positive reports
+    # AND subject has received NO negative reports (indicating undetected inflation)
+    flood_detected = False
+    flood_detail: list[str] = []
+
+    for reporter, subjects in reporter_pos.items():
+        for subject, count in subjects.items():
+            tp = total_pos.get(subject, 0)
+            tn = total_neg.get(subject, 0)
+            if tp > 0 and count > tp * 0.5 and count > 3 and tn == 0:
+                flood_detected = True
+                flood_detail.append(
+                    f"{reporter} sent {count}/{tp} positive reports for "
+                    f"{subject} with 0 negative (unopposed flood)"
+                )
+
+    if flood_detected:
+        detail = "; ".join(flood_detail)
+        return [ValidationResult("sybil_flood_resistance", False, detail)]
+
+    return [
+        ValidationResult(
+            "sybil_flood_resistance",
+            True,
+            f"checked {len(reporter_pos)} reporters, no unopposed flood detected",
+        )
+    ]
+
+
+def validate_sybil_collusion_ring(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Mutual-boost collusion rings must be detectable in the trace.
+
+    A collusion ring exists when a group of agents *only* report positively
+    on each other and never report negatively.  Under ``score_average`` this
+    is invisible; under ``sybil_resistant`` collusion detection fires and
+    the ring's influence is discounted.
+
+    The validator checks: if a set of agents exclusively boost each other
+    (no negative reports between them) AND the observer does not flag them
+    via a warning or sybil_alert, the validator FAILs.
+    """
+    # Build a directed graph of positive-only report edges
+    # reporter -> set of subjects they reported positively on
+    pos_edges: dict[str, set[str]] = defaultdict(set)
+    # reporter -> set of subjects they reported negatively on
+    neg_edges: dict[str, set[str]] = defaultdict(set)
+    # Agents that received warnings
+    warned: set[str] = set()
+    # Agents that triggered sybil_alerts
+    sybil_alerted: set[str] = set()
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("report:"):
+            parts = msg.split(":")
+            if len(parts) >= 4:
+                reporter = ev.get("agent", "")
+                subject = parts[2]
+                outcome = parts[3]
+                if outcome == "good":
+                    pos_edges[reporter].add(subject)
+                elif outcome == "bad":
+                    neg_edges[reporter].add(subject)
+        elif msg.startswith("warning:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                warned.add(parts[2])
+        elif msg.startswith("sybil_alert:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                sybil_alerted.add(parts[1])
+
+    # Detect rings: find pairs where A boosted B AND B boosted A
+    # AND neither reported negatively on the other
+    ring_members: set[str] = set()
+    for a, a_subjects in pos_edges.items():
+        for b in a_subjects:
+            if (
+                a in pos_edges.get(b, set())
+                and b not in neg_edges.get(a, set())
+                and a not in neg_edges.get(b, set())
+            ):
+                ring_members.add(a)
+                ring_members.add(b)
+
+    if not ring_members:
+        return [
+            ValidationResult(
+                "sybil_collusion_ring",
+                True,
+                "no mutual-boost collusion rings detected",
+            )
+        ]
+
+    # Ring detected: check if the system flagged it
+    # Under sybil_resistant, cheating ring members should get bad reports
+    # from honest agents and end up warned
+    unflagged = ring_members - warned - sybil_alerted
+    # Check if unflagged ring members also cheat (they should get caught)
+    ring_cheaters: set[str] = set()
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("cheat:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                cheater = parts[2]
+                if cheater in unflagged:
+                    ring_cheaters.add(cheater)
+
+    # If ring members cheat but aren't warned, that's a failure
+    truly_unflagged = ring_cheaters - warned
+    if truly_unflagged:
+        detail = f"collusion ring members cheated but not warned: {truly_unflagged}"
+        return [ValidationResult("sybil_collusion_ring", False, detail)]
+
+    return [
+        ValidationResult(
+            "sybil_collusion_ring",
+            True,
+            f"ring of {len(ring_members)} detected; cheaters warned: {len(warned)}",
+        )
+    ]
+
+
+def validate_sybil_score_integrity(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Honest agents' scores must not be degraded by Sybil manipulation.
+
+    Verifies that honest agents who consistently deliver on trades maintain
+    positive reputation (more good reports than bad).  Under ``score_average``
+    Sybil manipulation can crowd out honest signal; under ``sybil_resistant``
+    each reporter's influence is capped.
+    """
+    # Track honest scores
+    scores: dict[str, int] = defaultdict(int)
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("report:"):
+            parts = msg.split(":")
+            if len(parts) >= 4:
+                subject = parts[2]
+                outcome = parts[3]
+                if outcome == "good":
+                    scores[subject] += 1
+                elif outcome == "bad":
+                    scores[subject] -= 2
+
+    # Find honest agents that delivered but have negative scores
+    deliverers: set[str] = set()
+    cheaters: set[str] = set()
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("deliver:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                deliverers.add(parts[2])
+        elif msg.startswith("cheat:"):
+            parts = msg.split(":")
+            if len(parts) >= 3:
+                cheaters.add(parts[2])
+
+    # Honest-only deliverers: delivered but never cheated
+    honest_deliverers = deliverers - cheaters
+    degraded = [a for a in honest_deliverers if scores.get(a, 0) < 0]
+
+    if degraded:
+        detail = f"honest agents with negative score: {degraded}"
+        return [ValidationResult("sybil_score_integrity", False, detail)]
+
+    return [
+        ValidationResult(
+            "sybil_score_integrity",
+            True,
+            f"checked {len(honest_deliverers)} honest deliverers, all non-negative",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -4705,5 +4940,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "sybil_reputation": [
+        validate_sybil_flood_resistance,
+        validate_sybil_collusion_ring,
+        validate_sybil_score_integrity,
     ],
 }

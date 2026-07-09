@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Sybil reputation scenario: honest agents trade while Sybil attackers attempt
+# to inflate a target's reputation through coordinated fake reports, collusion
+# rings, and burst-rate ballot-stuffing.  Under `trust: sybil_resistant` the
+# attacks are detected and damped; under `trust: score_average` they succeed.
+name: sybil_reputation
+description: "16 honest traders, 4 Sybil attackers running collusion + flooding, 1 observer."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 21
+  brain: state-machine
+  roles:
+    - name: honest
+      count: 16
+    - name: sybil
+      count: 4
+    - name: observer
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  # The whole point: sybil_resistant catches Sybil attacks.
+  # Switch to score_average to watch the Sybil validators FAIL.
+  trust: sybil_resistant
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: sybil_reputation
+  config:
+    rounds: 5
+    sybil_target: "honest-0"
+    sybil_flood_count: 8
+    collusion_ring: true
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/sybil_reputation.jsonl

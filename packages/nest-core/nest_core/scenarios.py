@@ -145,3 +145,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("rogue_trusted_agent", rogue_trusted_agent_factory)
+    elif name == "sybil_reputation":
+        from nest_core.scenarios_builtin.sybil_reputation import (
+            sybil_reputation_factory,
+        )
+
+        register_scenario("sybil_reputation", sybil_reputation_factory)
