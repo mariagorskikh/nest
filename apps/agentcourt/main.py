@@ -59,8 +59,7 @@ class EscrowCreateRequest(BaseModel):
     arbitrators: list[str] | None = Field(
         default_factory=list,
         description=(
-            "Optional list of authorized juror agent IDs. "
-            "If empty, any agent can act as a juror."
+            "Optional list of authorized juror agent IDs. If empty, any agent can act as a juror."
         ),
     )
     vote_threshold: int | None = Field(
@@ -211,13 +210,23 @@ async def create_escrow(req: EscrowCreateRequest):
     Creates a new escrow agreement. Buyer locks up funds/credits.
     """
     with db_lock:
+        arbitrators = req.arbitrators or []
+        vote_threshold = req.vote_threshold or 3
+        if arbitrators and vote_threshold > len(arbitrators):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Vote threshold ({vote_threshold}) cannot exceed the "
+                    f"number of designated arbitrators ({len(arbitrators)})."
+                ),
+            )
         escrow = Escrow(
             buyer_id=req.buyer_id,
             seller_id=req.seller_id,
             amount=req.amount,
             timeout_seconds=req.timeout_seconds or 3600.0,
-            arbitrators=req.arbitrators or [],
-            vote_threshold=req.vote_threshold or 3,
+            arbitrators=arbitrators,
+            vote_threshold=vote_threshold,
         )
         escrow_db[escrow.id] = escrow
         logger.info(

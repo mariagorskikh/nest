@@ -177,3 +177,17 @@ def test_serve_skill_md():
     response = client.get("/skill.md")
     assert response.status_code == 200
     assert "AgentCourt" in response.text
+
+
+def test_escrow_invalid_vote_threshold():
+    """Verify escrow creation fails if vote threshold exceeds arbitrators length."""
+    create_req = {
+        "buyer_id": "buyer-1",
+        "seller_id": "seller-1",
+        "amount": 100.0,
+        "arbitrators": ["j-1", "j-2"],
+        "vote_threshold": 3,
+    }
+    response = client.post("/escrow", json=create_req)
+    assert response.status_code == 400
+    assert "cannot exceed the number of designated arbitrators" in response.json()["detail"]
