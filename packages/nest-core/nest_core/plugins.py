@@ -26,6 +26,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("registry", "in_memory"): f"{_REF}.registry.in_memory:InMemoryRegistry",
     ("registry", "gossip"): f"{_REF}.registry.gossip:GossipRegistry",
     ("auth", "jwt"): f"{_REF}.auth.jwt_auth:JwtAuth",
+    ("auth", "delegatable"): f"{_REF}.auth.delegatable:DelegatableAuth",
     ("trust", "score_average"): f"{_REF}.trust.score_average:ScoreAverageTrust",
     ("trust", "agent_receipts"): f"{_REF}.trust.agent_receipts:AgentReceiptsTrust",
     ("trust", "parc"): f"{_REF}.trust.parc:ParcTrust",
