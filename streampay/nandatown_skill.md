@@ -5,13 +5,13 @@ close at any time, and get verifiable receipts. Every mutation is
 idempotency-keyed: retrying the same operation returns the original result.
 
 ## Base URL
-https://{{BASE_URL}}
+https://steamplay.onrender.com
 
 ## Endpoints
 
 ### GET /health
 Returns service status.
-Example: curl https://{{BASE_URL}}/health
+Example: curl https://steamplay.onrender.com/health
 Response: {"status":"ok","service":"streampay","version":"1.0.0"}
 
 ### POST /streams
@@ -19,7 +19,7 @@ Open a streaming payment. The first tick drains immediately so the payee
 observes a non-zero balance. Idempotent by stream_id.
 Body: {"stream_id": "s-1", "payer": "agent-a", "payee": "agent-b",
        "rate_per_tick": 10, "max_total": 500}
-Example: curl -X POST https://{{BASE_URL}}/streams -H "Content-Type: application/json"
+Example: curl -X POST https://steamplay.onrender.com/streams -H "Content-Type: application/json"
          -d '{"stream_id":"s-1","payer":"agent-a","payee":"agent-b","rate_per_tick":10,"max_total":500}'
 Response 201: {"stream_id":"s-1","payer":"agent-a","payee":"agent-b",
                "rate_per_tick":10,"max_total":500,"total_debited":10,
@@ -30,7 +30,7 @@ Response 409: {"error":"stream_already_closed"}
 ### POST /streams/{id}/tick
 Drain one tick from a stream. Idempotent: repeating the same tick is a no-op.
 Body: {"tick": 1} (optional, increments if omitted)
-Example: curl -X POST https://{{BASE_URL}}/streams/s-1/tick -H "Content-Type: application/json"
+Example: curl -X POST https://steamplay.onrender.com/streams/s-1/tick -H "Content-Type: application/json"
          -d '{"tick":1}'
 Response: {"stream_id":"s-1","total_debited":20,"remaining":480,"is_open":true}
 Or:    {"stream_id":"s-1","total_debited":500,"remaining":0,"is_open":false}
@@ -39,31 +39,31 @@ Or:    {"stream_id":"s-1","total_debited":500,"remaining":0,"is_open":false}
 ### POST /streams/{id}/close
 Close the stream and get a receipt. Either payer or payee can close.
 Idempotent: returns the original receipt on retry.
-Example: curl -X POST https://{{BASE_URL}}/streams/s-1/close
+Example: curl -X POST https://steamplay.onrender.com/streams/s-1/close
 Response: {"stream_id":"s-1","receipt":{"payer":"agent-a","payee":"agent-b",
           "amount":500,"status":"closed"}}
 
 ### GET /streams/{id}
 Get the current state of a stream.
-Example: curl https://{{BASE_URL}}/streams/s-1
+Example: curl https://steamplay.onrender.com/streams/s-1
 Response: full stream state (same shape as POST /streams response)
 
 ### GET /streams/{id}/receipt
 Get the receipt for a closed stream. Returns 404 if stream is still open
 or doesn't exist.
-Example: curl https://{{BASE_URL}}/streams/s-1/receipt
+Example: curl https://steamplay.onrender.com/streams/s-1/receipt
 Response: {"payer":"agent-a","payee":"agent-b","amount":500,"status":"closed"}
 
 ### POST /streams/{id}/refund
 Refund a closed stream, returning the debited funds to the payer.
 Only works on closed streams. Idempotent.
-Example: curl -X POST https://{{BASE_URL}}/streams/s-1/refund
+Example: curl -X POST https://steamplay.onrender.com/streams/s-1/refund
 Response: {"stream_id":"s-1","refund_amount":500,"refunded_to":"agent-a"}
 Error 409: {"error":"stream_still_open","detail":"Cannot refund open stream"}
 
 ### GET /streams?agent={agent_id}
 List all streams where the given agent is the payer or payee.
-Example: curl "https://{{BASE_URL}}/streams?agent=agent-a"
+Example: curl "https://steamplay.onrender.com/streams?agent=agent-a"
 Response: {"streams": [...], "count": 3}
 
 ## How the agent should use this
