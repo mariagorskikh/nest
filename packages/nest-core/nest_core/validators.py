@@ -4922,6 +4922,117 @@ def validate_sybil_bond_attempts_rejected(
         )
     ]
 
+def validate_or_set_convergence(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Trace validator: proves OR-Set semilattice convergence.
+
+    Checks three properties that the default blackboard memory violates:
+    1. Every replica's final state is a valid OR-Set envelope.
+    2. No tombstoned tag appears as an active element in any replica.
+    3. All replicas converge to byte-identical canonical state.
+
+    Example::
+        results = validate_or_set_convergence(events)
+        assert all(r.passed for r in results)
+    """
+    results: list[ValidationResult] = []
+
+    # Collect final states from all agents
+    final_states: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if event.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = event.get("msg", "")
+        if isinstance(msg, str) and msg.startswith("final:"):
+            agent = event.get("agent", "unknown")
+            try:
+                state = json.loads(msg[len("final:") :])
+                final_states[agent] = state
+            except json.JSONDecodeError:
+                results.append(
+                    ValidationResult(
+                        name="or_set_convergence",
+                        passed=False,
+                        detail=f"Agent {agent} emitted malformed final state",
+                    )
+                )
+
+    if len(final_states) < 2:
+        results.append(
+            ValidationResult(
+                name="or_set_convergence",
+                passed=False,
+                detail=f"Expected >=2 final states, got {len(final_states)}",
+            )
+        )
+        return results
+
+    # Check 1: Valid OR-Set envelope
+    for agent, state in final_states.items():
+        if state.get("crdt") != "or_set":
+            results.append(
+                ValidationResult(
+                    name="or_set_convergence",
+                    passed=False,
+                    detail=f"Agent {agent}: crdt field is '{state.get('crdt')}', expected 'or_set'",
+                )
+            )
+        if "elements" not in state or "tombstones" not in state:
+            results.append(
+                ValidationResult(
+                    name="or_set_convergence",
+                    passed=False,
+                    detail=f"Agent {agent}: missing 'elements' or 'tombstones' field",
+                )
+            )
+
+    # Check 2: No tombstoned tag is active
+    for agent, state in final_states.items():
+        elements: dict[str, str] = state.get("elements", {})
+        tombstones: list[str] = state.get("tombstones", [])
+        overlap = set(tombstones).intersection(set(elements.keys()))
+        if overlap:
+            results.append(
+                ValidationResult(
+                    name="or_set_convergence",
+                    passed=False,
+                    detail=f"Agent {agent}: active elements contain tombstoned tags: {overlap}",
+                )
+            )
+
+    # Check 3: All replicas converge to byte-identical canonical state
+    canonical_states: set[str] = set()
+    for _agent, state in final_states.items():
+        canonical = json.dumps(
+            {
+                "crdt": state.get("crdt"),
+                "elements": dict(sorted(state.get("elements", {}).items())),
+                "tombstones": sorted(state.get("tombstones", [])),
+            },
+            sort_keys=True,
+        )
+        canonical_states.add(canonical)
+
+    if len(canonical_states) > 1:
+        results.append(
+            ValidationResult(
+                name="or_set_convergence",
+                passed=False,
+                detail=f"Replicas diverged: {len(canonical_states)} distinct final states",
+            )
+        )
+    else:
+        results.append(
+            ValidationResult(
+                name="or_set_convergence",
+                passed=True,
+                detail=f"All {len(final_states)} replicas converged to identical OR-Set state",
+            )
+        )
+
+    return results
+
 
 VALIDATORS: dict[str, list[Any]] = {
     "sybil_bond": [
@@ -4975,6 +5086,10 @@ VALIDATORS: dict[str, list[Any]] = {
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
+        validate_memory_liveness,
+    ],
+    "memory_or_set_writers": [
+        validate_or_set_convergence,
         validate_memory_liveness,
     ],
     "streaming_payments": [

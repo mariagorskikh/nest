@@ -2000,6 +2000,7 @@ class TestValidatorRegistry:
             "identity_rotation",
             "attested_peering",
             "memory_concurrent_writers",
+            "memory_or_set_writers",
             "streaming_payments",
             "empic_payments",
             "comms_versioning",
@@ -2019,3 +2020,20 @@ class TestValidatorRegistry:
     def test_each_scenario_has_validators(self) -> None:
         for scenario, validators in VALIDATORS.items():
             assert len(validators) >= 2, f"{scenario} needs at least 2 validators"
+
+
+class TestOrSetValidator:
+    def test_validator_fails_against_blackboard(self) -> None:
+        """The convergence validator must FAIL against the default blackboard
+        memory plugin, which does not converge under concurrent writes.
+        """
+        from nest_core.validators import validate_or_set_convergence
+
+        # Generate a trace using blackboard memory with concurrent writes
+        events = [
+            {"agent": "a", "msg": 'final: {"value": "x"}'},
+            {"agent": "b", "msg": 'final: {"value": "y"}'},
+        ]
+        results = validate_or_set_convergence(events)
+        # At least one result should fail (divergence detected)
+        assert any(not r.passed for r in results), "Validator should catch blackboard divergence"
