@@ -38,6 +38,7 @@ authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
 
 [project.entry-points."nest.plugins.memory"]
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"
+embx_semantic = "nest_plugins_reference.memory.embx_semantic:EmbxSemanticMemory"
 
 [project.entry-points."nest.plugins.registry"]
 byzantine_gossip = "nest_plugins_reference.registry.byzantine_gossip:ByzantineGossipRegistry"
