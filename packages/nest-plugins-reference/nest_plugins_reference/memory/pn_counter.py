@@ -15,12 +15,18 @@ maps. That join is commutative, associative, and idempotent, so replicas that
 have seen the same deltas converge to the same total regardless of delivery
 order, duplication, or reordering.
 
-Trust model: this reference plugin assumes mutually trusted replicas and an
-adversary in the delivery layer: messages may be dropped, duplicated, delayed,
-or reordered, but peers do not forge another replica's coordinates. Serialized
-state is shape-validated, but there is no signature/authorship proof in the
-counter payload itself; Byzantine peer defense belongs in an authenticated
-wrapper or transport layer.
+Trust model: the primary adversary lives in the delivery layer -- messages may
+be dropped, duplicated, delayed, or reordered -- and the pointwise-max join is
+immune to all of that. On top of that, each replica *defends its own
+coordinate*: because a node knows exactly how much it has locally written, it
+clamps any incoming state that tries to inflate ``positive[self._node_id]`` or
+``negative[self._node_id]`` beyond that locally-observed truth (see
+``detected_forgeries``). This blocks the one Byzantine attack that a monotone
+CRDT would otherwise make permanent: a peer gossiping a forged coordinate for a
+node, which max would latch forever. Forging a *third* node's coordinate is
+still not detectable without per-contribution signatures, so cross-node
+authorship proof remains the job of an authenticated wrapper or transport
+layer; this plugin closes the self-coordinate hole and documents the rest.
 
 Example::
 
@@ -135,6 +141,11 @@ class PnCounterMemory:
         self._node_id = str(node_id)
         self._store: dict[str, CounterState] = {}
         self._subscribers: dict[str, list[asyncio.Queue[bytes]]] = {}
+        # Ground truth for this replica's own coordinate, accumulated only from
+        # local writes. Merges clamp incoming self-coordinates against this so a
+        # peer cannot forge (and, under max, permanently latch) our own tally.
+        self._local: dict[str, tuple[int, int]] = {}
+        self._forgeries = 0
 
     @property
     def node_id(self) -> str:
@@ -145,6 +156,19 @@ class PnCounterMemory:
             assert PnCounterMemory("a").node_id == "a"
         """
         return self._node_id
+
+    @property
+    def detected_forgeries(self) -> int:
+        """Count of merges that tried to inflate this node's own coordinate.
+
+        Each such merge is clamped back to locally-written truth rather than
+        accepted, so the forged value never wins a subsequent join.
+
+        Example::
+
+            assert PnCounterMemory("a").detected_forgeries == 0
+        """
+        return self._forgeries
 
     async def read(self, key: str) -> bytes | None:
         """Read the current signed total for ``key``.
@@ -169,10 +193,14 @@ class PnCounterMemory:
         current = self._store.get(key, CounterState({}, {}))
         positive = dict(current.positive)
         negative = dict(current.negative)
+        own_pos, own_neg = self._local.get(key, (0, 0))
         if delta > 0:
             positive[self._node_id] = positive.get(self._node_id, 0) + delta
+            own_pos += delta
         else:
             negative[self._node_id] = negative.get(self._node_id, 0) + abs(delta)
+            own_neg += abs(delta)
+        self._local[key] = (own_pos, own_neg)
         self._store[key] = CounterState(positive=positive, negative=negative)
         await self._notify(key)
 
@@ -243,7 +271,7 @@ class PnCounterMemory:
 
             changed = await mem.merge("score", other.export("score"))
         """
-        incoming = self._decode(state)
+        incoming = self._guard_own_coordinate(key, self._decode(state))
         current = self._store.get(key)
         if current is None:
             self._store[key] = incoming
@@ -271,6 +299,38 @@ class PnCounterMemory:
             if await self.merge(key, counters[key].encode()):
                 changed.append(key)
         return changed
+
+    def _guard_own_coordinate(self, key: str, incoming: CounterState) -> CounterState:
+        """Clamp an incoming state's self-coordinate to locally-written truth.
+
+        A peer may legitimately report a *lower* value for our coordinate (it
+        has not yet seen all our writes) -- the join's max restores our true
+        value, so that is left untouched. A *higher* value is impossible for an
+        honest peer to produce and is treated as forgery: the self-coordinate is
+        reset to what this replica actually wrote and ``detected_forgeries`` is
+        incremented. Other nodes' coordinates pass through unchanged.
+
+        Example::
+
+            state = mem._guard_own_coordinate("score", incoming)
+        """
+        own_pos, own_neg = self._local.get(key, (0, 0))
+        inc_pos = incoming.positive.get(self._node_id, 0)
+        inc_neg = incoming.negative.get(self._node_id, 0)
+        if inc_pos <= own_pos and inc_neg <= own_neg:
+            return incoming
+        self._forgeries += 1
+        positive = dict(incoming.positive)
+        negative = dict(incoming.negative)
+        if own_pos:
+            positive[self._node_id] = own_pos
+        else:
+            positive.pop(self._node_id, None)
+        if own_neg:
+            negative[self._node_id] = own_neg
+        else:
+            negative.pop(self._node_id, None)
+        return CounterState(positive=positive, negative=negative)
 
     async def _notify(self, key: str) -> None:
         value = await self.read(key)

@@ -110,11 +110,16 @@ The merge is commutative, associative, and idempotent. In the language of
 structured memory, convergence is not enough: the invariant is that every
 signed evidence contribution survives gossip exactly once.
 
-Trust model: `pn_counter` is a delivery-chaos CRDT, not a Byzantine-authorship
-protocol. It assumes replicas are mutually trusted and tests drops,
-duplication, reordering, and merge idempotence. Serialized state is
-shape-validated, but a malicious peer that can forge another node's coordinate
-must be blocked by an authenticated wrapper or transport layer.
+Trust model: `pn_counter` is primarily a delivery-chaos CRDT -- it tests drops,
+duplication, reordering, and merge idempotence, and the pointwise-max join is
+immune to all of them. On top of that it **defends its own coordinate**: a
+replica knows exactly how much it has locally written, so on merge it clamps any
+incoming state that tries to inflate `positive[self]` / `negative[self]` beyond
+that truth and counts it in `detected_forgeries`. This closes the one Byzantine
+hole a monotone CRDT would otherwise latch forever -- a peer forging *your*
+coordinate. Forging a *third* node's coordinate is still not detectable without
+per-contribution signatures, so cross-node authorship proof remains the job of
+an authenticated wrapper or transport layer.
 
 ```python
 a = PnCounterMemory("builder")
@@ -124,6 +129,38 @@ await b.write("calculator:ready_score", b'{"op":"dec","amount":1}')
 await a.merge("calculator:ready_score", b.export("calculator:ready_score"))
 await b.merge("calculator:ready_score", a.export("calculator:ready_score"))
 assert await a.read("calculator:ready_score") == b"1"
+```
+
+## Gated plugin: `basis_gated`
+
+`basis_gated` -- a thin `Memory` that wraps an inner counter (a `pn_counter` by
+default) and only lets a report become a delta if it *restricts onto a declared
+basis*. Where `pn_counter` answers "how do concurrent signed deltas converge
+without loss", `basis_gated` answers the second question that used to be buried
+in scenario glue: "which reports are even allowed to fuse". It validates every
+`write`/`fuse` before anything reaches the inner counter:
+
+```text
+declare: node -> {basis dimensions}
+fuse(report) accepts iff report is a JSON object whose `node` is declared and
+whose `basis` is one of that node's dimensions, and (node, basis) has not fused
+before; otherwise it is ignored (not-json / not-object / no-overlap /
+outside-basis / duplicate) and never written.
+```
+
+This makes "memory that only fuses legal evidence" a reusable layer artifact
+rather than a property of one bespoke agent: context saturation -- a wall of
+natural-language or code-shaped text -- has no `node`/`basis` that restricts
+onto the task, so it is ignored no matter how large or plausible it looks.
+`read`/`subscribe`/`cas` and the CRDT gossip helpers delegate to the inner
+counter, so a basis-gated counter still converges across replicas exactly like a
+plain `pn_counter`.
+
+```python
+mem = BasisGatedMemory("coordinator", bases={"calculator": {"add", "divide"}})
+outcome = await mem.fuse("calculator:ready_score", b'{"node":"calculator","basis":"add"}')
+assert outcome.accepted
+assert await mem.read("calculator:ready_score") == b"1"
 ```
 
 ### Demo scenario
@@ -144,9 +181,11 @@ for r in validate_trace(Path('traces/memory_pn_counter_reports.jsonl'), 'memory_
 ```
 
 `scenarios/memory_basis_fusion_calculator.yaml` -- a coordinator acts like a
-small typed memory brain. This is scenario-level policy layered on top of the
-PN-Counter: `pn_counter` preserves signed deltas, while the coordinator decides
-which reports may become deltas. Reports can fuse into the `calculator` node only if
+small typed memory brain. The basis gate lives in the [`basis_gated`](#gated-plugin-basis_gated)
+memory plugin (`BasisGatedMemory` wrapping `pn_counter`): `pn_counter` preserves
+signed deltas, and the wrapper decides which reports may become deltas. The
+coordinator just forwards raw reports to `memory.fuse` and traces the decision.
+Reports can fuse into the `calculator` node only if
 they restrict onto one of its declared basis dimensions: `add`, `subtract`,
 `multiply`, or `divide`. A frozen Project Gutenberg excerpt is used as a
 public-domain context-saturation payload with no legal overlap, and an

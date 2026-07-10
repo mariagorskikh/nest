@@ -7,10 +7,12 @@ onto an existing basis dimension. A public-domain context-saturation payload
 has no ``node`` and no valid ``basis`` field, so it cannot glue to the
 calculator node and cannot change the decision.
 
-The coordinator writes accepted evidence into ``pn_counter`` memory and ships
-the calculator only after all required basis dimensions have fused. The basis
-gate is scenario-level policy: ``pn_counter`` preserves signed deltas, while
-this coordinator decides which reports are allowed to become deltas.
+The basis gate itself lives in the memory layer: the coordinator's memory is a
+``basis_gated`` plugin (``BasisGatedMemory``) wrapping a ``pn_counter``. The
+coordinator forwards each raw report to ``memory.fuse`` and merely traces the
+accept/ignore decision the memory returns; the memory is what validates
+fusability and writes the signed delta into the underlying counter. It ships the
+calculator only after all required basis dimensions have fused.
 
 Example::
 
@@ -21,11 +23,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from nest_core.scenario import ScenarioConfig
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId
+
+if TYPE_CHECKING:
+    from nest_plugins_reference.memory.basis_gated_memory import BasisGatedMemory
 
 _CHECK = b"check"
 _REPORT_PREFIX = "fusion_report|"
@@ -77,11 +82,8 @@ class FusionCoordinatorAgent(StateMachineAgent):
         threshold: int,
     ) -> None:
         self._id = agent_id
-        self._required_basis = set(required_basis)
+        self._required_basis = frozenset(required_basis)
         self._threshold = threshold
-        self._accepted_basis: set[str] = set()
-        self._accepted_reports: set[tuple[str, str]] = set()
-        self._ignored = 0
         self._shipped = False
 
     async def on_start(self, ctx: AgentContext) -> None:
@@ -109,38 +111,17 @@ class FusionCoordinatorAgent(StateMachineAgent):
             await self._maybe_ship(ctx)
             return
 
-        text = payload.decode("utf-8", errors="replace")
-        if not text.startswith(_REPORT_PREFIX):
+        prefix = _REPORT_PREFIX.encode()
+        if not payload.startswith(prefix):
             return
-        body = text[len(_REPORT_PREFIX) :]
-        try:
-            report_obj = json.loads(body)
-        except ValueError:
-            await self._ignore(ctx, sender, "not-json")
-            return
-        if not isinstance(report_obj, dict):
-            await self._ignore(ctx, sender, "not-object")
-            return
-        report = cast("dict[str, object]", report_obj)
-        node = report.get("node")
-        basis = report.get("basis")
-        if node != "calculator" or not isinstance(basis, str):
-            await self._ignore(ctx, sender, "no-overlap")
-            return
-        if basis not in self._required_basis:
-            await self._ignore(ctx, sender, "outside-basis")
-            return
-
-        report_key = (str(sender), basis)
-        if report_key in self._accepted_reports:
-            await self._ignore(ctx, sender, "duplicate")
-            return
-        self._accepted_reports.add(report_key)
-        self._accepted_basis.add(basis)
-        mem = ctx.plugins["memory"]
-        await mem.write("calculator:ready_score", b'{"op":"inc","amount":1}')
-        await ctx.broadcast(f"{_ACCEPT_PREFIX}calculator|{basis}|{sender}".encode())
-        await ctx.broadcast(b"pn_delta|calculator:ready_score|1")
+        body = payload[len(prefix) :]
+        mem = cast("BasisGatedMemory", ctx.plugins["memory"])
+        outcome = await mem.fuse("calculator:ready_score", body)
+        if outcome.accepted:
+            await ctx.broadcast(f"{_ACCEPT_PREFIX}calculator|{outcome.basis}|{sender}".encode())
+            await ctx.broadcast(b"pn_delta|calculator:ready_score|1")
+        else:
+            await ctx.broadcast(f"{_IGNORE_PREFIX}{sender}|{outcome.reason}".encode())
 
     async def on_stop(self, ctx: AgentContext) -> None:
         """Broadcast final fused counter state for validators.
@@ -154,20 +135,16 @@ class FusionCoordinatorAgent(StateMachineAgent):
         if state is not None:
             await ctx.broadcast(_FINAL_PREFIX.encode() + state)
 
-    async def _ignore(self, ctx: AgentContext, sender: AgentId, reason: str) -> None:
-        self._ignored += 1
-        await ctx.broadcast(f"{_IGNORE_PREFIX}{sender}|{reason}".encode())
-
     async def _maybe_ship(self, ctx: AgentContext) -> None:
         if self._shipped:
             return
-        mem = ctx.plugins["memory"]
+        mem = cast("BasisGatedMemory", ctx.plugins["memory"])
         raw = await mem.read("calculator:ready_score")
         score = int(raw or b"0")
-        if self._accepted_basis == self._required_basis and score >= self._threshold:
+        if mem.fused_basis("calculator") == self._required_basis and score >= self._threshold:
             self._shipped = True
             await ctx.broadcast(
-                f"{_DECISION_PREFIX}calculator|ship|score={score}|ignored={self._ignored}".encode()
+                f"{_DECISION_PREFIX}calculator|ship|score={score}|ignored={mem.ignored}".encode()
             )
 
 
@@ -217,6 +194,13 @@ def memory_basis_fusion_calculator_factory(
         aid = AgentId(name)
         agents[aid] = FusionReporterAgent(aid, coordinator, payload)
 
+    from nest_plugins_reference.memory.basis_gated_memory import BasisGatedMemory
+
     memory_cls = plugins["memory"]
-    plugins["_agent_plugins"] = {coordinator: {"memory": memory_cls(str(coordinator))}}
+    gated = BasisGatedMemory(
+        str(coordinator),
+        bases={"calculator": set(required_basis)},
+        inner=memory_cls(str(coordinator)),
+    )
+    plugins["_agent_plugins"] = {coordinator: {"memory": gated}}
     return agents

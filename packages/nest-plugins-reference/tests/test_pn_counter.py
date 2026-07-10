@@ -255,6 +255,49 @@ class TestCalculatorNoiseScenario:
         assert await noisy.read("calculator:ready_score") == b"3"
 
 
+class TestByzantineSelfCoordinate:
+    _forged = b'{"crdt":"pn_counter","positive":{"a":1000},"negative":{}}'
+
+    @pytest.mark.asyncio
+    async def test_forged_own_coordinate_is_clamped(self) -> None:
+        mem = PnCounterMemory("a")
+        await mem.write("score", b'{"op":"inc","amount":3}')
+        # A byzantine peer gossips a state inflating this node's own coordinate.
+        # Under plain pointwise-max that forgery would win and never retract.
+        assert await mem.merge("score", self._forged) is False
+        assert await mem.read("score") == b"3"
+        assert mem.detected_forgeries == 1
+
+    @pytest.mark.asyncio
+    async def test_forgery_cannot_win_after_repeated_merges(self) -> None:
+        mem = PnCounterMemory("a")
+        await mem.write("score", b'{"op":"inc","amount":3}')
+        for _ in range(3):
+            await mem.merge("score", self._forged)
+        assert await mem.read("score") == b"3"
+        assert mem.detected_forgeries == 3
+
+    @pytest.mark.asyncio
+    async def test_stale_lower_own_coordinate_is_not_flagged(self) -> None:
+        mem = PnCounterMemory("a")
+        await mem.write("score", b'{"op":"inc","amount":5}')
+        # A peer that has only seen 2 of our 5 increments is honest, not forging.
+        stale = b'{"crdt":"pn_counter","positive":{"a":2},"negative":{}}'
+        await mem.merge("score", stale)
+        assert await mem.read("score") == b"5"
+        assert mem.detected_forgeries == 0
+
+    @pytest.mark.asyncio
+    async def test_foreign_coordinate_is_not_defended(self) -> None:
+        # Documented boundary: a node only defends its own coordinate. Forging a
+        # third node's coordinate still needs per-contribution signatures.
+        mem = PnCounterMemory("a")
+        forged_b = b'{"crdt":"pn_counter","positive":{"b":1000},"negative":{}}'
+        await mem.merge("score", forged_b)
+        assert await mem.read("score") == b"1000"
+        assert mem.detected_forgeries == 0
+
+
 class TestRegistry:
     def test_builtin_resolves(self) -> None:
         assert PluginRegistry().resolve("memory", "pn_counter") is PnCounterMemory
