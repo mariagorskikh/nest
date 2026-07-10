@@ -272,11 +272,21 @@ def validate_auction_winner_highest(
                 winners[item] = (bidder, amount)
 
     violations: list[str] = []
-    for item, (_winner, winning_amount) in winners.items():
-        for bidder, amount in bids.get(item, []):
-            if amount > winning_amount:
+    for item, (winner, winning_amount) in winners.items():
+        item_bids = bids.get(item, [])
+        # The invariant is about the winner's REAL bid, not the announced
+        # amount. Trusting the announced amount lets an auctioneer award a low
+        # bidder while announcing a figure inflated past every real bid, and the
+        # check would pass. Use the winner's own highest observed bid; fall back
+        # to the announced amount only when the winner's bid was not observed
+        # (e.g. dropped under message loss), so this never fails a valid trace.
+        winner_bids = [amount for bidder, amount in item_bids if bidder == winner]
+        effective_winner_bid = max(winner_bids) if winner_bids else winning_amount
+        for bidder, amount in item_bids:
+            if amount > effective_winner_bid:
                 violations.append(
-                    f"item {item}: winner bid {winning_amount} but {bidder} bid {amount}"
+                    f"item {item}: winner {winner} bid {effective_winner_bid} "
+                    f"but {bidder} bid {amount}"
                 )
                 break
 
@@ -1945,6 +1955,7 @@ def validate_empic_pubsub_billing_caps(
         result = validate_empic_pubsub_billing_caps(events)[0]
     """
     audit = _empic_audit_events(events)
+    stream_refs: set[str] = set()
     streams: dict[str, tuple[int, int]] = {}
     accepted: dict[str, set[str]] = defaultdict(set)
     released: dict[str, int] = defaultdict(int)
@@ -1956,21 +1967,25 @@ def validate_empic_pubsub_billing_caps(
         if not ref:
             continue
         if event_type == "empic_stream_opened":
+            stream_refs.add(ref)
             rate = _safe_amount(ev.get("rate_per_tick"))
             max_total = _safe_amount(ev.get("max_total") or ev.get("amount"))
             if rate <= 0 or max_total <= 0:
                 violations.append(f"{ref}: invalid stream terms rate={rate} max_total={max_total}")
             else:
                 streams[ref] = (rate, max_total)
-        elif (
+            continue
+
+        is_pubsub_ref = ref in stream_refs or ev.get("mode") == "pubsub"
+        if (
             event_type == "empic_delivery_evaluated"
             and ev.get("accepted") is True
-            and ev.get("mode") == "pubsub"
+            and is_pubsub_ref
         ):
             delivery_id = _empic_delivery_id(ev)
             if delivery_id:
                 accepted[ref].add(delivery_id)
-        elif event_type == "empic_escrow_released" and ev.get("mode") == "pubsub":
+        elif event_type == "empic_escrow_released" and is_pubsub_ref:
             amount = _safe_amount(ev.get("amount"))
             delivery_id = _empic_delivery_id(ev)
             terms = streams.get(ref)
@@ -2404,7 +2419,7 @@ def validate_empic_no_drain_after_close(
                 close_tick[ref] = _event_tick(ev)
 
     for ev in audit:
-        if ev.get("event_type") != "empic_escrow_released" or ev.get("mode") != "pubsub":
+        if ev.get("event_type") != "empic_escrow_released":
             continue
         ref = str(ev.get("payment_ref", ""))
         closed_at = close_tick.get(ref)
@@ -2458,7 +2473,7 @@ def validate_empic_no_overbill_on_partition(
                 partition_start[edge] = tick
 
     for ev in audit:
-        if ev.get("event_type") != "empic_escrow_released" or ev.get("mode") != "pubsub":
+        if ev.get("event_type") != "empic_escrow_released":
             continue
         ref = str(ev.get("payment_ref", ""))
         parties = stream_parties.get(ref)
@@ -2879,6 +2894,130 @@ def validate_comms_no_silent_drop(
 
 
 # ---------------------------------------------------------------------------
+# Comms downgrade-attack validator (adversarial)
+# ---------------------------------------------------------------------------
+# Ground truth for "was this envelope tampered?" is recomputed from the bytes a
+# receiver actually saw, independent of the decoder under test: an envelope that
+# carries an ``auth_tag`` is authentic iff that tag still covers its canonical
+# content. A comms layer passes iff it *rejects* every envelope whose tag no
+# longer verifies (rollback / field-strip) while still *accepting* the authentic
+# ones. ``versioned`` and ``nest_native`` have no tag concept, so they accept the
+# tampered copies and fail; ``authenticated`` rejects them and passes.
+
+
+def _collect_downgrade_wire(
+    events: list[dict[str, Any]],
+) -> dict[str, bool]:
+    """Map each delivered tagged envelope id to whether its ``auth_tag`` verifies.
+
+    Only envelopes that actually carry a tag are judged; untagged legacy traffic
+    is out of scope for this check. ``True`` means authentic (tag matches the
+    recomputed value), ``False`` means tampered.
+
+    Example::
+
+        authentic_by_id = _collect_downgrade_wire(events)
+    """
+    from nest_plugins_reference.comms.authenticated import (
+        AUTH_TAG_FIELD,
+        expected_auth_tag,
+    )
+
+    authentic: dict[str, bool] = {}
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        env = _parse_comms_envelope(str(ev.get("msg", "")))
+        if env is None or AUTH_TAG_FIELD not in env:
+            continue
+        mid = str(env.get("id"))
+        carried = str(env.get(AUTH_TAG_FIELD))
+        authentic[mid] = carried == expected_auth_tag(env)
+    return authentic
+
+
+def validate_comms_downgrade_resistance(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must reject envelopes whose authentication tag no longer covers them.
+
+    Catches the *silent-downgrade* attack: an on-path adversary rewrites an
+    authentic envelope (rolls ``schema_version`` back, or strips a field) and
+    leaves the stale tag in place. ``authenticated`` recomputes the tag and
+    refuses the forgery; ``versioned``/``nest_native`` have no tag and accept it.
+
+    Example::
+
+        results = validate_comms_downgrade_resistance(events)
+    """
+    authentic = _collect_downgrade_wire(events)
+    acks = _collect_comms_acks(events)
+    if not authentic:
+        return [
+            ValidationResult("comms_downgrade_resistance", False, "no tagged envelopes in trace")
+        ]
+    violations: list[str] = []
+    tampered_checked = 0
+    for mid, is_authentic in authentic.items():
+        if is_authentic:
+            continue
+        tampered_checked += 1
+        status = acks.get(mid)
+        outcome = status[0] if status is not None else "no ack"
+        if not outcome.startswith("rejected"):
+            violations.append(f"{mid}: tampered envelope not rejected (got {outcome})")
+    if violations:
+        return [ValidationResult("comms_downgrade_resistance", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_downgrade_resistance",
+            True,
+            f"{tampered_checked} tampered envelope(s) correctly rejected",
+        )
+    ]
+
+
+def validate_comms_authentic_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must still accept *authentic* envelopes (no false positives).
+
+    The liveness counterpart to
+    :func:`validate_comms_downgrade_resistance`: a plugin must not "pass" the
+    security check by rejecting everything. Every delivered envelope whose tag
+    verifies has to be accepted, so tamper-evidence does not break the honest
+    rolling-upgrade traffic it rides alongside.
+
+    Example::
+
+        results = validate_comms_authentic_delivery(events)
+    """
+    authentic = _collect_downgrade_wire(events)
+    acks = _collect_comms_acks(events)
+    if not authentic:
+        return [ValidationResult("comms_authentic_delivery", False, "no tagged envelopes in trace")]
+    violations: list[str] = []
+    honest_checked = 0
+    for mid, is_authentic in authentic.items():
+        if not is_authentic:
+            continue
+        honest_checked += 1
+        status = acks.get(mid)
+        outcome = status[0] if status is not None else "no ack"
+        if outcome != "accepted":
+            violations.append(f"{mid}: authentic envelope not accepted (got {outcome})")
+    if violations:
+        return [ValidationResult("comms_authentic_delivery", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_authentic_delivery",
+            True,
+            f"{honest_checked} authentic envelope(s) correctly accepted",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Receipt-reputation (collusion-ring) validators
 # ---------------------------------------------------------------------------
 
@@ -3287,6 +3426,216 @@ def validate_receipt_reputation_honest_confidence(
             "receipt_reputation_honest_confidence",
             True,
             f"{len(honest_conf)} honest corroborated, {len(ring_conf)} ring collapsed to 0",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Rogue-trusted-agent (pre-action permit gate) validators
+#
+# The rogue_trusted_agent scenario broadcasts ``:``-delimited lines (see
+# nest_core.scenarios_builtin.rogue_trusted_agent). A veteran with a strong
+# in-policy record makes one out-of-policy attempt; the trace self-declares it
+# with a ``rogue_attempt:`` line so these validators need no policy table. Under
+# a plugin with a pre-action gate the attempt is refused (``permit:...:denied``
+# + ``blocked:``) and never runs; under a plugin with no gate it ``exec:``s.
+# ---------------------------------------------------------------------------
+
+# The veteran must have executed at least this many in-policy actions before the
+# rogue attempt, so "a high-reputation agent is still refused" is grounded.
+_ROGUE_MIN_REPUTATION = 3
+
+
+def _rogue_declaration(events: list[dict[str, Any]]) -> tuple[str, str, str] | None:
+    """Return the first declared rogue ``(agent, verb, resource)``, or ``None``.
+
+    Example::
+
+        pair = _rogue_declaration(events)
+    """
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("rogue_attempt:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 4:
+            return parts[1], parts[2], parts[3]
+    return None
+
+
+def _rogue_triples(events: list[dict[str, Any]], prefix: str) -> list[tuple[str, str, str]]:
+    """Collect ``(agent, verb, resource)`` triples from lines with ``prefix``.
+
+    Preserves trace order. Used for ``exec:`` and ``blocked:`` lines and, with a
+    trailing field trimmed, for the ``permit:`` lines.
+
+    Example::
+
+        execs = _rogue_triples(events, "exec:")
+    """
+    out: list[tuple[str, str, str]] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith(prefix):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 4:
+            out.append((parts[1], parts[2], parts[3]))
+    return out
+
+
+def _rogue_permits(events: list[dict[str, Any]]) -> list[tuple[str, str, str, str]]:
+    """Collect ``(agent, verb, resource, outcome)`` from ``permit:`` lines.
+
+    ``permit_env:`` lines are excluded — their prefix is not ``permit:``.
+
+    Example::
+
+        decisions = _rogue_permits(events)
+    """
+    out: list[tuple[str, str, str, str]] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("permit:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 5:
+            out.append((parts[1], parts[2], parts[3], parts[4]))
+    return out
+
+
+def validate_rogue_trusted_agent_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The declared out-of-policy attempt is refused and never executes.
+
+    Reads the trace the scenario emits — never a policy table — and holds iff:
+
+    * a ``rogue_attempt:`` line declares the veteran's out-of-policy pair,
+    * **no** ``exec:`` line runs that pair (it did not execute), and
+    * a ``permit:...:denied`` line refused that exact pair.
+
+    ``score_average`` FAILS this: with no pre-action gate the veteran acts
+    unconditionally, so an ``exec:`` line for the rogue pair is present.
+    ``aae_permit_gate`` PASSES: it returns a signed denial and the action is
+    blocked. A trace that never declared a rogue attempt also fails — without
+    crashing on either layer.
+
+    Example::
+
+        results = validate_rogue_trusted_agent_blocked(events)
+    """
+    rogue = _rogue_declaration(events)
+    if rogue is None:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                "no rogue_attempt declared in trace",
+            )
+        ]
+    agent, verb, resource = rogue
+    executed = rogue in _rogue_triples(events, "exec:")
+    denied = any(
+        (a, v, r) == rogue and outcome == "denied" for a, v, r, outcome in _rogue_permits(events)
+    )
+
+    if executed:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                f"rogue action executed: {agent} ran {verb} on {resource} "
+                "(no pre-action gate refused it)",
+            )
+        ]
+    if not denied:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                f"rogue action neither executed nor refused: {agent} {verb} {resource} "
+                "has no signed denial",
+            )
+        ]
+    return [
+        ValidationResult(
+            "rogue_trusted_agent_blocked",
+            True,
+            f"rogue action refused and blocked: {agent} denied {verb} on {resource}",
+        )
+    ]
+
+
+def validate_rogue_trusted_agent_reputation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Reputation was earned first, and no in-policy action was refused.
+
+    Two defense-in-depth invariants that ground the demonstration:
+
+    * the veteran executed at least ``_ROGUE_MIN_REPUTATION`` in-policy actions
+      *before* its rogue attempt — so "a high-reputation agent is still refused"
+      is real, not asserted, and
+    * every refusal in the trace names the declared rogue pair — a permit gate
+      that spuriously denied an in-policy action would be caught here.
+
+    Holds under both layers (it does not depend on the rogue being blocked), so
+    it corroborates the primary check rather than duplicating it. Never crashes.
+
+    Example::
+
+        results = validate_rogue_trusted_agent_reputation(events)
+    """
+    rogue = _rogue_declaration(events)
+    if rogue is None:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_reputation",
+                False,
+                "no rogue_attempt declared in trace",
+            )
+        ]
+    veteran, _verb, _resource = rogue
+
+    # In-policy executions by the veteran, in trace order, before the rogue pair.
+    prior = 0
+    for a, v, r in _rogue_triples(events, "exec:"):
+        if (a, v, r) == rogue:
+            break
+        if a == veteran:
+            prior += 1
+
+    problems: list[str] = []
+    if prior < _ROGUE_MIN_REPUTATION:
+        problems.append(
+            f"veteran executed only {prior} in-policy action(s) before the rogue attempt "
+            f"(need >= {_ROGUE_MIN_REPUTATION} to prove reputation is irrelevant)"
+        )
+    spurious = [
+        (a, v, r)
+        for a, v, r, outcome in _rogue_permits(events)
+        if outcome == "denied" and (a, v, r) != rogue
+    ]
+    if spurious:
+        problems.append(
+            "in-policy actions spuriously denied: "
+            + ", ".join(f"{a}:{v}:{r}" for a, v, r in sorted(set(spurious)))
+        )
+
+    if problems:
+        return [ValidationResult("rogue_trusted_agent_reputation", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "rogue_trusted_agent_reputation",
+            True,
+            f"veteran earned {prior} in-policy actions; every refusal was the declared rogue pair",
         )
     ]
 
@@ -4186,6 +4535,104 @@ def validate_failure_detection_completeness(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Portable-reputation (PARC) migration validators
+#
+# The parc_migration scenario broadcasts one ``admit:<agent>:<decision>:
+# <reason>:<role>`` line per border decision. The six checks below each pin
+# one attack class the naive signature-trusting gate would miss (or one
+# retention property a degenerate deny-everything gate would break). Together
+# they prove the headline invariant: a valid signature is not admission.
+# ---------------------------------------------------------------------------
+
+
+def _collect_admissions(
+    events: list[dict[str, Any]],
+) -> dict[str, tuple[bool, str, str]]:
+    """Parse ``admit:<agent>:<granted|denied>:<reason>:<role>`` trace lines.
+
+    Returns ``agent -> (admitted, reason, role)`` using the last decision per
+    agent. Decisions come from the live gate against the configured trust
+    plugin, so this dict is what lets the validators discriminate between a
+    recomputing gate and a naive one.
+
+    Example::
+
+        admissions = _collect_admissions(events)
+    """
+    admissions: dict[str, tuple[bool, str, str]] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("admit:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 5:
+            continue
+        agent, decision, reason, role = parts[1], parts[2], parts[3], parts[4]
+        admissions[agent] = (decision == "granted", reason, role)
+    return admissions
+
+
+def _admissions_for_role(
+    events: list[dict[str, Any]],
+    role: str,
+) -> dict[str, tuple[bool, str]]:
+    """The ``agent -> (admitted, reason)`` decisions for one population role.
+
+    Example::
+
+        ring = _admissions_for_role(events, "ring")
+    """
+    return {
+        agent: (admitted, reason)
+        for agent, (admitted, reason, r) in _collect_admissions(events).items()
+        if r == role
+    }
+
+
+def _validate_role_denied(
+    events: list[dict[str, Any]],
+    *,
+    name: str,
+    role: str,
+    expected_reason: str,
+) -> list[ValidationResult]:
+    """Shared check: every agent of ``role`` is denied with ``expected_reason``.
+
+    Fails when the population was never exercised (no decisions observed for
+    the role — a gate that crashes or stays silent must not pass), when any
+    member was admitted, or when the denial carries the wrong reason (a gate
+    that denies for an accidental reason is not demonstrating the defense the
+    validator is named for).
+
+    Example::
+
+        results = _validate_role_denied(events, name="parc_forgery_rejected",
+                                        role="forged",
+                                        expected_reason="proof_invalid")
+    """
+    decisions = _admissions_for_role(events, role)
+    if not decisions:
+        return [ValidationResult(name, False, f"no admission decisions observed for role {role!r}")]
+    problems: list[str] = []
+    for agent, (admitted, reason) in sorted(decisions.items()):
+        if admitted:
+            problems.append(f"{agent} was admitted")
+        elif reason != expected_reason:
+            problems.append(f"{agent} denied with {reason!r}, expected {expected_reason!r}")
+    if problems:
+        return [ValidationResult(name, False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            name,
+            True,
+            f"{len(decisions)} {role} agent(s) denied with {expected_reason!r}",
+        )
+    ]
+
+
 def validate_failure_detection_accuracy(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -4291,15 +4738,458 @@ def validate_failure_detection_accuracy(
     return [accuracy, recovery]
 
 
+def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Every honest migrant is admitted — the gate retains genuine reputation.
+
+    Guards against the degenerate defense: a gate that denies everything
+    trivially "catches" every attack. Portability only holds if honest
+    credentials actually cross the border.
+
+    Example::
+
+        results = validate_parc_honest_admitted(events)
+    """
+    decisions = _admissions_for_role(events, "honest")
+    if not decisions:
+        return [
+            ValidationResult(
+                "parc_honest_admitted", False, "no admission decisions observed for role 'honest'"
+            )
+        ]
+    denied = {a: reason for a, (admitted, reason) in decisions.items() if not admitted}
+    if denied:
+        detail = ", ".join(f"{a} ({reason})" for a, reason in sorted(denied.items()))
+        return [ValidationResult("parc_honest_admitted", False, f"honest denied: {detail}")]
+    return [
+        ValidationResult("parc_honest_admitted", True, f"{len(decisions)} honest agent(s) admitted")
+    ]
+
+
+def validate_parc_forgery_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A credential with tampered proof bytes is denied as ``proof_invalid``.
+
+    The naive gate never checks the proof against the recomputed canonical
+    payload, so the forged credential sails through it.
+
+    Example::
+
+        results = validate_parc_forgery_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_forgery_rejected",
+        role="forged",
+        expected_reason="proof_invalid",
+    )
+
+
+def validate_parc_inflation_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """An inflated score from a *trusted* issuer is denied as ``score_mismatch``.
+
+    The headline property: the credential's signature is genuine and its
+    issuer is trusted, yet recomputing the nanda-rep/0.2 scores from the
+    carried receipts exposes the inflated claim. A gate that trusts signed
+    claims (the naive baseline) admits it and FAILS this validator.
+
+    Example::
+
+        results = validate_parc_inflation_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_inflation_rejected",
+        role="inflated",
+        expected_reason="score_mismatch",
+    )
+
+
+def validate_parc_ring_severed(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Wash-ring members are denied via whole-graph severance at the border.
+
+    Each ring member's *inline* credential is individually corroborated (a
+    single-subject ledger is a star and cannot show the ring), so inline
+    recomputation alone admits it. Only re-running collusion severance over
+    the originating domain's published ledger reveals the isolated dense
+    component — the reason must therefore be ``severed_below_threshold``.
+
+    Example::
+
+        results = validate_parc_ring_severed(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_ring_severed",
+        role="ring",
+        expected_reason="severed_below_threshold",
+    )
+
+
+def validate_parc_replay_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A stolen (genuine) credential presented by a non-subject is denied.
+
+    The credential itself verifies — it was honestly issued to someone else.
+    Admission must bind the presenter to ``credentialSubject.id``
+    (``replay_presenter_mismatch``), or any bystander can borrow reputation.
+
+    Example::
+
+        results = validate_parc_replay_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_replay_rejected",
+        role="replay",
+        expected_reason="replay_presenter_mismatch",
+    )
+
+
+def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A credential signed with a rotated-out issuer key is denied as ``stale_key``.
+
+    The signature bytes are cryptographically valid under the old key; what
+    fails is the identity layer's key-rotation window as-of the credential's
+    ``validFrom`` tick. This is the cross-layer check a trust plugin that
+    ignores the identity layer cannot perform.
+
+    Example::
+
+        results = validate_parc_stale_key_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_stale_key_rejected",
+        role="stale",
+        expected_reason="stale_key",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attested-peering trust validators
+# ---------------------------------------------------------------------------
+
+
+def _attested_observer_lines(events: list[dict[str, Any]]) -> list[str]:
+    """Return the observer's audit-line message bodies (deduped send events).
+
+    The observer emits ``verdict:``/``report:``/``repscore:`` lines by sending
+    them to the victim sink, so each line appears once as a ``send`` and once
+    as a ``receive``; we read only the authoritative ``send`` events.
+
+    Example::
+
+        lines = _attested_observer_lines(events)
+    """
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send" or ev.get("agent") != "observer":
+            continue
+        lines.append(str(ev.get("msg", "")))
+    return lines
+
+
+def _attested_verdicts(lines: list[str]) -> dict[str, tuple[str, bool, bool, bool]]:
+    """Parse ``verdict:`` lines into ``reporter -> (decision, foe, data, work)``.
+
+    Example::
+
+        verdicts = _attested_verdicts(_attested_observer_lines(events))
+    """
+    verdicts: dict[str, tuple[str, bool, bool, bool]] = {}
+    for line in lines:
+        if not line.startswith("verdict:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 7:
+            continue
+        _, reporter, _claimed, decision, foe, data, work = parts
+        verdicts[reporter] = (decision, foe == "1", data == "1", work == "1")
+    return verdicts
+
+
+def validate_attested_no_denied_admitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No peer with a failed (DENY) verdict ever has its evidence admitted.
+
+    The core safety invariant of the attested-peering gate: admission implies
+    an ALLOW verdict, and every ALLOW verdict has all three checks green
+    (friend-or-foe, trust-my-data, who-you-work-for). A trace with no verdict
+    lines (a baseline trust plugin that runs no handshake) cannot violate this
+    and passes vacuously.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+    verdicts = _attested_verdicts(lines)
+
+    if not verdicts:
+        return [
+            ValidationResult(
+                "attested_no_denied_admitted",
+                True,
+                "no attested-peering verdicts in trace (baseline plugin, nothing to gate)",
+            )
+        ]
+
+    violations: list[str] = []
+    for decision, foe, data, work in verdicts.values():
+        if decision == "ALLOW" and not (foe and data and work):
+            violations.append("ALLOW verdict with a failed check (inconsistent gate)")
+            break
+
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        entry = verdicts.get(reporter)
+        if entry is None:
+            violations.append(f"{reporter}: admitted with no verdict")
+        elif entry[0] != "ALLOW":
+            violations.append(f"{reporter}: admitted despite {entry[0]} verdict")
+
+    if violations:
+        return [ValidationResult("attested_no_denied_admitted", False, "; ".join(violations))]
+    allowed = sum(1 for v in verdicts.values() if v[0] == "ALLOW")
+    return [
+        ValidationResult(
+            "attested_no_denied_admitted",
+            True,
+            f"{allowed}/{len(verdicts)} peers admitted, all with an ALLOW verdict",
+        )
+    ]
+
+
+def validate_attested_sybil_quarantined(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An unauthenticated Sybil swarm cannot defame the honest victim.
+
+    Honest reporters file positive evidence, so an ungamed reputation sits at
+    or above the neutral prior (``0.5``); only *admitted* negative evidence can
+    push it below. The attested-peering gate quarantines every unattested
+    reporter, so the victim's score stays high. Under a baseline plugin with no
+    gate (``trust: score_average``) the Sybil swarm's negatives are admitted and
+    the score collapses below ``0.5`` — this validator FAILs there and PASSes
+    under ``trust: attested_peering``.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+
+    score: float | None = None
+    samples: int | None = None
+    for line in lines:
+        if not line.startswith("repscore:"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4 and parts[1] == "victim":
+            score = float(parts[2])
+            samples = int(parts[3])
+    if score is None or samples is None:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "no repscore:victim line found in trace (scenario setup failure)",
+            )
+        ]
+
+    verdicts = _attested_verdicts(lines)
+    admitted_attackers: list[str] = []
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        if not reporter.startswith("honest-"):
+            admitted_attackers.append(reporter)
+
+    if score < 0.5:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                (
+                    f"victim reputation {score:.3f} < 0.5 over {samples} admitted report(s) — "
+                    "an unauthenticated swarm manufactured a negative consensus (gate absent)"
+                ),
+            )
+        ]
+    if admitted_attackers:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "non-honest reporters admitted despite the gate: "
+                f"{sorted(set(admitted_attackers))}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "attested_sybil_quarantined",
+            True,
+            (
+                f"victim reputation {score:.3f} from {samples} attested report(s); "
+                f"{len([v for v in verdicts.values() if v[0] == 'DENY'])} unattested peer(s) "
+                "quarantined"
+            ),
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
 
+_SYBIL_FLOOR = 0.0
+"""Untrusted-floor score an unbonded identity may not exceed."""
+
+
+def _trustscores(events: list[dict[str, Any]]) -> dict[str, float]:
+    """Extract ``{agent: score}`` from ``trustscore:<agent>:<score>`` events.
+
+    The ``sybil_bond`` observer broadcasts one such event per agent after driving
+    the configured trust plugin, so these scores are the plugin's own verdict.
+    """
+    scores: dict[str, float] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("trustscore:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 3:
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+    return scores
+
+
+def validate_sybil_bond_no_free_trust(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No unbonded Sybil identity obtains trust above the untrusted floor.
+
+    FAILs on ``score_average`` (the clique's mutual endorsements promote it) and
+    PASSes on ``bonded_trust`` (free-minted identities stay inert).
+
+    Example::
+
+        results = validate_sybil_bond_no_free_trust(events)
+    """
+    scores = _trustscores(events)
+    escaped = {a: s for a, s in scores.items() if a.startswith("sybil-") and s > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils bought trust without bonding: {escaped}"
+        return [ValidationResult("sybil_bond_no_free_trust", False, detail)]
+    n_sybil = sum(1 for a in scores if a.startswith("sybil-"))
+    return [
+        ValidationResult(
+            "sybil_bond_no_free_trust",
+            True,
+            f"all {n_sybil} Sybils pinned at the untrusted floor",
+        )
+    ]
+
+
+def validate_sybil_bond_honest_trusted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Bonded honest traders rank strictly above every Sybil.
+
+    Guards against a degenerate trust layer that trivially passes the first check
+    by scoring *everyone* at the floor: honest bonded traders must actually rise.
+
+    Example::
+
+        results = validate_sybil_bond_honest_trusted(events)
+    """
+    scores = _trustscores(events)
+    honest = {a: s for a, s in scores.items() if a.startswith("honest-")}
+    if not honest:
+        return [ValidationResult("sybil_bond_honest_trusted", False, "no honest scores in trace")]
+    max_sybil = max((s for a, s in scores.items() if a.startswith("sybil-")), default=0.0)
+    laggards = {a: s for a, s in honest.items() if s <= max_sybil}
+    if laggards:
+        detail = f"honest traders not above Sybil ceiling {max_sybil}: {laggards}"
+        return [ValidationResult("sybil_bond_honest_trusted", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_honest_trusted",
+            True,
+            f"{len(honest)} honest traders trusted above Sybil ceiling {max_sybil}",
+        )
+    ]
+
+
+def validate_sybil_bond_attempts_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sybils *bid* for a bond yet stay at the floor — the ledger rejected them.
+
+    This is the enforcement check: it proves the defense is active (bond requests
+    denied), not merely assumed (Sybils declining to bond). It requires the trace
+    to contain Sybil ``bond:`` attempts, and that none of those bidders escaped
+    the untrusted floor.
+
+    Example::
+
+        results = validate_sybil_bond_attempts_rejected(events)
+    """
+    scores = _trustscores(events)
+    bidders: set[str] = set()
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        if agent.startswith("sybil-") and _message_body(ev).startswith("bond:"):
+            bidders.add(agent)
+    if not bidders:
+        return [
+            ValidationResult(
+                "sybil_bond_attempts_rejected",
+                False,
+                "no Sybil bond attempts in trace — cannot prove enforcement",
+            )
+        ]
+    escaped = {a: scores.get(a, 0.0) for a in bidders if scores.get(a, 0.0) > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils that bid for a bond escaped the floor: {escaped}"
+        return [ValidationResult("sybil_bond_attempts_rejected", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_attempts_rejected",
+            True,
+            f"{len(bidders)} Sybils bid for a bond and were all rejected to the floor",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "sybil_bond": [
+        validate_sybil_bond_no_free_trust,
+        validate_sybil_bond_honest_trusted,
+        validate_sybil_bond_attempts_rejected,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,
+    ],
+    "comms_downgrade": [
+        validate_comms_downgrade_resistance,
+        validate_comms_authentic_delivery,
     ],
     "marketplace": [
         validate_marketplace_no_double_sell,
@@ -4332,6 +5222,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "identity_rotation": [
         validate_identity_rotation_occurred,
         validate_identity_rotation_signatures,
+    ],
+    "attested_peering": [
+        validate_attested_no_denied_admitted,
+        validate_attested_sybil_quarantined,
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
@@ -4395,5 +5289,17 @@ VALIDATORS: dict[str, list[Any]] = {
     "failure_detection": [
         validate_failure_detection_completeness,
         validate_failure_detection_accuracy,
+    ],
+    "parc_migration": [
+        validate_parc_honest_admitted,
+        validate_parc_forgery_rejected,
+        validate_parc_inflation_rejected,
+        validate_parc_ring_severed,
+        validate_parc_replay_rejected,
+        validate_parc_stale_key_rejected,
+    ],
+    "rogue_trusted_agent": [
+        validate_rogue_trusted_agent_blocked,
+        validate_rogue_trusted_agent_reputation,
     ],
 }

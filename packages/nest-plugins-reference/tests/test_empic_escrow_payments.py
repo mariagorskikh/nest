@@ -19,11 +19,28 @@ def payments() -> EMPICEscrowPayments:
 
 
 @pytest.mark.asyncio
+async def test_generic_pay_confirms_immediately(payments: EMPICEscrowPayments) -> None:
+    """Plain Payments.pay follows the generic immediate-settlement contract."""
+    receipt = await payments.pay(AgentId("provider"), Money(amount=50), PaymentRef("generic-1"))
+
+    assert receipt.amount.amount == 50
+    assert payments.balance(AgentId("consumer")) == 950
+    assert payments.balance(ESCROW_AGENT) == 0
+    assert payments.balance(AgentId("provider")) == 50
+    assert await payments.verify_payment(PaymentRef("generic-1")) is PaymentStatus.CONFIRMED
+
+
+@pytest.mark.asyncio
 async def test_pull_escrow_fulfills_after_accepted_delivery(
     payments: EMPICEscrowPayments,
 ) -> None:
     """Pull escrow releases funds only after accepted delivery evidence."""
-    await payments.pay(AgentId("provider"), Money(amount=50), PaymentRef("pull-1"))
+    await payments.open_pull_escrow(
+        AgentId("provider"),
+        Money(amount=50),
+        PaymentRef("pull-1"),
+        service_id=ServiceRef("weather"),
+    )
 
     assert payments.balance(AgentId("consumer")) == 950
     assert payments.balance(ESCROW_AGENT) == 50
@@ -51,7 +68,12 @@ async def test_pull_escrow_fulfills_after_accepted_delivery(
 @pytest.mark.asyncio
 async def test_pull_escrow_reject_refunds_consumer(payments: EMPICEscrowPayments) -> None:
     """Rejected pull delivery returns escrow to the consumer."""
-    await payments.pay(AgentId("provider"), Money(amount=50), PaymentRef("pull-1"))
+    await payments.open_pull_escrow(
+        AgentId("provider"),
+        Money(amount=50),
+        PaymentRef("pull-1"),
+        service_id=ServiceRef("weather"),
+    )
     payments.record_delivery(
         PaymentRef("pull-1"),
         delivery_id="d1",
@@ -76,7 +98,7 @@ async def test_pull_fulfill_rejects_mismatched_delivery(
     payments: EMPICEscrowPayments,
 ) -> None:
     """Accepted evidence must match the escrow payee and service."""
-    await payments.pay(
+    await payments.open_pull_escrow(
         AgentId("provider"),
         Money(amount=50),
         PaymentRef("pull-1"),
@@ -201,7 +223,7 @@ async def test_close_stream_refunds_unused_escrow(payments: EMPICEscrowPayments)
 @pytest.mark.asyncio
 async def test_duplicate_refs_and_insufficient_balance(payments: EMPICEscrowPayments) -> None:
     """Duplicate references and over-budget escrow are rejected."""
-    await payments.pay(AgentId("provider"), Money(amount=50), PaymentRef("pull-1"))
+    await payments.open_pull_escrow(AgentId("provider"), Money(amount=50), PaymentRef("pull-1"))
 
     with pytest.raises(ValueError, match="Duplicate"):
         await payments.open_stream(
