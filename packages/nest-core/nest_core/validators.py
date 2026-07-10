@@ -4792,6 +4792,78 @@ def validate_attested_sybil_quarantined(
     ]
 
 
+def validate_attested_no_identity_substitution(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No peer is admitted under a claimed identity it does not transport-control.
+
+    The observer's verdict line is
+    ``verdict:<sender>:<peer_id>:<decision>:<foe>:<data>:<work>`` where ``sender``
+    is the transport agent the verifier is actually talking to and ``peer_id`` is
+    the identity the *presented passport* claims. An honest peer transports its
+    own card, so ``peer_id == sender``. A key-substitution attacker copies a
+    genuine operator delegation onto a card that keeps the victim's ``agent_id``
+    but carries the *attacker's own* key; were that card admitted, the verifier
+    would count the attacker's evidence **as the victim**, poisoning an identity
+    the attacker never controlled.
+
+    Invariant: every ``ALLOW`` verdict must satisfy ``peer_id == sender``. FAIL
+    on any ``ALLOW`` whose claimed identity differs from its transport sender.
+
+    This is deliberately blind-spot-complementary to
+    :func:`validate_attested_no_denied_admitted`, which keys purely on the
+    transport ``sender`` (via :func:`_attested_verdicts`, that drops ``peer_id``)
+    and therefore cannot see an admitted identity substitution at all. A trace
+    with no verdict lines (a baseline plugin that runs no handshake) passes
+    vacuously.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+
+    substitutions: list[str] = []
+    verdict_count = 0
+    for line in lines:
+        if not line.startswith("verdict:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 7:
+            continue
+        _, sender, peer_id, decision, _foe, _data, _work = parts
+        verdict_count += 1
+        if decision == "ALLOW" and peer_id != sender:
+            substitutions.append(
+                f"{sender}: admitted while claiming identity '{peer_id}' it does not control"
+            )
+
+    if verdict_count == 0:
+        return [
+            ValidationResult(
+                "attested_no_identity_substitution",
+                True,
+                "no attested-peering verdicts in trace (baseline plugin, nothing to gate)",
+            )
+        ]
+    if substitutions:
+        return [
+            ValidationResult(
+                "attested_no_identity_substitution",
+                False,
+                "; ".join(substitutions),
+            )
+        ]
+    return [
+        ValidationResult(
+            "attested_no_identity_substitution",
+            True,
+            f"{verdict_count} verdict(s) checked; "
+            "every admitted peer controls the identity it claims",
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
@@ -4971,6 +5043,7 @@ VALIDATORS: dict[str, list[Any]] = {
     ],
     "attested_peering": [
         validate_attested_no_denied_admitted,
+        validate_attested_no_identity_substitution,
         validate_attested_sybil_quarantined,
     ],
     "memory_concurrent_writers": [

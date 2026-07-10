@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Attested-peering trust scenario: an unauthenticated Sybil swarm (plus an
-# impostor and a replayer) tries to defame one honest victim, but only peers
-# that clear the three-question attested-peering handshake can move its
-# reputation. Swap `trust: attested_peering` for `trust: score_average` and the
-# validate_attested_sybil_quarantined validator flips from PASS to FAIL.
+# impostor, a replayer, and a key-substitution delegation_thief) tries to defame
+# one honest victim, but only peers that clear the three-question
+# attested-peering handshake can move its reputation. Swap
+# `trust: attested_peering` for `trust: score_average` and the
+# validate_attested_sybil_quarantined validator flips from PASS to FAIL. The
+# delegation_thief copies the victim's genuine operator delegation onto its own
+# key; validate_attested_no_identity_substitution asserts it is never admitted
+# as the victim.
 name: attested_peering
-description: "20-node Sybil swarm + impostor + replayer defame one victim; only attested peers count."
+description: "Sybil swarm + impostor + replayer + delegation-thief defame one victim; only attested peers count."
 
 tier: 1
 seed: 42
 
 agents:
-  count: 32
+  count: 33
   brain: state-machine
   roles:
     - name: honest
@@ -21,6 +25,8 @@ agents:
     - name: impostor
       count: 1
     - name: replayer
+      count: 1
+    - name: delegation_thief
       count: 1
 
 layers:

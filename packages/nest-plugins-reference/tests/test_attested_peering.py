@@ -38,7 +38,11 @@ from nest_core.plugins import PluginRegistry
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
 from nest_core.types import AgentId, Evidence
-from nest_core.validators import ValidationResult, validate_trace
+from nest_core.validators import (
+    ValidationResult,
+    validate_attested_no_identity_substitution,
+    validate_trace,
+)
 from nest_plugins_reference.trust.attested_peering import (
     AgentFactsCard,
     AttestedPeeringTrust,
@@ -222,6 +226,51 @@ def test_forged_operator_delegation_denied() -> None:
     assert "delegation" in verdict.friend_or_foe.detail
 
 
+def test_copied_delegation_on_foreign_key_denied() -> None:
+    """The key-substitution attack: a copied delegation on a foreign key is denied.
+
+    An attacker copies the honest agent's *genuine* operator delegation
+    (operator id, operator key, and the operator's real signature) onto a card
+    that keeps the victim's ``agent_id`` ("honest-0") but carries the attacker's
+    own key, self-signed by the attacker. Key possession passes (the card's key
+    is the attacker's own and it signs the live transcript), but the v2
+    delegation is bound to the agent's public key, so the copied signature no
+    longer verifies over this foreign key. Verdict is ``DENY`` at friend-or-foe
+    and the attacker is never admitted as the victim.
+
+    This is the RED->GREEN proof: under the pre-fix v1 delegation message (which
+    signed only ``operator_id|agent_id|label``) the copied signature *would*
+    verify and this handshake would ``ALLOW`` — admitting the attacker as
+    honest-0.
+    """
+    verifier = _verifier()
+    honest = _honest()  # agent_id honest-0, delegated by _OP, golden boot
+    verifier.trust_operator(honest.operator_id, honest.operator_public_key)
+    verifier.allow_boot_state()
+
+    thief = AttestedPeeringTrust(
+        agent_id=AgentId("honest-0"),  # claim the victim's identity
+        seed=b"thief-distinct-key",  # but a different keypair
+        operator_delegation=(
+            honest.operator_id,
+            honest.operator_public_key,
+            honest.card.delegation_signature,  # the victim's real delegation, copied
+        ),
+        offer_env=True,
+    )
+    # The card claims the victim id but carries a foreign key.
+    assert thief.card.agent_id == honest.card.agent_id == "honest-0"
+    assert thief.card.public_key != honest.card.public_key
+    assert thief.card.delegation_signature == honest.card.delegation_signature
+
+    verdict = _handshake(verifier, thief, "delegation_thief-0", kind="negative")
+    assert verdict.decision == "DENY"
+    assert not verdict.friend_or_foe.ok
+    assert "delegation" in verdict.friend_or_foe.detail
+    assert not verifier.is_attested(AgentId("honest-0"))
+    assert not verifier.is_attested(AgentId("delegation_thief-0"))
+
+
 def test_tampered_boot_quote_denied_when_required() -> None:
     """A peer whose boot state is not on the allow-list fails trust-my-data."""
     verifier = _verifier(require_env_quote=True)
@@ -336,6 +385,52 @@ def test_property_honest_handshake_always_allows(agent_name: str) -> None:
     assert _handshake(verifier, honest, f"h-{agent_name}").decision == "ALLOW"
 
 
+@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    op_seed=st.binary(min_size=1, max_size=16),
+    victim=st.text(
+        alphabet=st.characters(min_codepoint=97, max_codepoint=122), min_size=1, max_size=8
+    ),
+    attacker_seed=st.binary(min_size=1, max_size=16),
+)
+def test_property_copied_delegation_always_denied(
+    op_seed: bytes, victim: str, attacker_seed: bytes
+) -> None:
+    """A copied-delegation card on a foreign key is always denied; the genuine
+    delegated agent is always allowed — for any operator/victim/attacker seeds.
+    """
+    victim_id = f"v-{victim}"
+    verifier = _verifier()
+    honest = AttestedPeeringTrust(
+        agent_id=AgentId(victim_id), seed=b"prop-victim", operator_seed=op_seed, offer_env=True
+    )
+    verifier.trust_operator(honest.operator_id, honest.operator_public_key)
+    verifier.allow_boot_state()
+
+    # The genuinely-delegated agent is always admitted.
+    assert _handshake(verifier, honest, victim_id).decision == "ALLOW"
+
+    thief = AttestedPeeringTrust(
+        agent_id=AgentId(victim_id),  # same claimed identity
+        seed=attacker_seed,
+        operator_delegation=(
+            honest.operator_id,
+            honest.operator_public_key,
+            honest.card.delegation_signature,
+        ),
+        offer_env=True,
+    )
+    # Only a *foreign* key exercises the substitution; identical keys are the
+    # honest case and out of scope for this property.
+    if thief.card.public_key == honest.card.public_key:
+        return
+    verdict = _handshake(verifier, thief, f"thief-{victim_id}", kind="negative")
+    assert verdict.decision == "DENY"
+    assert not verdict.friend_or_foe.ok
+    # The attacker's transport session is never admitted.
+    assert not verifier.is_attested(AgentId(f"thief-{victim_id}"))
+
+
 @settings(max_examples=40)
 @given(flip=st.integers(min_value=0, max_value=63))
 def test_property_tampered_signature_always_denied(flip: int) -> None:
@@ -388,6 +483,42 @@ def test_property_report_order_invariant(seed: int) -> None:
     rep = _run(verifier.score(AgentId("victim")))
     assert rep.sample_count == len(honest_ids)
     assert rep.score == 1.0
+
+
+# ---------------------------------------------------------------------------
+# 2b. Adversarial validator unit tests
+# ---------------------------------------------------------------------------
+
+
+def _observer_send(msg: str) -> dict[str, Any]:
+    """A synthetic observer ``send`` event carrying one audit line."""
+    return {"kind": "send", "agent": "observer", "msg": msg}
+
+
+def test_validator_flags_admitted_identity_substitution() -> None:
+    """An ALLOW verdict whose claimed id != transport sender fails the validator."""
+    events = [_observer_send("verdict:delegation_thief-0:honest-0:ALLOW:1:1:1")]
+    results = validate_attested_no_identity_substitution(events)
+    assert len(results) == 1
+    assert not results[0].passed
+    assert "honest-0" in results[0].detail
+
+
+def test_validator_passes_when_claimed_id_matches_sender() -> None:
+    """Every ALLOW with peer_id == sender (and any DENY) passes the validator."""
+    events = [
+        _observer_send("verdict:honest-0:honest-0:ALLOW:1:1:1"),
+        _observer_send("verdict:delegation_thief-0:honest-0:DENY:0:1:1"),
+        _observer_send("verdict:sybil-3:sybil-3:DENY:1:1:0"),
+    ]
+    results = validate_attested_no_identity_substitution(events)
+    assert results[0].passed
+
+
+def test_validator_passes_vacuously_without_verdicts() -> None:
+    """A baseline trace with no verdict lines cannot violate the invariant."""
+    results = validate_attested_no_identity_substitution([])
+    assert results[0].passed
 
 
 # ---------------------------------------------------------------------------

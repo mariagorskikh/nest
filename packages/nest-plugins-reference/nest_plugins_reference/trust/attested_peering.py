@@ -101,7 +101,7 @@ Example::
 """
 
 HANDSHAKE_TAG = b"nest-attest-handshake-v1"
-DELEGATION_TAG = b"nest-attest-delegation-v1"
+DELEGATION_TAG = b"nest-attest-delegation-v2"
 ENV_TAG = b"nest-attest-env-v1"
 
 _ENV_COMPONENTS = ("firmware", "bootloader", "kernel", "agent_code")
@@ -241,14 +241,24 @@ def _canon(obj: dict[str, Any]) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _delegation_msg(operator_id: str, agent_id: str, label: str) -> bytes:
+def _delegation_msg(operator_id: str, agent_id: str, label: str, agent_public_key: bytes) -> bytes:
     """Canonical bytes an operator signs to delegate authority to an agent.
+
+    The agent's public key is bound into the message (v2). Without it a
+    delegation names only the string ``agent_id`` and is transferable to *any*
+    key wearing that id: an attacker can copy a genuine delegation onto a card
+    carrying its own key and be admitted as the delegated agent. Binding the key
+    makes a delegation non-transferable — it authorises exactly one keypair.
 
     Example::
 
-        msg = _delegation_msg("op", "a1", "buyer-1")
+        msg = _delegation_msg("op", "a1", "buyer-1", agent_pub)
     """
-    return DELEGATION_TAG + f"|{operator_id}|{agent_id}|{label}".encode()
+    return (
+        DELEGATION_TAG
+        + f"|{operator_id}|{agent_id}|{label}|".encode()
+        + _b64(agent_public_key).encode()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +387,7 @@ def _verify_card(card: AgentFactsCard) -> tuple[bool, str]:
             return False, "delegation claims an operator but carries no operator key"
         if _fingerprint(card.operator_public_key) != card.operator_id:
             return False, "operator_id does not match its public key"
-        msg = _delegation_msg(card.operator_id, card.agent_id, card.label)
+        msg = _delegation_msg(card.operator_id, card.agent_id, card.label, card.public_key)
         if not _verify(card.operator_public_key, msg, card.delegation_signature):
             return False, "operator delegation signature invalid (agent not authorised)"
         return True, f"authentic passport; delegated by operator {card.operator_id}"
@@ -602,14 +612,15 @@ class AttestedPeeringTrust:
             self._operator_id = _fingerprint(self._operator_pub)
             delegation_sig = _sign(
                 op_priv,
-                _delegation_msg(self._operator_id, str(self._agent_id), card_label),
+                _delegation_msg(self._operator_id, str(self._agent_id), card_label, self._pub),
             )
         elif operator_delegation is not None:
             # Injection path: embed a delegation block issued out-of-band
-            # (``operator_id``, ``operator_public_key``, ``signature``). The card
-            # is still self-signed by *this* agent's key, so a peer that claims a
-            # delegation it was never granted produces a self-consistent card
-            # with an invalid ``delegation_signature`` — see ``_verify_card``.
+            # (``operator_id``, ``operator_public_key``, ``signature``). Because a
+            # v2 delegation is signed over *this agent's public key*, copying a
+            # genuine delegation issued for a different key onto this card yields
+            # an invalid ``delegation_signature`` — the key-substitution attack is
+            # rejected in ``_verify_card``.
             self._operator_id, self._operator_pub, delegation_sig = operator_delegation
 
         card = AgentFactsCard(

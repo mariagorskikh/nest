@@ -20,6 +20,17 @@ stress the gate:
   captured from an earlier session, replayed against a fresh nonce. Verdict
   ``DENY`` at "friend or foe?" (the stale signature does not cover this
   transcript).
+* **delegation_thief** — the key-substitution attack. Presents a card that
+  keeps the honest victim's ``agent_id`` and copies its *genuine* operator
+  delegation (operator id, key, and signature), but carries the attacker's own
+  key and is self-signed by the attacker. Key possession therefore *passes*
+  (the card's key is the attacker's, and the attacker signs the live
+  transcript), but under the key-bound v2 delegation the copied signature no
+  longer covers this foreign key, so verdict is ``DENY`` at "friend or foe?"
+  (delegation invalid). Its verdict line carries ``peer_id`` = ``honest-0`` ≠
+  transport ``sender`` = ``delegation_thief-0``, which is exactly what
+  ``validate_attested_no_identity_substitution`` guards: an ``ALLOW`` there
+  would mean an attacker admitted *as the victim*.
 
 The agents resolve their trust plugin from ``ctx.plugins["trust"]`` and
 capability-gate the handshake on ``hasattr(trust, "make_hail")``. Swapping
@@ -57,6 +68,7 @@ from nest_core.types import AgentId, Evidence
 
 _OPERATOR_SEED = b"attested-peering:honest-operator"
 _SCENARIO_SEED = b"attested-peering"
+_THIEF_SEED = b"attested-peering:thief"
 
 
 def _encode(obj: dict[str, Any]) -> str:
@@ -85,7 +97,9 @@ class ReporterAgent(StateMachineAgent):
 
     ``role`` selects the attack: ``honest`` behaves correctly, ``sybil`` has no
     operator delegation, ``impostor`` presents a stolen passport, ``replayer``
-    replays a captured honest seal. When the configured trust plugin has no
+    replays a captured honest seal, and ``delegation_thief`` presents a crafted
+    card (built in ``_provision_trust``) that copies the victim's genuine
+    delegation onto the attacker's own key. When the configured trust plugin has no
     ``make_hail`` (e.g. ``score_average``) the agent skips the handshake and
     sends its evidence directly — the baseline path the discrimination
     validator catches.
@@ -272,7 +286,7 @@ def _role_counts(config: ScenarioConfig) -> dict[str, int]:
 
         counts = _role_counts(config)
     """
-    defaults = {"honest": 8, "sybil": 20, "impostor": 1, "replayer": 1}
+    defaults = {"honest": 8, "sybil": 20, "impostor": 1, "replayer": 1, "delegation_thief": 1}
     if config.agents.roles:
         for role in config.agents.roles:
             if role.name in defaults:
@@ -317,19 +331,22 @@ def _provision_trust(
     observer_id: AgentId,
     honest_ids: list[AgentId],
     reporter_ids: list[AgentId],
+    thief_ids: list[AgentId],
 ) -> None:
     """Instantiate one trust plugin per agent from the configured class.
 
     Mirrors ``identity_rotation``'s per-agent provisioning. For the
     attested-peering plugin every agent gets its own keyed instance and the
-    observer is told which operator + boot state to trust. For a baseline trust
-    plugin (e.g. ``score_average``, no ``make_hail``) only the observer gets a
-    single shared instance; reporters send evidence directly. No-op when no
-    trust plugin is configured.
+    observer is told which operator + boot state to trust. ``thief_ids`` receive
+    a *crafted* instance that claims the honest head's ``agent_id`` and copies
+    its genuine operator delegation onto the attacker's own key — the
+    key-substitution attack. For a baseline trust plugin (e.g. ``score_average``,
+    no ``make_hail``) only the observer gets a single shared instance; reporters
+    send evidence directly. No-op when no trust plugin is configured.
 
     Example::
 
-        _provision_trust(plugins, AgentId("observer"), honest, reporters)
+        _provision_trust(plugins, AgentId("observer"), honest, reporters, thieves)
     """
     from nest_plugins_reference.trust.attested_peering import PeeringPolicy
 
@@ -352,7 +369,10 @@ def _provision_trust(
         principal_name="Reputation Observer",
     )
 
+    thief_set = set(thief_ids)
     for aid in reporter_ids:
+        if aid in thief_set:
+            continue
         is_honest = aid in honest_ids
         reporter_trust = trust_cls(
             agent_id=aid,
@@ -367,6 +387,27 @@ def _provision_trust(
                 reporter_trust.operator_id, reporter_trust.operator_public_key
             )
 
+    # Key-substitution attackers: claim the honest head's identity + copied
+    # delegation, but carry the attacker's own key (self-signed by the attacker).
+    if thief_ids and honest_ids:
+        victim_card = agent_plugins.get(honest_ids[0], {}).get("trust")
+        if victim_card is not None and hasattr(victim_card, "card"):
+            stolen = victim_card.card
+            for aid in thief_ids:
+                thief_trust = trust_cls(
+                    agent_id=honest_ids[0],
+                    seed=_THIEF_SEED,
+                    operator_delegation=(
+                        stolen.operator_id,
+                        stolen.operator_public_key,
+                        stolen.delegation_signature,
+                    ),
+                    label=stolen.label,
+                    offer_env=True,
+                    principal_name=stolen.principal_name,
+                )
+                agent_plugins.setdefault(aid, {})["trust"] = thief_trust
+
     observer_trust.allow_boot_state()
     agent_plugins.setdefault(observer_id, {})["trust"] = observer_trust
     plugins.pop("trust", None)
@@ -379,9 +420,9 @@ def attested_peering_factory(
     """Create the observer, victim sink, and honest + adversarial reporters.
 
     Role counts come from ``agents.roles`` (defaults: 8 honest, 20 sybil, 1
-    impostor, 1 replayer). Honest reporters file *positive* evidence; every
-    attacker files *negative* evidence but is denied and quarantined under the
-    attested-peering plugin.
+    impostor, 1 replayer, 1 delegation_thief). Honest reporters file *positive*
+    evidence; every attacker files *negative* evidence but is denied and
+    quarantined under the attested-peering plugin.
 
     Example::
 
@@ -395,9 +436,10 @@ def attested_peering_factory(
     sybil_ids = [AgentId(f"sybil-{i}") for i in range(counts["sybil"])]
     impostor_ids = [AgentId(f"impostor-{i}") for i in range(counts["impostor"])]
     replayer_ids = [AgentId(f"replayer-{i}") for i in range(counts["replayer"])]
-    reporter_ids = honest_ids + sybil_ids + impostor_ids + replayer_ids
+    thief_ids = [AgentId(f"delegation_thief-{i}") for i in range(counts["delegation_thief"])]
+    reporter_ids = honest_ids + sybil_ids + impostor_ids + replayer_ids + thief_ids
 
-    _provision_trust(plugins, observer_id, honest_ids, reporter_ids)
+    _provision_trust(plugins, observer_id, honest_ids, reporter_ids, thief_ids)
 
     # The impostor and replayer both target the first honest identity.
     stolen_card: dict[str, Any] | None = None
@@ -428,6 +470,11 @@ def attested_peering_factory(
             stolen_card=stolen_card,
             replay_seal=replay_seal,
         )
+    for aid in thief_ids:
+        # The crafted trust instance already carries the copied delegation on the
+        # attacker's key, so the default present-card path presents that card
+        # (agent_id honest-0) while the transport sender stays delegation_thief-N.
+        agents[aid] = ReporterAgent(aid, observer_id, "delegation_thief", "negative")
 
     agents[observer_id] = ObserverAgent(observer_id, victim_id, expected=len(reporter_ids))
     agents[victim_id] = SinkAgent(victim_id)
