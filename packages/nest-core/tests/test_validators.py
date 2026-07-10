@@ -602,7 +602,8 @@ class TestReputationScoring:
         ]
         results = validate_reputation_scoring(events)
         assert results[0].passed is True
-        
+
+
 class TestReputationWarnings:
     def test_pass_warning_issued(self) -> None:
         events = [
