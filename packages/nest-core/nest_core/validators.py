@@ -1295,7 +1295,7 @@ def validate_streaming_no_drain_after_close(
     stream_debits: dict[str, list[int]] = defaultdict(lambda: [])  # PaymentRef -> [ticks]
 
     for ev in events:
-        tick = ev.get("tick", 0)
+        tick = _event_tick(ev)
 
         if ev.get("event_type") == "stream_opened":
             ref = ev.get("stream_ref", "")
@@ -1352,7 +1352,7 @@ def validate_streaming_no_overbill_on_partition(
     violations: list[str] = []
 
     for ev in events:
-        tick = ev.get("tick", 0)
+        tick = _event_tick(ev)
 
         if ev.get("event_type") == "stream_opened":
             ref = ev.get("stream_ref", "")
@@ -1400,6 +1400,37 @@ def validate_streaming_no_overbill_on_partition(
             True,
             f"verified {len(stream_parties)} streams across "
             f"{len(partition_start)} partition edges, no over-bill",
+        )
+    ]
+
+
+def validate_streaming_lifecycle(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Require that the trace records real streaming activity.
+
+    One-shot ``prepaid_credits`` payments do not emit ``stream_opened`` events;
+    this validator fails those traces so the adversarial suite discriminates
+    plugins that do not implement metered billing.
+
+    Example::
+
+        results = validate_streaming_lifecycle(events)
+    """
+    opens = [ev for ev in events if ev.get("event_type") == "stream_opened"]
+    if len(opens) < 1:
+        return [
+            ValidationResult(
+                "streaming_lifecycle",
+                False,
+                "no stream_opened events observed",
+            )
+        ]
+    return [
+        ValidationResult(
+            "streaming_lifecycle",
+            True,
+            f"observed {len(opens)} stream(s)",
         )
     ]
 
@@ -4645,6 +4676,7 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_memory_liveness,
     ],
     "streaming_payments": [
+        validate_streaming_lifecycle,
         validate_streaming_conservation,
         validate_streaming_no_drain_after_close,
         validate_streaming_no_overbill_on_partition,

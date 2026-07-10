@@ -116,6 +116,17 @@ class _SimAgentContext:
             )
         await self._transport.broadcast(payload, correlation_id=cid)
 
+    def record_event(self, fields: dict[str, Any]) -> None:
+        if self._trace:
+            self._trace.record(
+                {
+                    "ts": self._clock.now,
+                    "tick": int(self._clock.now),
+                    "agent": str(self._agent_id),
+                    **fields,
+                }
+            )
+
     async def schedule(self, delay: float, payload: bytes) -> None:
         self._queue.push(
             Event(
@@ -338,6 +349,7 @@ class Simulator:
                     if self._trace:
                         drop_rec: dict[str, Any] = {
                             "ts": self._clock.now,
+                            "tick": self._tick_count,
                             "agent": str(event.agent_id),
                             "kind": "dropped",
                             "from": str(event.target_id),

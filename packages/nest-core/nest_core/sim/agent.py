@@ -103,6 +103,17 @@ class AgentContext(Protocol):
         """
         ...
 
+    def record_event(self, fields: dict[str, Any]) -> None:
+        """Record a custom audit event into the simulation trace.
+
+        Example::
+
+            ctx.record_event(
+                {"kind": "payment_debited", "stream_ref": "s-1", "amount": 10},
+            )
+        """
+        ...
+
 
 class StateMachineAgent:
     """Base class for Tier 1 state-machine agents.

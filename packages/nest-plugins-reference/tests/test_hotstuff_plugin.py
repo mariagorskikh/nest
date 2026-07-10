@@ -38,6 +38,9 @@ class _FakeAgentContext:
     async def schedule(self, delay: float, payload: bytes) -> None:
         self.sent.append((AgentId(f"self-after-{delay}"), payload))
 
+    def record_event(self, fields: dict[str, Any]) -> None:
+        return
+
 
 def _make_identities(replica_ids: list[AgentId]) -> dict[AgentId, DidKeyIdentity]:
     plugins: dict[str, Any] = {"identity": DidKeyIdentity}

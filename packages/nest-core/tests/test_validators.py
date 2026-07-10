@@ -1917,3 +1917,6 @@ class TestValidatorRegistry:
     def test_each_scenario_has_validators(self) -> None:
         for scenario, validators in VALIDATORS.items():
             assert len(validators) >= 2, f"{scenario} needs at least 2 validators"
+
+    def test_streaming_has_four_validators(self) -> None:
+        assert len(VALIDATORS["streaming_payments"]) == 4

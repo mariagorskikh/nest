@@ -33,10 +33,8 @@ class _FakeAgentContext:
     async def schedule(self, delay: float, payload: bytes) -> None:
         self.sent.append((AgentId(f"self-after-{delay}"), payload))
 
-
-# ---------------------------------------------------------------------------
-# Scenario schema tests
-# ---------------------------------------------------------------------------
+    def record_event(self, fields: dict[str, Any]) -> None:
+        return
 
 
 class TestScenarioConfig:
@@ -288,3 +286,83 @@ class TestEmpicPaymentsScenario:
 
         validations = validate_trace(result_path, "empic_payments")
         assert all(r.passed for r in validations), validations
+
+
+class TestStreamingPaymentsScenario:
+    """End-to-end checks for streaming_payments.yaml."""
+
+    @pytest.mark.asyncio
+    async def test_streaming_payments_yaml(self, tmp_path: Path) -> None:
+        """Run streaming scenario and validate all four streaming invariants."""
+        yaml_path = (
+            Path(__file__).parent.parent.parent.parent / "scenarios" / "streaming_payments.yaml"
+        )
+        config = ScenarioConfig.from_yaml(yaml_path)
+        config.output.trace = str(tmp_path / "streaming_payments.jsonl")
+        config.duration = "ticks: 500"
+        config.task.config["rounds"] = 5
+
+        runner = ScenarioRunner(config)
+        result_path = await runner.run()
+
+        assert result_path.exists()
+        validations = validate_trace(result_path, "streaming_payments")
+        assert all(r.passed for r in validations), validations
+
+    @pytest.mark.asyncio
+    async def test_streaming_payments_deterministic(self, tmp_path: Path) -> None:
+        """Same seed produces byte-identical traces."""
+        yaml_path = (
+            Path(__file__).parent.parent.parent.parent / "scenarios" / "streaming_payments.yaml"
+        )
+        traces: list[str] = []
+        for i in range(2):
+            config = ScenarioConfig.from_yaml(yaml_path)
+            trace_file = tmp_path / f"streaming_{i}.jsonl"
+            config.output.trace = str(trace_file)
+            config.duration = "ticks: 300"
+            config.task.config["rounds"] = 3
+            runner = ScenarioRunner(config)
+            await runner.run()
+            traces.append(trace_file.read_text(encoding="utf-8"))
+
+        assert traces[0] == traces[1]
+        assert len(traces[0]) > 0
+
+    @pytest.mark.asyncio
+    async def test_streaming_partition_yaml(self, tmp_path: Path) -> None:
+        """Partition scenario must not over-bill after buyer/seller isolation."""
+        yaml_path = (
+            Path(__file__).parent.parent.parent.parent
+            / "scenarios"
+            / "streaming_payments_partition.yaml"
+        )
+        config = ScenarioConfig.from_yaml(yaml_path)
+        config.output.trace = str(tmp_path / "streaming_partition.jsonl")
+        config.duration = "ticks: 500"
+        config.task.config["rounds"] = 5
+
+        runner = ScenarioRunner(config)
+        result_path = await runner.run()
+
+        validations = validate_trace(result_path, "streaming_payments")
+        assert all(r.passed for r in validations), validations
+
+    @pytest.mark.asyncio
+    async def test_prepaid_plugin_fails_streaming_validators(self, tmp_path: Path) -> None:
+        """prepaid_credits against streaming scenario fails lifecycle validator."""
+        yaml_path = (
+            Path(__file__).parent.parent.parent.parent / "scenarios" / "streaming_payments.yaml"
+        )
+        config = ScenarioConfig.from_yaml(yaml_path)
+        config.layers.payments = "prepaid_credits"
+        config.output.trace = str(tmp_path / "streaming_prepaid.jsonl")
+        config.duration = "ticks: 100"
+        config.task.config["rounds"] = 1
+
+        runner = ScenarioRunner(config)
+        result_path = await runner.run()
+        validations = validate_trace(result_path, "streaming_payments")
+        lifecycle = [r for r in validations if r.name == "streaming_lifecycle"]
+        assert lifecycle
+        assert not lifecycle[0].passed
