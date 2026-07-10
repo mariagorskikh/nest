@@ -21,13 +21,34 @@ shape (header.payload.sig), no claim validation beyond the signature.
 
 Source: [`nest_plugins_reference/auth/jwt_auth.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/jwt_auth.py).
 
-## Bundled alternative: `delegatable`
+## Hardened plugin: `delegatable`
 
-`delegatable` is the Auth-layer capability-delegation plugin. It issues
-root tokens whose requested scopes are clamped to a signed
-`PolicyManifest`, then lets a token holder mint a child token for another
-agent with a strict subset of the parent's scopes and a TTL no longer than
-the parent token's remaining lifetime.
+Macaroon-style HMAC-chained capability tokens. Any token holder mints
+attenuated child tokens **offline** via
+`delegate(parent_token, audience, scopes_subset, ttl)`; each child's
+signature is keyed by its parent's signature, so revoking any segment
+invalidates every descendant at the next `verify` — cascading revocation
+by construction, no per-child revocation lists. `verify` re-checks the
+full chain (signature, per-segment revocation and expiry, monotonic scope
+and expiry attenuation); `verify_presented(token, presenter)` additionally
+binds presentation to the token's audience.
+
+Adversarial validators (`check_no_scope_escalation`,
+`check_no_stale_ancestor_use`, `check_audience_binding`) fail against the
+`jwt` plugin and pass against `delegatable`; the `delegated_auth` scenario
+exercises all three attacks deterministically.
+
+Source: [`nest_plugins_reference/auth/delegatable.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/delegatable.py).
+Validators: [`nest_plugins_reference/validators/delegation_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/delegation_validators.py).
+Scenario: [`scenarios/delegated_auth.yaml`](../../scenarios/delegated_auth.yaml).
+
+## Manifest-bound plugin: `manifest_delegatable`
+
+`manifest_delegatable` extends the delegation idea with signed policy
+manifests. Root-token issuance clamps requested scopes to the subject's
+`PolicyManifest`, then delegated child tokens must carry a strict subset of
+the parent's scopes and a TTL no longer than the parent token's remaining
+lifetime.
 
 The small policy package supplies the manifest and scope grammar the Auth
 layer needs:
@@ -39,12 +60,10 @@ layer needs:
 - `decide()` is a pure, fail-closed decision core used by issuance to drop
   scopes that the manifest does not authorize.
 
-Delegated tokens use a parent-anchored HMAC chain. Verification recomputes
-the chain, rejects scope widening, rejects equal-authority delegation,
-checks expiry, checks revocation transitively, and optionally checks that
-the presenter matches the token audience. Revoking a parent invalidates
-all descendants because each child carries the parent token id in its
-delegation chain.
+The `manifest_delegated_auth` scenario adds a manifest-tamper probe in
+addition to scope escalation, stale ancestor, and audience-confusion probes.
+That keeps this plugin distinct from `delegatable`: a widened or tampered
+manifest does not widen root-token authority.
 
 Sources:
 
@@ -56,6 +75,7 @@ Sources:
 Scenario and validators:
 
 - [`scenarios/manifest_delegated_auth.yaml`](../../scenarios/manifest_delegated_auth.yaml)
+- `manifest_delegated_auth_manifest_binding`
 - `manifest_delegated_auth_scope_containment`
 - `manifest_delegated_auth_no_stale_parent`
 - `manifest_delegated_auth_audience_binding`

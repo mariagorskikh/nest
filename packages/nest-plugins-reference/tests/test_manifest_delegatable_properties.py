@@ -15,7 +15,7 @@ Three invariants checked over generated inputs:
 
 Example::
 
-    pytest packages/nest-plugins-reference/tests/test_delegatable_properties.py
+    pytest packages/nest-plugins-reference/tests/test_manifest_delegatable_properties.py
 """
 
 from __future__ import annotations

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for ManifestDelegatableAuth — delegatable capability tokens.
+"""Unit tests for ManifestDelegatableAuth — manifest-bound capability tokens.
 
-Covers: root-issue scope clamping, delegation subset, all three attacks
+Checks root-issue scope clamping, delegation subset, manifest tampering,
+scope escalation, stale ancestors, and audience mismatch.
 (scope escalation, revoked ancestor, audience mismatch), token tampering,
 TTL enforcement, cascading revocation, protocol conformance, and plugin
 registry resolution.
@@ -56,7 +57,9 @@ def _tamper_token_signature(token: Token) -> Token:
     return Token(f"{payload_json}|{sig[:-1]}{replacement}")
 
 
-def _register_forged_child(auth: ManifestDelegatableAuth, parent: Token, scopes: list[str]) -> Token:
+def _register_forged_child(
+    auth: ManifestDelegatableAuth, parent: Token, scopes: list[str]
+) -> Token:
     parent_payload_json, parent_sig = str(parent).rsplit("|", 1)
     parent_data = json.loads(parent_payload_json)
     parent_tid = hashlib.sha256(parent_payload_json.encode()).hexdigest()
@@ -524,6 +527,18 @@ async def test_expired_token_rejected_on_verify() -> None:
         await auth.verify(root, presenter=AgentId("a1"))
 
 
+@pytest.mark.asyncio
+async def test_default_clock_is_deterministic() -> None:
+    """Default construction uses logical time 0.0, not wall-clock time."""
+    first = ManifestDelegatableAuth()
+    second = ManifestDelegatableAuth()
+
+    first_token = await first.issue(AgentId("a1"), ["tool:buy"])
+    second_token = await second.issue(AgentId("a1"), ["tool:buy"])
+
+    assert first_token == second_token
+
+
 # ---------------------------------------------------------------------------
 # Revoked / expired parent cannot be delegated from
 # ---------------------------------------------------------------------------
@@ -568,6 +583,6 @@ def test_isinstance_auth_protocol() -> None:
 
 
 def test_resolvable_via_plugin_registry() -> None:
-    """ManifestDelegatableAuth is resolvable as ('auth', 'delegatable') via PluginRegistry."""
+    """ManifestDelegatableAuth resolves as ('auth', 'manifest_delegatable')."""
     cls = PluginRegistry().resolve("auth", "manifest_delegatable")
     assert cls is ManifestDelegatableAuth

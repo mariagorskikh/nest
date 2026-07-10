@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# Delegatable capability-token scenario: coordinator -> 3 intermediaries -> 12
-# leaves, then three adversarial probes for scope escalation, stale ancestors,
-# and audience confusion.
+# Manifest-bound capability-token scenario: coordinator -> 3 intermediaries ->
+# 12 leaves, then four adversarial probes for manifest tampering, scope
+# escalation, stale ancestors, and audience confusion.
 #
 # Under `auth: manifest_delegatable` the manifest_delegated_auth validators PASS. Switch this to
-# `jwt` to see all three validators FAIL against the central re-issuance
+# `jwt` to see all four validators FAIL against the central re-issuance
 # baseline.
 name: manifest_delegated_auth
 description: "Manifest-bound delegatable auth with cascading revocation and audience binding."

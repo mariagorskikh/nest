@@ -12,6 +12,13 @@ delegated child token can only carry a strict subset of its parent token's
 scopes. Verification fails closed for invalid signatures, malformed payloads,
 scope widening, stale ancestors, expired tokens, and audience confusion.
 
+Current-main note: NANDA Town now also includes `auth: delegatable` from
+merged PR #138. This PR intentionally uses its own `manifest_delegatable`
+namespace and focuses on what that merged plugin does not cover:
+identity-verified manifests, manifest-bound root issuance, budget/approval
+policy decisions, `spend:` and `expose:` scope grammar, and strict rejection
+of equal-authority delegation.
+
 ## Problem Solved
 
 Multi-agent workflows routinely pass capabilities down a chain:
@@ -32,6 +39,8 @@ This PR makes the missing Auth-layer behavior explicit:
 
 - **Manifest-bound roots.** Root issuance clamps requested scopes against a
   signed `PolicyManifest`.
+- **Manifest tamper defense.** A manifest widened after signing verifies
+  false and produces an empty-authority root token in the adversarial scenario.
 - **Least privilege delegation.** Child scopes must be a strict subset of
   parent scopes.
 - **Fail-closed verification.** Invalid manifests, tampered token payloads,
@@ -139,12 +148,14 @@ It creates:
 The coordinator builds a delegation tree and emits trace lines for:
 
 - twelve honest leaf verifications,
+- manifest tamper attack,
 - scope escalation attack,
 - stale parent attack,
 - audience confusion attack.
 
 The validators in `packages/nest-core/nest_core/validators.py` are:
 
+- `manifest_delegated_auth_manifest_binding`
 - `manifest_delegated_auth_scope_containment`
 - `manifest_delegated_auth_no_stale_parent`
 - `manifest_delegated_auth_audience_binding`
@@ -210,13 +221,16 @@ pytest \
   packages/nest-plugins-reference/tests/test_manifest_delegatable.py \
   packages/nest-plugins-reference/tests/test_manifest_delegatable_properties.py \
   packages/nest-core/tests/test_manifest_delegated_auth.py \
+  packages/nest-core/tests/test_validators.py::TestValidatorRegistry::test_all_scenario_types_registered \
   -q
 ```
 
-Expected focused result after this pass:
+Expected focused result: all selected tests pass.
+
+Latest focused result from this checkout:
 
 ```text
-102 passed
+104 passed
 ```
 
 What that proves:
@@ -227,6 +241,7 @@ What that proves:
 - forged manifest rejected,
 - signature transplant rejected,
 - manifest JSON round trip still verifies,
+- widened signed manifest fails closed in the scenario trace,
 - requested root scopes are clamped to manifest scopes,
 - tool, spend, and expose scopes are all clamped,
 - duplicate scopes are removed deterministically,
@@ -266,31 +281,34 @@ pytest packages/nest-core/tests/test_manifest_delegated_auth.py -q
 
 Expected behavior:
 
-- `auth: manifest_delegatable` passes all three delegated-auth validators across the
+- `auth: manifest_delegatable` passes all four delegated-auth validators across the
   tested seed bank.
-- `auth: jwt` fails all three validators, proving the validators catch the
+- `auth: jwt` fails all four validators, proving the validators catch the
   missing delegation security property in the baseline.
 - same seed gives byte-identical traces.
 - the trace contains 17 started agents, 12 honest leaf audit messages, and
-  blocked lines for all three attacks.
+  blocked lines for all four attacks.
 
 Direct scenario/validator smoke output:
 
 ```text
-delegatable
+manifest_delegatable
+PASS manifest_delegated_auth_manifest_binding 12 honest leaves verified; manifest_tamper attack blocked
 PASS manifest_delegated_auth_scope_containment 12 honest leaves verified; scope_escalation attack blocked
 PASS manifest_delegated_auth_no_stale_parent 12 honest leaves verified; stale_parent attack blocked
 PASS manifest_delegated_auth_audience_binding 12 honest leaves verified; audience_confusion attack blocked
 jwt
+FAIL manifest_delegated_auth_manifest_binding manifest_tamper attack accepted
 FAIL manifest_delegated_auth_scope_containment scope_escalation attack accepted
 FAIL manifest_delegated_auth_no_stale_parent stale_parent attack accepted
 FAIL manifest_delegated_auth_audience_binding audience_confusion attack accepted
 ```
 
-Full pytest result from this checkout:
+Full pytest result from this checkout, using the same `.venv` interpreter with
+the local `readline` startup workaround described below:
 
 ```text
-838 passed, 1 skipped, 1 deselected
+1253 passed, 1 skipped, 1 deselected, 1 warning
 ```
 
 Canonical full local CI command:
@@ -324,8 +342,8 @@ not the project code or tests.
 - **One layer:** Auth, with a small policy package used by the Auth plugin for
   manifest signing, scope parsing, and issuance decisions.
 - **Layer plugin:** `auth: manifest_delegatable`.
-- **Adversarial validator:** three validators for scope containment, stale
-  ancestors, and audience binding.
+- **Adversarial validator:** four validators for manifest binding, scope
+  containment, stale ancestors, and audience binding.
 - **Scenario YAML:** `scenarios/manifest_delegated_auth.yaml`.
 - **Deterministic:** tests assert byte-identical traces for the same seed and
   property tests assert byte-identical tokens for identical inputs and clock.
@@ -341,6 +359,6 @@ signed `PolicyManifest`; delegation can only mint a strict subset of the
 parent token's scopes; verification checks signature, chain, expiry,
 revocation ancestry, and optional presenter/audience binding. The
 `manifest_delegated_auth` scenario builds a coordinator-to-intermediary-to-leaf
-delegation tree, and its validators pass under `delegatable` while failing
-under the baseline `jwt` plugin for scope escalation, stale parent, and
-audience confusion attacks.
+delegation tree, and its validators pass under `manifest_delegatable` while
+failing under the baseline `jwt` plugin for manifest tampering, scope
+escalation, stale parent, and audience confusion attacks.

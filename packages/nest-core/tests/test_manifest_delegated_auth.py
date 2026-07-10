@@ -20,7 +20,9 @@ from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
 from nest_core.validators import validate_trace
 
-_SCENARIO_YAML = Path(__file__).parent.parent.parent.parent / "scenarios" / "manifest_delegated_auth.yaml"
+_SCENARIO_YAML = (
+    Path(__file__).parent.parent.parent.parent / "scenarios" / "manifest_delegated_auth.yaml"
+)
 
 
 def _config(auth: str, trace: Path, seed: int | None = None) -> ScenarioConfig:
