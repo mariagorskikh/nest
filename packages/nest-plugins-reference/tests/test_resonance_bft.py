@@ -239,6 +239,44 @@ class TestPropose:
         assert len(ids) == 20
 
 
+class TestProposeDeterminism:
+    """LI-01: round_id must be a pure function of (seed, round counter).
+
+    The round id is embedded in every broadcast payload and signed into every
+    evaluation, so a nondeterministic ``uuid.uuid4()`` diverges the whole trace
+    byte-for-byte across same-seed runs (Tier-1 charter violation). Seeded, it
+    must be reproducible across independent instances; unseeded, it may fall
+    back to a random uuid.
+    """
+
+    @pytest.mark.asyncio
+    async def test_seeded_round_id_reproducible_across_instances(self) -> None:
+        a = make_plugin("a", seed=42)
+        b = make_plugin("a", seed=42)
+        ids_a = [(await a.propose(make_task())).id for _ in range(3)]
+        ids_b = [(await b.propose(make_task())).id for _ in range(3)]
+        assert ids_a == ids_b
+
+    @pytest.mark.asyncio
+    async def test_different_seed_gives_different_round_id(self) -> None:
+        a = make_plugin("a", seed=42)
+        b = make_plugin("a", seed=7)
+        assert (await a.propose(make_task())).id != (await b.propose(make_task())).id
+
+    @pytest.mark.asyncio
+    async def test_seeded_round_ids_still_unique_per_view(self) -> None:
+        # Sequential rounds (e.g. successive view changes) get distinct ids even seeded.
+        p = make_plugin("a", seed=42)
+        ids = [(await p.propose(make_task())).id for _ in range(5)]
+        assert len(set(ids)) == 5
+
+    @pytest.mark.asyncio
+    async def test_unseeded_round_id_nondeterministic(self) -> None:
+        a = make_plugin("a")
+        b = make_plugin("a")
+        assert (await a.propose(make_task())).id != (await b.propose(make_task())).id
+
+
 class TestParticipate:
     @pytest.mark.asyncio
     async def test_vote_has_sha256_prefix(self) -> None:
@@ -810,18 +848,17 @@ class TestByzantine:
         )
 
     @pytest.mark.asyncio
-    async def test_follower_ignores_forged_outcome_from_non_leader(self) -> None:
-        """Scenario transport (fable finding): a follower applies an `O|` committed Outcome
-        via commit(), which adapts its L3 trust. If it accepted `O|` from ANY sender, a
-        Byzantine follower could broadcast a forged Outcome and poison every peer's L3 state.
-        The follower must apply control messages (O|/R|) only from the round's leader.
+    async def test_outcome_message_is_not_a_commit_trigger(self) -> None:
+        """LI-07 (supersedes the old O|-source-auth path): a bare `O|` message NEVER triggers a
+        commit — even from the legitimate leader.  A committed Outcome carries no quorum
+        certificate, so acting on it would let a Byzantine leader poison every peer's L3 trust
+        with a forged Outcome (the original fable finding).  Commit is authorised ONLY by a
+        2f+1 signed commit-vote quorum each replica counts locally; `O|` is trace-only.
         """
-        from nest_plugins_reference.scenarios.resonance_bft_consensus import (
-            ResonanceFollowerAgent,
-        )
+        from nest_plugins_reference.scenarios.resonance_bft_consensus import ResonanceReplicaAgent
 
         agents = [make_plugin(f"a{i}", seed=i) for i in range(4)]
-        rnd = await agents[0].propose(make_task("forged outcome"))
+        rnd = await agents[0].propose(make_task("forged outcome", round_no=1))
         for a in agents:
             await a.participate(rnd)
         outcome = await agents[0].resolve(rnd)
@@ -833,13 +870,19 @@ class TestByzantine:
             async def commit(self, o: Any) -> None:
                 applied.append(o)
 
-        follower = ResonanceFollowerAgent(AgentId("a1"), _RecordingCoord(), leader="a0")
-        # Forged Outcome from a NON-leader → ignored (no L3 commit / poisoning).
-        await follower.on_message(cast("Any", None), AgentId("attacker"), payload)
-        assert applied == []
-        # The same Outcome from the leader IS applied.
-        await follower.on_message(cast("Any", None), AgentId("a0"), payload)
-        assert len(applied) == 1
+        class _NoopCtx:
+            async def schedule(self, delay: float, payload: bytes) -> None: ...
+            async def send(self, to: AgentId, payload: bytes) -> None: ...
+            async def broadcast(self, payload: bytes) -> None: ...
+
+        roster = ["a0", "a1", "a2", "a3"]
+        follower = ResonanceReplicaAgent(AgentId("a1"), _RecordingCoord(), roster, rounds=1)
+        ctx = cast("Any", _NoopCtx())
+        await follower.on_start(ctx)
+        # O| from a NON-leader and from the leader alike are trace-only — neither commits.
+        await follower.on_message(ctx, AgentId("attacker"), payload)
+        await follower.on_message(ctx, AgentId("a0"), payload)
+        assert applied == []  # no commit is triggered by any bare O|
 
     @pytest.mark.asyncio
     async def test_votes_are_self_contained_for_generic_transport(self) -> None:
@@ -3653,6 +3696,24 @@ class TestBowVocabReconciliation:
         assert width is None
         assert sem["a0"] == [0.1, 0.2, 0.3]
 
+    def test_reconcile_caps_vocab_width_against_dos(self) -> None:
+        """LI-05/V5: a single record with a pathologically large vocab must not blow up
+        resolve(): the canonical width (and every remapped vector) is capped, so the
+        O(width x n_agents) allocation stays bounded regardless of adversarial input."""
+        from nest_plugins_reference.coordination.resonance_bft._vectors import (
+            _MAX_RECONCILE_VOCAB,
+            _reconcile_bow_semantics,
+        )
+
+        huge = [f"w{i}" for i in range(_MAX_RECONCILE_VOCAB + 5000)]
+        evals: dict[str, Any] = {
+            "a0": {"vocab": ["hello", "world"], "semantic": [1.0, 2.0]},
+            "a1": {"vocab": huge, "semantic": [0.0] * len(huge)},
+        }
+        sem, width = _reconcile_bow_semantics(evals, None)
+        assert width is not None and width <= _MAX_RECONCILE_VOCAB
+        assert all(len(v) <= _MAX_RECONCILE_VOCAB for v in sem.values())
+
     @pytest.mark.asyncio
     async def test_transport_divergent_vocab_not_falsely_aligned(self) -> None:
         """End-to-end over the transport path: two agents with DIFFERENT distinctive words that
@@ -4672,10 +4733,11 @@ class TestApiFit:
         error. This proves the scenario is correctly wired (entry point + layer stack +
         config), closing the 'unverified the scenario actually runs' gap.
 
-        Scope (honest): the generic runner exercises the layer wiring and agent lifecycle;
-        the BFT consensus rounds (propose→participate→deliberate→resolve→commit) are driven
-        by the plugin's own API and are verified by the unit/property suite above, not by
-        this trace.
+        This drives the REAL plugin: the scenario's ``task.type: resonance_bft_consensus``
+        factory runs propose→participate→resolve→commit over the transport (not the toy
+        ``consensus`` wiring). Under the 4/3 partition the minority cannot reach the n−f
+        quorum, so this run legitimately makes no commit (liveness); the assertions below
+        only require that the wired stack runs and resolves the coordination plugin.
         """
         import asyncio
         import tempfile
@@ -4688,7 +4750,7 @@ class TestApiFit:
         scenario = (
             Path(__file__).resolve().parents[3]
             / "scenarios"
-            / "resonance_bft_wiring_partition.yaml"
+            / "resonance_bft_consensus_partition.yaml"
         )
         if not scenario.exists():
             pytest.skip(f"scenario not found at {scenario}")
@@ -4733,3 +4795,43 @@ class TestApiFit:
         from nest_plugins_reference.coordination.resonance_bft import ResonanceBFT
 
         assert isinstance(ResonanceBFT(AgentId("a0")), Coordination)
+
+
+class TestVoteSignatures:
+    """LI-07: signed view-votes are the building block of the two-phase quorum certificates.
+
+    Each vote binds (round_id, view, phase, winner); a forged, replayed, or wrong-value vote
+    must not verify, and signatures are deterministic per signer (reproducible traces).
+    """
+
+    def test_valid_vote_verifies(self) -> None:
+        a = make_plugin("a", seed=1)
+        sig, pub = a.sign_vote("r1", 0, "prepare", "winner-x")
+        assert ResonanceBFT.verify_vote("r1", 0, "prepare", "winner-x", sig, pub)
+
+    @pytest.mark.parametrize(
+        "rid,view,phase,winner",
+        [
+            ("r2", 0, "prepare", "winner-x"),  # wrong round
+            ("r1", 1, "prepare", "winner-x"),  # wrong view
+            ("r1", 0, "commit", "winner-x"),  # wrong phase
+            ("r1", 0, "prepare", "OTHER"),  # wrong winner
+        ],
+    )
+    def test_mutated_vote_fields_rejected(
+        self, rid: str, view: int, phase: str, winner: str
+    ) -> None:
+        a = make_plugin("a", seed=1)
+        sig, pub = a.sign_vote("r1", 0, "prepare", "winner-x")
+        assert not ResonanceBFT.verify_vote(rid, view, phase, winner, sig, pub)
+
+    def test_vote_signature_deterministic_per_signer(self) -> None:
+        a1 = make_plugin("a", seed=1)
+        a2 = make_plugin("a", seed=1)  # same seed → same key → same signature (reproducible)
+        assert a1.sign_vote("r1", 0, "prepare", "w") == a2.sign_vote("r1", 0, "prepare", "w")
+        b = make_plugin("b", seed=2)
+        assert b.sign_vote("r1", 0, "prepare", "w")[1] != a1.sign_vote("r1", 0, "prepare", "w")[1]
+
+    def test_forged_signature_rejected(self) -> None:
+        _, pub = make_plugin("a", seed=1).sign_vote("r1", 0, "prepare", "w")
+        assert not ResonanceBFT.verify_vote("r1", 0, "prepare", "w", "00" * 64, pub)

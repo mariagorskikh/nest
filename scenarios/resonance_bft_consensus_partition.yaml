@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-# End-to-end ResonanceBFT consensus UNDER a 4/3 network partition, driven through the
-# town transport.  n=7, f=2, quorum_needed = n-f = 5.  The leader sits in the 4-agent
-# group, so it can only collect 4 sealed evaluations (< 5) and NEVER commits while the
-# partition holds — demonstrating the liveness/safety property end-to-end (not just in
-# the unit suite): progress requires a sufficient quorum, a partitioned minority cannot
-# fork the commit.
+# End-to-end ResonanceBFT consensus under a 4/3 network partition that HEALS, driven through
+# the town transport (Problem #10's mandated partition+heal shape).  n=7, f=2, quorum_needed =
+# n-f = 5.  For the first ~30% of the run neither side reaches the quorum, so no commit is
+# produced while partitioned — the safety/liveness property (a partitioned minority cannot fork
+# the commit).  Leadership keeps rotating (view-change) on each timeout; once the partition heals
+# (partition_heal_at_tick counts simulator EVENTS, landing the heal at ~30% of the trace), the
+# next view's leader gathers the full n-f quorum and ALL 5 rounds COMMIT — post-recovery
+# progress, the "plus a heal, with commits post-recovery" requirement.
 name: resonance_bft_consensus_partition
 description: |
-  ResonanceBFT driven end-to-end under a 4/3 partition.  Neither side reaches the
-  n-f=5 quorum, so no commit is produced while partitioned — the liveness guarantee,
-  observed through the real runner.
+  ResonanceBFT under a 4/3 partition that heals at 30% of the run: no commit while partitioned,
+  then commit after the network heals — observed end-to-end through the real runner.
 
 tier: 1
 seed: 42
@@ -41,8 +42,15 @@ task:
   type: resonance_bft_consensus
   config:
     expected_participants: 7
-    rounds: 1
+    rounds: 5
     embed: demo
+    # The charter's shape is "a partition splitting them 4/3 for the FIRST ~30% of the scenario,
+    # plus a heal": a short partitioned window (leadership rotating on view timeouts, no commit
+    # possible on either side), then the majority of the run makes post-heal progress (all 5
+    # rounds commit).  view_timeout_ticks is small so pre-heal churn stays a minority of the run;
+    # budget = max_view_changes * view_timeout_ticks still comfortably spans the partition.
+    view_timeout_ticks: 200
+    max_view_changes: 30
 
 failures:
   message_drop: 0.0
@@ -50,6 +58,7 @@ failures:
     groups:
       - [leader-0, follower-0, follower-1, follower-2]
       - [follower-3, follower-4, follower-5]
+  partition_heal_at_tick: 200
   byzantine_agents: 0.0
 
 duration: "ticks: 10000"

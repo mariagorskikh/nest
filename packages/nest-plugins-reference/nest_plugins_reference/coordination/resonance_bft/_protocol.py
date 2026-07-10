@@ -42,6 +42,7 @@ from ._trust import (
 )
 from ._types import ConsensusTrajectory, Offer
 from ._vectors import (
+    _MAX_RECONCILE_VOCAB,
     _affective,
     _behavioral,
     _belief_digest,
@@ -57,6 +58,7 @@ from ._vectors import (
     _tokenise,
     _trimmed_centroid,
     _verify_signature,
+    _vote_digest,
     _weighted_centroid,
     sycophancy_score,
 )
@@ -211,9 +213,26 @@ def _compute_tampered(
     for aid, rec in evaluations.items():
         try:
             # Numeric/schema validity FIRST — a malformed (NaN/inf/wrong-dim/oversized)
-            # record is tampered even if its seal+signature are internally consistent.
-            schema_ok = _axes_well_formed(rec)
-            expected = f"sha256:{_commitment(_sealed_belief(rec), rec['nonce'], rec.get('vocab'))}"
+            # record is tampered even if its seal+signature are internally consistent.  Short-
+            # circuit here: skipping the crypto recompute on a schema-invalid record both
+            # avoids wasted work and denies a DoS where an oversized belief axis would still be
+            # copied by _sealed_belief before rejection.
+            if not _axes_well_formed(rec):
+                tampered.append(aid)
+                continue
+            # Cap the vocab (basis) that feeds the commitment hash: an authenticated Byzantine
+            # member can honestly sign a record with a pathologically large "vocab", and this
+            # runs on every record every resolve() — an uncapped basis join is a CPU/memory DoS
+            # (LI-05/V5). Honest vocabs are tiny; a capped basis simply fails the seal match for
+            # an oversized adversarial vocab, which is the correct (tampered) outcome anyway.
+            raw_vocab = rec.get("vocab")
+            vocab: list[str] | None = (
+                cast("list[str]", raw_vocab)[:_MAX_RECONCILE_VOCAB]
+                if isinstance(raw_vocab, list)
+                else None
+            )
+            schema_ok = True
+            expected = f"sha256:{_commitment(_sealed_belief(rec), rec['nonce'], vocab)}"
             seal_ok = expected == rec.get("commitment", "")
             pubkey = rec.get("pubkey", "")
             sig_ok = _verify_signature(
@@ -361,6 +380,11 @@ class ResonanceBFT:
         # only sees its own side would silently lower its own quorum bar (split-brain).
         self._expected_n = expected_n
         self._nonce_counter = 0
+        # Monotone counter backing deterministic round ids.  Kept SEPARATE from
+        # ``_nonce_counter`` so round-id generation is independent of how many
+        # commitment nonces have been drawn — a refactor that reorders nonce vs
+        # round creation cannot then shift round ids.  See ``_new_round_id``.
+        self._round_counter = 0
         # Deterministic ed25519 signing key (seed → key; RFC 8032 signatures are
         # themselves deterministic, so the whole protocol stays reproducible).  Used
         # to sign each evaluation's belief so a party controlling the shared round
@@ -442,6 +466,57 @@ class ResonanceBFT:
             self._nonce_counter += 1
             return h
         return uuid.uuid4().hex[:16]
+
+    def _new_round_id(self) -> str:
+        """Return a fresh round id — deterministic under a seed, random otherwise.
+
+        The round id is embedded in every broadcast payload and signed into every
+        evaluation digest, so an unseeded ``uuid.uuid4()`` would diverge the whole
+        trace byte-for-byte across same-seed runs (Tier-1 determinism violation).
+        Seeded, we derive it from ``(seed, round counter)`` — the ``round:`` domain
+        prefix keeps it disjoint from :meth:`_nonce` values drawn from the same seed.
+        The counter still advances per call, so successive rounds (e.g. view
+        changes) keep distinct ids.
+
+        Example::
+
+            plugin = ResonanceBFT(agent_id=AgentId("a"), seed=42)
+            rid = plugin._new_round_id()  # reproducible across same-seed instances
+        """
+        if self._seed is not None:
+            h = hashlib.sha256(f"round:{self._seed}:{self._round_counter}".encode()).hexdigest()[
+                :32
+            ]
+            self._round_counter += 1
+            return h
+        return str(uuid.uuid4())
+
+    def sign_vote(self, round_id: str, view: int, phase: str, winner: str) -> tuple[str, str]:
+        """Sign a BFT view-vote and return ``(signature_hex, pubkey_hex)``.
+
+        The vote binds ``(round_id, view, phase, winner)`` (see :func:`_vote_digest`); the
+        driver's two-phase agreement collects ``2f+1`` of these signed votes from distinct
+        agents to form a prepare/commit quorum certificate.  Reuses the same deterministic
+        ed25519 key that signs evaluation records, so no new key material is introduced.
+
+        Example::
+
+            plugin = ResonanceBFT(agent_id=AgentId("a"), seed=1)
+            sig_hex, pub_hex = plugin.sign_vote("r1", 0, "prepare", "a2")
+        """
+        sig = self._signing_key.sign(_vote_digest(round_id, view, phase, winner))
+        return sig.hex(), self._pubkey_hex
+
+    @staticmethod
+    def verify_vote(
+        round_id: str, view: int, phase: str, winner: str, signature_hex: str, pubkey_hex: str
+    ) -> bool:
+        """True iff *signature_hex* is a valid vote signature over ``(round_id, view, phase,
+        winner)`` under *pubkey_hex*.  A forged, replayed, or wrong-value vote fails to verify
+        and must not be counted toward a quorum certificate."""
+        return _verify_signature(
+            pubkey_hex, _vote_digest(round_id, view, phase, winner), signature_hex
+        )
 
     def _build_vocab(self, task: Task, extra_texts: list[str] | None = None) -> list[str]:
         """Build content-word vocab from task description plus any extra texts.
@@ -538,7 +613,7 @@ class ResonanceBFT:
             rnd = await plugin.propose(Task(id="t1", description="select model"))
             rnd2 = await plugin.propose(task, view_number=1, all_agents=["a0","a1","a2","a3"])
         """
-        round_id = str(uuid.uuid4())
+        round_id = self._new_round_id()
         vocab = self._build_vocab(task)
 
         if view_number > 0 and all_agents:

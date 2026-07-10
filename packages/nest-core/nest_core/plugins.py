@@ -36,6 +36,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("payments", "escrow"): f"{_REF}.payments.escrow:EscrowPayments",
     ("coordination", "contract_net"): f"{_REF}.coordination.contract_net:ContractNet",
     ("coordination", "hotstuff"): f"{_REF}.coordination.hotstuff:HotStuff",
+    ("coordination", "resonance_bft"): f"{_REF}.coordination.resonance_bft:ResonanceBFT",
     ("negotiation", "alternating_offers"): (
         f"{_REF}.negotiation.alternating_offers:AlternatingOffers"
     ),

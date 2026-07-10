@@ -1991,6 +1991,7 @@ class TestRogueTrustedAgentValidators:
 class TestValidatorRegistry:
     def test_all_scenario_types_registered(self) -> None:
         expected = {
+            "resonance_bft_consensus",
             "marketplace",
             "auction",
             "voting",

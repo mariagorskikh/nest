@@ -4614,7 +4614,52 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 # ---------------------------------------------------------------------------
 
 
+# The resonance_bft_consensus adversarial validators live in the plugins-reference package (a
+# reference plugin owns its own validators), so import them lazily — core keeps no hard
+# dependency, and when plugins-reference is absent each returns empty.  One thin wrapper per
+# invariant so the registry exposes them individually (LI-08).
+def _rbft_trace_validator(name: str, events: list[dict[str, Any]]) -> list[ValidationResult]:
+    try:
+        from nest_plugins_reference.validators import resonance_bft_trace as _rbft
+    except ImportError:
+        return []
+    fn = getattr(_rbft, name, None)
+    return fn(events) if fn is not None else []
+
+
+def _rbft_no_conflicting_commits(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    return _rbft_trace_validator("validate_resonance_no_conflicting_commits", events)
+
+
+def _rbft_no_leader_equivocation(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    return _rbft_trace_validator("validate_resonance_no_leader_equivocation", events)
+
+
+def _rbft_no_forged_quorum(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    return _rbft_trace_validator("validate_resonance_no_forged_quorum", events)
+
+
+def _rbft_no_equivocation(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    return _rbft_trace_validator("validate_resonance_no_equivocation", events)
+
+
+def _rbft_vote_agreement(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    return _rbft_trace_validator("validate_resonance_vote_agreement", events)
+
+
+def _rbft_no_stuck_view(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    return _rbft_trace_validator("validate_resonance_no_stuck_view", events)
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "resonance_bft_consensus": [
+        _rbft_no_conflicting_commits,
+        _rbft_no_leader_equivocation,
+        _rbft_no_forged_quorum,
+        _rbft_no_equivocation,
+        _rbft_vote_agreement,
+        _rbft_no_stuck_view,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,

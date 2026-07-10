@@ -497,7 +497,9 @@ def validate_bft_no_forged_quorum(
         claimed_n = claimed_n if isinstance(claimed_n, int) else 0
         n = max(claimed_n, observed_n)
         f = (n - 1) // 3 if n > 0 else 0
-        qs_real = len(quorum_agents)
+        # Count DISTINCT quorum members: padding the list with duplicates must not inflate
+        # the quorum size and let a sub-quorum masquerade as meeting the n − f bar (LI-05/V2).
+        qs_real = len(set(quorum_agents))
         qn_real = n - f if n > 0 else meta.get("quorum_needed", 1)
         qs_claimed = meta.get("quorum_size", 0)
         qn_claimed = meta.get("quorum_needed", 1)

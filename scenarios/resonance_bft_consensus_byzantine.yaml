@@ -1,23 +1,30 @@
 # SPDX-License-Identifier: Apache-2.0
-# End-to-end ResonanceBFT under BYZANTINE (lying) faults, driven through the town transport.
-# n=10, f=3, quorum_needed = n-f = 7. Two followers submit TAMPERED records (they mutate their
-# sealed belief after participate() without recomputing the SHA-256 seal / ed25519 signature).
-# resolve() must detect the seal mismatch, flag them tampered, exclude them from the centroid,
-# and still commit with the honest quorum — the real Byzantine fault mode (not a crash).
+# End-to-end ResonanceBFT under BYZANTINE faults, DOUBLE-TRACK, driven through the town transport
+# (Problem #10's mandated byzantine shape).  n=7, f=2, quorum_needed = n-f = 5.
+#   * FRAMEWORK injection: `failures.byzantine_agents: 0.28` -> the simulator byte-XOR garbles all
+#     messages FROM the chosen byzantine agent (max(1, int(7*0.28)) = 1 agent).  The plugin's LI-02
+#     guards drop the garbage rather than deserializing it as a vote (the spec's anti-pattern); if
+#     the garbled agent happens to be the current leader, its proposal is dropped and the cohort
+#     rotates leadership (view-change) to a healthy leader.
+#   * SEMANTIC tamper (`task.config.byzantine: 1`): one follower mutates its sealed belief after
+#     participate() without recomputing the seal — resolve() detects the mismatch, flags it
+#     tampered, and excludes it.  This is the plugin's own detection layer.
+# Either way, the honest n-f=5 quorum commits — safety holds, liveness recovers post-rotation.
 name: resonance_bft_consensus_byzantine
 description: |
-  ResonanceBFT commits over the transport despite 2 of 10 agents submitting tampered
-  (broken-seal) records: they are detected and excluded, the honest quorum commits.
+  ResonanceBFT commits over the transport under BOTH framework byte-garbling (byzantine_agents:
+  0.28) and a semantic-tamper follower: garbage is dropped, the tampered record is detected and
+  excluded, leadership rotates if the garbled agent was leading, and the honest quorum commits.
 tier: 1
 seed: 42
 agents:
-  count: 10
+  count: 7
   brain: state-machine
   roles:
     - name: leader
       count: 1
     - name: follower
-      count: 9
+      count: 6
 layers:
   transport: in_memory
   comms: nest_native
@@ -34,13 +41,17 @@ layers:
 task:
   type: resonance_bft_consensus
   config:
-    expected_participants: 10
+    expected_participants: 7
     rounds: 1
     embed: demo
-    byzantine: 2
+    byzantine: 1
+    # View-change budget so a framework-garbled LEADER (its proposal dropped) is rotated past and
+    # the round still commits under a healthy leader.
+    view_timeout_ticks: 300
+    max_view_changes: 20
 failures:
   message_drop: 0.0
-  byzantine_agents: 0.0
+  byzantine_agents: 0.28
 duration: "ticks: 100000"
 metrics: [success_rate, message_count, agent_count]
 output:

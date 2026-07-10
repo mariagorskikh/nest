@@ -15,8 +15,10 @@ from collections import Counter
 from typing import Any, cast
 
 __all__ = [
+    "_MAX_RECONCILE_VOCAB",
     "_affective",
     "_behavioral",
+    "_vote_digest",
     "_belief_digest",
     "_commitment",
     "_cosine",
@@ -292,6 +294,12 @@ def _weighted_centroid(
     return _normalise(centroid)
 
 
+# Upper bound on the reconciled canonical vocabulary width. Honest rounds derive vocab from
+# the task description (tens of words), so this only clamps adversarial mega-vocabs that would
+# otherwise blow up the O(width x n_agents) remap in _reconcile_bow_semantics (LI-05/V5).
+_MAX_RECONCILE_VOCAB = 4096
+
+
 def _reconcile_bow_semantics(
     evaluations: dict[str, Any],
     embed_fn: Any,
@@ -313,20 +321,41 @@ def _reconcile_bow_semantics(
     It does NOT mutate the sealed records (their commitments stay valid for validators).  With
     a dense ``embed_fn`` the semantic axis is a fixed-dim vector with no vocab, so it is skipped.
     """
-    semantic_of = {aid: list(rec.get("semantic", [])) for aid, rec in evaluations.items()}
+    # Defensive: a record may be a non-dict (an authenticated Byzantine follower can supply any
+    # JSON value as its rec); guard every access so this helper never raises out of resolve()
+    # before the tamper check excludes the record.
+    semantic_of: dict[str, list[float]] = {}
+    for aid, rec in evaluations.items():
+        if isinstance(rec, dict):
+            semantic_of[aid] = list(cast("dict[str, Any]", rec).get("semantic", []))
+        else:
+            semantic_of[aid] = []
     if embed_fn is not None:
         return semantic_of, None
-    vocabs = {
-        aid: cast("list[Any]", rec["vocab"])
-        for aid, rec in evaluations.items()
-        if isinstance(rec.get("vocab"), list)
-    }
+    # Cap each record's vocab at the source (not just the aggregated width below): a Byzantine
+    # roster member can honestly SIGN a record carrying a pathologically large vocab (vocab is
+    # in its own commitment, so it passes the seal/signature checks), and this function runs on
+    # every record before tampered-exclusion — so an uncapped per-record vocab makes the union
+    # build and the remap loop O(vocab size), a CPU/memory DoS on resolve() (LI-05/V5). Honest
+    # task vocabs are tiny, far under the cap, so this only clamps adversarial input.
+    vocabs: dict[str, list[Any]] = {}
+    for aid, rec in evaluations.items():
+        if not isinstance(rec, dict):
+            continue  # non-dict record (Byzantine); guarded so this never raises here
+        voc = cast("dict[str, Any]", rec).get("vocab")
+        if isinstance(voc, list):
+            vocabs[aid] = cast("list[Any]", voc)[:_MAX_RECONCILE_VOCAB]
     if len(vocabs) < 2:
         return semantic_of, None  # legacy records without per-record vocab: nothing to align
     union: set[str] = set()
     for voc in vocabs.values():
         union |= {str(w) for w in voc}
-    canonical = sorted(union)
+    # Cap the canonical width: a single record can carry an arbitrarily long vocab, and the
+    # remap below allocates a width-length vector PER agent (O(width x n_agents)) — an
+    # unbounded union is a memory-blowup DoS on resolve() (LI-05/V5). Truncate deterministically
+    # (sorted order → resolver-independent); honest rounds use tiny task vocabs far under the
+    # cap, so this only ever bites adversarial input.
+    canonical = sorted(union)[:_MAX_RECONCILE_VOCAB]
     index = {w: i for i, w in enumerate(canonical)}
     width = len(canonical)
     for aid, voc in vocabs.items():
@@ -559,6 +588,19 @@ def _belief_digest(
     backward compatibility with older callers.
     """
     payload = "\x00".join((commitment, eval_text, round_id, aid))
+    return _hashlib.sha256(payload.encode()).digest()
+
+
+def _vote_digest(round_id: str, view: int, phase: str, winner: str) -> bytes:
+    """Digest a BFT view-vote binds — ``(round_id, view, phase, winner)`` — the message a
+    replica signs when voting ``prepare``/``commit`` for a proposed winner in a given view.
+
+    Binding all four fields makes each vote round-, view-, phase-, and value-specific: a vote
+    for one (round, view, phase, winner) cannot be replayed as a vote for any other, so a
+    quorum certificate assembled from these signatures is unambiguous and third-party
+    verifiable (the same property the belief-signature gives an evaluation record).
+    """
+    payload = "\x00".join(("vote", round_id, str(view), phase, winner))
     return _hashlib.sha256(payload.encode()).digest()
 
 

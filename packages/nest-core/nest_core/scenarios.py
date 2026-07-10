@@ -145,3 +145,15 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("rogue_trusted_agent", rogue_trusted_agent_factory)
+    elif name == "resonance_bft_consensus":
+        # Lives in the plugins-reference package (a reference plugin's own scenario),
+        # not in nest_core.  Import lazily so core keeps no hard dependency on it: when
+        # plugins-reference is not installed the factory simply stays unregistered.
+        try:
+            from nest_plugins_reference.scenarios.resonance_bft_consensus import (
+                resonance_bft_consensus_factory,
+            )
+
+            register_scenario("resonance_bft_consensus", resonance_bft_consensus_factory)
+        except ImportError:
+            pass

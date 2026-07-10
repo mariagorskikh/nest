@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# End-to-end ResonanceBFT VIEW-CHANGE under leader failure, driven through the town transport.
+# n=7, f=2, quorum_needed = n-f = 5. The view-0 leader (leader-0) is crashed and never proposes,
+# so the cohort must time out (logical-clock view timeout), rotate leadership round-robin to the
+# view-1 leader (follower-0), and commit there. The trace records the rotation as NV (new-view)
+# messages — the view-change evidence Problem #10 requires — followed by a genuine commit.
+name: resonance_bft_consensus_viewchange
+description: |
+  ResonanceBFT elects a new leader within a bounded number of views when the view-0 leader is
+  crashed, and the new leader drives the round to a commit — view-change + liveness, end-to-end.
+tier: 1
+seed: 42
+agents:
+  count: 7
+  brain: state-machine
+  roles:
+    - name: leader
+      count: 1
+    - name: follower
+      count: 6
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: resonance_bft
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+task:
+  type: resonance_bft_consensus
+  config:
+    expected_participants: 7
+    rounds: 1
+    embed: demo
+    crash_leader: true
+    view_timeout_ticks: 40
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+duration: "ticks: 100000"
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+output:
+  trace: ./traces/resonance_bft_consensus_viewchange.jsonl

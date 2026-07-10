@@ -361,6 +361,16 @@ class TestNoForgedQuorum:
         assert not result.passed
         assert "under-reported" in result.detail
 
+    def test_fails_on_duplicate_padded_quorum(self) -> None:
+        """LI-05/V2: a forger pads quorum_agents with a duplicate to fake meeting the
+        bar from FEWER distinct agents. The quorum size must count DISTINCT agents, so
+        ["leader-0","qa1","qa2","qa3","qa3"] is a 4-quorum, not 5, and must be flagged."""
+        outcome = _bft_outcome("r1", "leader-0", quorum_size=5, quorum_needed=5)
+        outcome.metadata["quorum_agents"] = ["leader-0", "qa1", "qa2", "qa3", "qa3"]
+        result = validate_bft_no_forged_quorum([outcome])
+        assert not result.passed
+        assert "r1" in result.detail
+
 
 # ── validate_bft_liveness_view_progress ──────────────────────────────────────
 
