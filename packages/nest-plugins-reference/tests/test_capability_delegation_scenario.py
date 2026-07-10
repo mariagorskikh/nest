@@ -48,9 +48,16 @@ async def test_reference_jwt_admits_attacks(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_is_byte_deterministic(tmp_path: Path) -> None:
-    """Same seed → byte-identical trace across two runs."""
+@pytest.mark.parametrize("auth", ["macaroon", "jwt"])
+async def test_trace_is_byte_deterministic(tmp_path: Path, auth: str) -> None:
+    """Same seed → byte-identical trace across two runs, in *both* arms.
+
+    The jwt arm matters as much as the macaroon arm: tokens ride in the
+    ``present:`` payloads that land in the trace, so an auth plugin left on
+    wall-clock time (the ``clock=0.0`` provisioning in ``_provision_auth``)
+    would leak nondeterminism into the trace bytes.
+    """
     t1, t2 = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
-    await ScenarioRunner(_config("macaroon", t1)).run()
-    await ScenarioRunner(_config("macaroon", t2)).run()
+    await ScenarioRunner(_config(auth, t1)).run()
+    await ScenarioRunner(_config(auth, t2)).run()
     assert hashlib.sha256(t1.read_bytes()).digest() == hashlib.sha256(t2.read_bytes()).digest()

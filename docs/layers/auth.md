@@ -42,6 +42,28 @@ Source: [`nest_plugins_reference/auth/delegatable.py`](../../packages/nest-plugi
 Validators: [`nest_plugins_reference/validators/delegation_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/delegation_validators.py).
 Scenario: [`scenarios/delegated_auth.yaml`](../../scenarios/delegated_auth.yaml).
 
+## Hardened plugin: `macaroon`
+
+An independent macaroon implementation (Birgisson et al., NDSS 2014) of the
+same capability-delegation shape, built around the observation that the HMAC
+chain proves *provenance*, not *permission*: any holder can extend the chain
+with an arbitrary link and compute a valid signature, so `verify`
+independently re-walks every link and rejects scope escalation, TTL
+widening, broken delegator→audience linkage, expiry, and revoked prefixes —
+each with a typed `ValueError` subclass. Presentation binding extends the
+protocol surface without breaking it: `verify(token, presenter=None)` keeps
+the exact `Auth` signature for presenter-blind callers. Delegation TTLs are
+anchored at the logical *now* and may never outlive the parent
+(`TtlViolationError` at mint — no dead-on-arrival children); offline
+`attenuate` needs no clock and no secret. Attack probes run against **both**
+this plugin and `jwt` via adapters (denied here, admitted there), and the
+`capability_delegation` scenario's trace is replayed offline by an
+independent validator, byte-deterministic in both arms.
+
+Source: [`nest_plugins_reference/auth/macaroon.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/macaroon.py).
+Validators: [`nest_plugins_reference/validators/capability_delegation_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/capability_delegation_validators.py).
+Scenario: [`scenarios/capability_delegation.yaml`](../../scenarios/capability_delegation.yaml).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

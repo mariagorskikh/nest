@@ -13,17 +13,17 @@ from __future__ import annotations
 
 import pytest
 from nest_core.types import AgentId
+from nest_plugins_reference.auth.jwt_auth import JwtAuth
 from nest_plugins_reference.auth.macaroon import (
     AudienceMismatchError,
-    MacaroonAuth,
     ExpiredTokenError,
     InvalidTokenError,
+    MacaroonAuth,
     RevokedAncestorError,
     ScopeEscalationError,
     TtlViolationError,
     attenuate,
 )
-from nest_plugins_reference.auth.jwt_auth import JwtAuth
 from nest_plugins_reference.validators.capability_delegation_validators import (
     blind_verify,
     macaroon_delegate,
