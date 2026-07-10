@@ -4923,6 +4923,39 @@ def validate_sybil_bond_attempts_rejected(
     ]
 
 
+def validate_auth_no_scope_escalation(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    from nest_plugins_reference.validators.delegation_validators import (
+        check_no_scope_escalation,
+        extract_delegation_audits,
+    )
+
+    audits = extract_delegation_audits(events)
+    report = check_no_scope_escalation(audits)
+    return [ValidationResult("auth_no_scope_escalation", report.passed, report.detail)]
+
+
+def validate_auth_no_stale_parent(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    from nest_plugins_reference.validators.delegation_validators import (
+        check_no_stale_ancestor_use,
+        extract_delegation_audits,
+    )
+
+    audits = extract_delegation_audits(events)
+    report = check_no_stale_ancestor_use(audits)
+    return [ValidationResult("auth_no_stale_parent", report.passed, report.detail)]
+
+
+def validate_auth_no_audience_confusion(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    from nest_plugins_reference.validators.delegation_validators import (
+        check_audience_binding,
+        extract_delegation_audits,
+    )
+
+    audits = extract_delegation_audits(events)
+    report = check_audience_binding(audits)
+    return [ValidationResult("auth_no_audience_confusion", report.passed, report.detail)]
+
+
 VALIDATORS: dict[str, list[Any]] = {
     "sybil_bond": [
         validate_sybil_bond_no_free_trust,
@@ -5038,5 +5071,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "delegated_auth": [
+        validate_auth_no_scope_escalation,
+        validate_auth_no_stale_parent,
+        validate_auth_no_audience_confusion,
     ],
 }

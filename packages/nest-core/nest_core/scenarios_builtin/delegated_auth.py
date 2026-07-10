@@ -113,9 +113,18 @@ async def _verify(auth: Any, token: Token, presenter: AgentId) -> bool:
 
         ok = await _verify(auth, token, AgentId("leaf-0"))
     """
+    import inspect
     verify_presented = getattr(auth, "verify_presented", None)
     try:
-        if callable(verify_presented):
+        try:
+            sig = inspect.signature(auth.verify)
+            has_presenter = "presenter" in sig.parameters
+        except (ValueError, TypeError):
+            has_presenter = False
+
+        if has_presenter:
+            await auth.verify(token, presenter=presenter)
+        elif callable(verify_presented):
             await cast("Awaitable[object]", verify_presented(token, presenter))
         else:
             await auth.verify(token)

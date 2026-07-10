@@ -60,7 +60,7 @@ class JwtAuth:
         sig = self._sign(payload)
         return Token(f"{payload}|{sig}")
 
-    async def verify(self, token: Token) -> AuthContext:
+    async def verify(self, token: Token, presenter: AgentId | None = None) -> AuthContext:
         """Verify a token and return its context.
 
         Example::
