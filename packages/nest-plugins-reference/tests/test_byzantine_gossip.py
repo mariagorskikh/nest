@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from typing import cast
 
 from nest_core.layers.registry import Registry
 from nest_core.plugins import PluginRegistry
@@ -42,8 +43,10 @@ from nest_plugins_reference.registry.gossip import (
 
 def test_resolves_and_conforms() -> None:
     cls = PluginRegistry().resolve("registry", "byzantine_gossip")
+    assert cls is ByzantineGossipRegistry
     net = GossipNetwork(agent_ids=[AgentId("a"), AgentId("b")])
-    reg = cls(AgentId("a"), net, DidKeyIdentity(AgentId("a"), seed=b"s"))
+    plugin_cls = cast(type[ByzantineGossipRegistry], cls)
+    reg = plugin_cls(AgentId("a"), net, DidKeyIdentity(AgentId("a"), seed=b"s"))
     assert isinstance(reg, Registry)
 
 
