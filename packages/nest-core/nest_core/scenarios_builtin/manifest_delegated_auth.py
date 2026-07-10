@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Delegatable auth scenario with scope, revocation, and audience attacks.
+"""Manifest-bound delegatable auth scenario with adversarial probes.
 
 One coordinator receives a manifest-bound root token and builds a delegation
 tree: 3 intermediaries, each with 4 leaves. Honest leaves verify with in-scope,
-in-audience, unrevoked tokens. Three adversarial probes then try to:
+in-audience, unrevoked tokens. Four adversarial probes then try to:
 
+* widen a signed manifest after signing,
 * delegate a broader scope than the parent token carries,
 * use a descendant after an ancestor was revoked, and
 * present a token minted for one audience as another audience.
 
-The scenario is capability-gated. With ``auth: delegatable`` the probes are
-blocked. With the baseline ``auth: jwt`` there is no delegation surface, so the
-scenario falls back to central re-issuance; the same three probes are accepted
+The scenario is capability-gated. With ``auth: manifest_delegatable`` the probes are
+blocked. With the baseline ``auth: jwt`` there is no manifest/delegation surface,
+so the scenario falls back to central re-issuance; the same four probes are accepted
 and the validators fail.
 
 Trace line protocol (carried in ``send`` message bodies):
@@ -22,7 +23,7 @@ Trace line protocol (carried in ``send`` message bodies):
 
 Example::
 
-    agents = delegated_auth_factory(config, plugins)
+    agents = manifest_delegated_auth_factory(config, plugins)
 """
 
 from __future__ import annotations
@@ -79,6 +80,7 @@ class DelegationCoordinator(StateMachineAgent):
         intermediate_tokens: dict[AgentId, Token] = {}
         leaf_tokens: dict[AgentId, Token] = {}
 
+        await self._probe_manifest_tamper(ctx, auth)
         for parent, scopes in zip(self._intermediaries, intermediate_scopes, strict=True):
             if can_delegate:
                 token = await auth.delegate(root, parent, scopes, ttl=1800)
@@ -103,6 +105,32 @@ class DelegationCoordinator(StateMachineAgent):
         await self._probe_scope_escalation(ctx, auth, can_delegate, intermediate_tokens)
         await self._probe_stale_parent(ctx, auth, can_delegate, intermediate_tokens, leaf_tokens)
         await self._probe_audience_confusion(ctx, auth, can_delegate, leaf_tokens)
+
+    async def _probe_manifest_tamper(self, ctx: AgentContext, auth: Any) -> None:
+        attacker = AgentId("attack-manifest")
+        if auth.__class__.__name__ == "ManifestDelegatableAuth":
+            from nest_plugins_reference.auth.manifest_delegatable import ManifestDelegatableAuth
+            from nest_plugins_reference.identity.ed25519_rotating import Ed25519RotatingIdentity
+            from nest_plugins_reference.policy import PolicyManifest, sign_manifest
+
+            identity = Ed25519RotatingIdentity(attacker, seed=b"manifest-tamper")
+            signed = sign_manifest(identity, PolicyManifest(agent_id=attacker, tools=["buy"]))
+            tampered = signed.model_copy(update={"tools": ["buy", "admin"]})
+            tamper_auth = ManifestDelegatableAuth(
+                manifests={attacker: tampered},
+                identities={attacker: identity},
+                clock=ctx.time,
+            )
+            token = await tamper_auth.issue(attacker, ["tool:admin"])
+            verified = await tamper_auth.verify(token, presenter=attacker)
+            outcome = "blocked" if not verified.scopes else "accepted"
+            await self._emit(ctx, f"attack:manifest_tamper:{outcome}")
+            return
+
+        token = await auth.issue(attacker, ["tool:admin"])
+        verified = await auth.verify(token)
+        outcome = "accepted" if "tool:admin" in verified.scopes else "blocked"
+        await self._emit(ctx, f"attack:manifest_tamper:{outcome}")
 
     async def _probe_scope_escalation(
         self,
@@ -218,8 +246,8 @@ def _build_auth_instance(auth_cls: Any, coordinator: AgentId) -> Any:
     if not isinstance(auth_cls, type):
         return auth_cls
 
-    if auth_cls.__name__ == "DelegatableAuth":
-        from nest_plugins_reference.auth.delegatable import DelegatableAuth
+    if auth_cls.__name__ == "ManifestDelegatableAuth":
+        from nest_plugins_reference.auth.manifest_delegatable import ManifestDelegatableAuth
         from nest_plugins_reference.identity.ed25519_rotating import Ed25519RotatingIdentity
         from nest_plugins_reference.policy import Budget, PolicyManifest, sign_manifest
 
@@ -230,7 +258,7 @@ def _build_auth_instance(auth_cls: Any, coordinator: AgentId) -> Any:
             budget=Budget(cap=1000),
         )
         signed = sign_manifest(ident, manifest)
-        return DelegatableAuth(
+        return ManifestDelegatableAuth(
             manifests={coordinator: signed},
             identities={coordinator: ident},
             clock=0.0,
@@ -242,7 +270,7 @@ def _build_auth_instance(auth_cls: Any, coordinator: AgentId) -> Any:
         return auth_cls()
 
 
-def delegated_auth_factory(
+def manifest_delegated_auth_factory(
     config: ScenarioConfig,
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
@@ -250,7 +278,7 @@ def delegated_auth_factory(
 
     Example::
 
-        agents = delegated_auth_factory(config, plugins)
+        agents = manifest_delegated_auth_factory(config, plugins)
     """
     coordinator = AgentId("coordinator-0")
     auditor = AgentId("auditor-0")

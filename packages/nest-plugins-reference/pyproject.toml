@@ -34,7 +34,7 @@ Repository = "https://github.com/projnanda/nandatown"
 # (layer, name), but declaring the entry point here is the documented,
 # install-time discovery path described in CONTRIBUTING.md.
 [project.entry-points."nest.plugins.auth"]
-delegatable = "nest_plugins_reference.auth.delegatable:DelegatableAuth"
+manifest_delegatable = "nest_plugins_reference.auth.manifest_delegatable:ManifestDelegatableAuth"
 
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"

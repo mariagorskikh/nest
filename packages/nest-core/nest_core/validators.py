@@ -3166,7 +3166,7 @@ def validate_receipt_reputation_honest_confidence(
 # ---------------------------------------------------------------------------
 
 
-def _delegated_auth_lines(events: list[dict[str, Any]]) -> list[str]:
+def _manifest_delegated_auth_lines(events: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     for ev in events:
         if ev.get("kind") != "send":
@@ -3177,18 +3177,18 @@ def _delegated_auth_lines(events: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _delegated_auth_attack_outcomes(lines: list[str], attack: str) -> list[str]:
+def _manifest_delegated_auth_attack_outcomes(lines: list[str], attack: str) -> list[str]:
     prefix = f"attack:{attack}:"
     return [line.removeprefix(prefix) for line in lines if line.startswith(prefix)]
 
 
-def _validate_delegated_auth_attack(
+def _validate_manifest_delegated_auth_attack(
     events: list[dict[str, Any]],
     *,
     attack: str,
     name: str,
 ) -> list[ValidationResult]:
-    lines = _delegated_auth_lines(events)
+    lines = _manifest_delegated_auth_lines(events)
     honest_count = sum(
         1 for line in lines if line.startswith("honest_leaf:") and line.endswith(":ok")
     )
@@ -3201,7 +3201,7 @@ def _validate_delegated_auth_attack(
             )
         ]
 
-    outcomes = _delegated_auth_attack_outcomes(lines, attack)
+    outcomes = _manifest_delegated_auth_attack_outcomes(lines, attack)
     if not outcomes:
         return [ValidationResult(name, False, f"missing {attack} attack line")]
     if "accepted" in outcomes:
@@ -3226,10 +3226,26 @@ def validate_delegation_scope_containment(
 
         results = validate_delegation_scope_containment(events)
     """
-    return _validate_delegated_auth_attack(
+    return _validate_manifest_delegated_auth_attack(
         events,
         attack="scope_escalation",
-        name="delegated_auth_scope_containment",
+        name="manifest_delegated_auth_scope_containment",
+    )
+
+
+def validate_manifest_bound_root(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A tampered manifest must not widen root-token authority.
+
+    Example::
+
+        results = validate_manifest_bound_root(events)
+    """
+    return _validate_manifest_delegated_auth_attack(
+        events,
+        attack="manifest_tamper",
+        name="manifest_delegated_auth_manifest_binding",
     )
 
 
@@ -3242,10 +3258,10 @@ def validate_no_stale_parent_verify(
 
         results = validate_no_stale_parent_verify(events)
     """
-    return _validate_delegated_auth_attack(
+    return _validate_manifest_delegated_auth_attack(
         events,
         attack="stale_parent",
-        name="delegated_auth_no_stale_parent",
+        name="manifest_delegated_auth_no_stale_parent",
     )
 
 
@@ -3258,10 +3274,10 @@ def validate_audience_binding(
 
         results = validate_audience_binding(events)
     """
-    return _validate_delegated_auth_attack(
+    return _validate_manifest_delegated_auth_attack(
         events,
         attack="audience_confusion",
-        name="delegated_auth_audience_binding",
+        name="manifest_delegated_auth_audience_binding",
     )
 
 
@@ -4772,7 +4788,8 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
     ],
-    "delegated_auth": [
+    "manifest_delegated_auth": [
+        validate_manifest_bound_root,
         validate_delegation_scope_containment,
         validate_no_stale_parent_verify,
         validate_audience_binding,

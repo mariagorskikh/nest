@@ -5,7 +5,7 @@
 This submission targets Problem 04, **Delegatable capability tokens with
 cascading revocation**, in the Auth layer.
 
-It adds `auth: delegatable`, a small Auth-layer plugin that issues and
+It adds `auth: manifest_delegatable`, a small Auth-layer plugin that issues and
 verifies capability tokens constrained by signed policy manifests. A root
 token can only contain scopes allowed by the subject's manifest, and a
 delegated child token can only carry a strict subset of its parent token's
@@ -41,7 +41,7 @@ This PR makes the missing Auth-layer behavior explicit:
   descendants because descendants carry ancestor token ids.
 - **Audience binding.** A child token minted for `leaf-0-0` does not verify
   when presented by `leaf-0-0-wrong`.
-- **Auditability.** The deterministic `delegated_auth` scenario emits trace
+- **Auditability.** The deterministic `manifest_delegated_auth` scenario emits trace
   lines for honest leaf verification and each adversarial probe, and the
   validators check those trace lines.
 
@@ -71,8 +71,8 @@ The security properties this PR makes testable are:
 
 ### Auth Plugin
 
-`packages/nest-plugins-reference/nest_plugins_reference/auth/delegatable.py`
-implements `DelegatableAuth`.
+`packages/nest-plugins-reference/nest_plugins_reference/auth/manifest_delegatable.py`
+implements `ManifestDelegatableAuth`.
 
 Working behavior:
 
@@ -126,8 +126,8 @@ Working behavior:
 
 ### Scenario And Validators
 
-The scenario is `scenarios/delegated_auth.yaml` and the built-in factory is
-`packages/nest-core/nest_core/scenarios_builtin/delegated_auth.py`.
+The scenario is `scenarios/manifest_delegated_auth.yaml` and the built-in factory is
+`packages/nest-core/nest_core/scenarios_builtin/manifest_delegated_auth.py`.
 
 It creates:
 
@@ -145,11 +145,11 @@ The coordinator builds a delegation tree and emits trace lines for:
 
 The validators in `packages/nest-core/nest_core/validators.py` are:
 
-- `delegated_auth_scope_containment`
-- `delegated_auth_no_stale_parent`
-- `delegated_auth_audience_binding`
+- `manifest_delegated_auth_scope_containment`
+- `manifest_delegated_auth_no_stale_parent`
+- `manifest_delegated_auth_audience_binding`
 
-They pass with `auth: delegatable` and fail with `auth: jwt`, which is the
+They pass with `auth: manifest_delegatable` and fail with `auth: jwt`, which is the
 charter's required adversarial discrimination.
 
 ### Registration
@@ -157,7 +157,7 @@ charter's required adversarial discrimination.
 The plugin is registered both ways reviewers expect:
 
 - Built-in registry key in `packages/nest-core/nest_core/plugins.py`:
-  `("auth", "delegatable")`
+  `("auth", "manifest_delegatable")`
 - Package entry point in `packages/nest-plugins-reference/pyproject.toml`:
   `[project.entry-points."nest.plugins.auth"]`
 
@@ -165,7 +165,7 @@ The plugin is registered both ways reviewers expect:
 
 Core Auth submission:
 
-- `packages/nest-plugins-reference/nest_plugins_reference/auth/delegatable.py`
+- `packages/nest-plugins-reference/nest_plugins_reference/auth/manifest_delegatable.py`
 - `packages/nest-plugins-reference/nest_plugins_reference/policy/manifest.py`
 - `packages/nest-plugins-reference/nest_plugins_reference/policy/decide.py`
 - `packages/nest-plugins-reference/nest_plugins_reference/policy/scopes.py`
@@ -179,8 +179,8 @@ Wiring:
 
 Scenario and validators:
 
-- `scenarios/delegated_auth.yaml`
-- `packages/nest-core/nest_core/scenarios_builtin/delegated_auth.py`
+- `scenarios/manifest_delegated_auth.yaml`
+- `packages/nest-core/nest_core/scenarios_builtin/manifest_delegated_auth.py`
 - `packages/nest-core/nest_core/validators.py`
 
 Focused tests:
@@ -188,9 +188,9 @@ Focused tests:
 - `packages/nest-plugins-reference/tests/test_manifest.py`
 - `packages/nest-plugins-reference/tests/test_decide.py`
 - `packages/nest-plugins-reference/tests/test_policy_core_properties.py`
-- `packages/nest-plugins-reference/tests/test_delegatable.py`
-- `packages/nest-plugins-reference/tests/test_delegatable_properties.py`
-- `packages/nest-core/tests/test_delegated_auth.py`
+- `packages/nest-plugins-reference/tests/test_manifest_delegatable.py`
+- `packages/nest-plugins-reference/tests/test_manifest_delegatable_properties.py`
+- `packages/nest-core/tests/test_manifest_delegated_auth.py`
 - `packages/nest-core/tests/test_validators.py`
 
 Layer documentation:
@@ -207,9 +207,9 @@ pytest \
   packages/nest-plugins-reference/tests/test_manifest.py \
   packages/nest-plugins-reference/tests/test_decide.py \
   packages/nest-plugins-reference/tests/test_policy_core_properties.py \
-  packages/nest-plugins-reference/tests/test_delegatable.py \
-  packages/nest-plugins-reference/tests/test_delegatable_properties.py \
-  packages/nest-core/tests/test_delegated_auth.py \
+  packages/nest-plugins-reference/tests/test_manifest_delegatable.py \
+  packages/nest-plugins-reference/tests/test_manifest_delegatable_properties.py \
+  packages/nest-core/tests/test_manifest_delegated_auth.py \
   -q
 ```
 
@@ -261,12 +261,12 @@ What that proves:
 Scenario adversarial proof:
 
 ```bash
-pytest packages/nest-core/tests/test_delegated_auth.py -q
+pytest packages/nest-core/tests/test_manifest_delegated_auth.py -q
 ```
 
 Expected behavior:
 
-- `auth: delegatable` passes all three delegated-auth validators across the
+- `auth: manifest_delegatable` passes all three delegated-auth validators across the
   tested seed bank.
 - `auth: jwt` fails all three validators, proving the validators catch the
   missing delegation security property in the baseline.
@@ -278,13 +278,13 @@ Direct scenario/validator smoke output:
 
 ```text
 delegatable
-PASS delegated_auth_scope_containment 12 honest leaves verified; scope_escalation attack blocked
-PASS delegated_auth_no_stale_parent 12 honest leaves verified; stale_parent attack blocked
-PASS delegated_auth_audience_binding 12 honest leaves verified; audience_confusion attack blocked
+PASS manifest_delegated_auth_scope_containment 12 honest leaves verified; scope_escalation attack blocked
+PASS manifest_delegated_auth_no_stale_parent 12 honest leaves verified; stale_parent attack blocked
+PASS manifest_delegated_auth_audience_binding 12 honest leaves verified; audience_confusion attack blocked
 jwt
-FAIL delegated_auth_scope_containment scope_escalation attack accepted
-FAIL delegated_auth_no_stale_parent stale_parent attack accepted
-FAIL delegated_auth_audience_binding audience_confusion attack accepted
+FAIL manifest_delegated_auth_scope_containment scope_escalation attack accepted
+FAIL manifest_delegated_auth_no_stale_parent stale_parent attack accepted
+FAIL manifest_delegated_auth_audience_binding audience_confusion attack accepted
 ```
 
 Full pytest result from this checkout:
@@ -323,10 +323,10 @@ not the project code or tests.
 - **One problem:** Problem 04, Auth capability delegation.
 - **One layer:** Auth, with a small policy package used by the Auth plugin for
   manifest signing, scope parsing, and issuance decisions.
-- **Layer plugin:** `auth: delegatable`.
+- **Layer plugin:** `auth: manifest_delegatable`.
 - **Adversarial validator:** three validators for scope containment, stale
   ancestors, and audience binding.
-- **Scenario YAML:** `scenarios/delegated_auth.yaml`.
+- **Scenario YAML:** `scenarios/manifest_delegated_auth.yaml`.
 - **Deterministic:** tests assert byte-identical traces for the same seed and
   property tests assert byte-identical tokens for identical inputs and clock.
 - **Docs:** public code symbols have docstrings with examples, the Auth layer
@@ -335,12 +335,12 @@ not the project code or tests.
 
 ## PR Description Short Form
 
-This PR adds `auth: delegatable`, an Auth-layer plugin for manifest-bound
+This PR adds `auth: manifest_delegatable`, an Auth-layer plugin for manifest-bound
 delegatable capability tokens. Root issuance clamps requested scopes to a
 signed `PolicyManifest`; delegation can only mint a strict subset of the
 parent token's scopes; verification checks signature, chain, expiry,
 revocation ancestry, and optional presenter/audience binding. The
-`delegated_auth` scenario builds a coordinator-to-intermediary-to-leaf
+`manifest_delegated_auth` scenario builds a coordinator-to-intermediary-to-leaf
 delegation tree, and its validators pass under `delegatable` while failing
 under the baseline `jwt` plugin for scope escalation, stale parent, and
 audience confusion attacks.

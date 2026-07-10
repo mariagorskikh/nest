@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Delegatable capability-token auth plugin with cascading revocation.
 
-A :class:`DelegatableAuth` issues root tokens bound to a subject's
+A :class:`ManifestDelegatableAuth` issues root tokens bound to a subject's
 :class:`~nest_plugins_reference.policy.PolicyManifest` and allows any token
 holder to *delegate* a strict subset of their scopes to a third party.
 Revocation of any node in a delegation chain automatically invalidates every
@@ -28,7 +28,7 @@ Example::
     from nest_plugins_reference.policy import Budget, PolicyManifest
     from nest_plugins_reference.policy.manifest import sign_manifest
     from nest_plugins_reference.identity.ed25519_rotating import Ed25519RotatingIdentity
-    from nest_plugins_reference.auth.delegatable import DelegatableAuth
+    from nest_plugins_reference.auth.manifest_delegatable import ManifestDelegatableAuth
 
     ident = Ed25519RotatingIdentity(AgentId("root"), seed=b"seed")
     manifest = PolicyManifest(
@@ -36,7 +36,7 @@ Example::
     )
     signed = sign_manifest(ident, manifest)
 
-    auth = DelegatableAuth(manifests={AgentId("root"): signed}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("root"): signed}, clock=0.0)
     import asyncio
     root = asyncio.run(auth.issue(AgentId("root"), ["tool:buy", "tool:sell"]))
     child = asyncio.run(auth.delegate(root, AgentId("delegatee"), ["tool:buy"], ttl=300))
@@ -50,7 +50,6 @@ import hashlib
 import hmac
 import json
 import math
-import time
 from collections.abc import Mapping
 from typing import cast
 
@@ -236,11 +235,11 @@ def _payload_data(payload_json: str) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# DelegatableAuth
+# ManifestDelegatableAuth
 # ---------------------------------------------------------------------------
 
 
-class DelegatableAuth:
+class ManifestDelegatableAuth:
     """Auth plugin implementing delegatable capability tokens with cascading revocation.
 
     Root tokens are issued with scopes clamped to the subject's
@@ -256,7 +255,7 @@ class DelegatableAuth:
 
     Example::
 
-        auth = DelegatableAuth(clock=0.0)
+        auth = ManifestDelegatableAuth(clock=0.0)
         root = asyncio.run(auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"]))
         child = asyncio.run(auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=60))
         ctx = asyncio.run(auth.verify(child, presenter=AgentId("a2")))
@@ -267,7 +266,7 @@ class DelegatableAuth:
         manifests: Mapping[AgentId, PolicyManifest] | None = None,
         identities: Mapping[AgentId, ManifestSigner] | None = None,
         secret: bytes = b"nest-delegatable-secret",
-        clock: float | None = None,
+        clock: float | None = 0.0,
     ) -> None:
         self._manifests: dict[AgentId, PolicyManifest] = dict(manifests or {})
         self._identities: dict[AgentId, ManifestSigner] = dict(identities or {})
@@ -296,9 +295,9 @@ class DelegatableAuth:
 
             t = auth._now()
         """
-        if self._clock is not None:
-            return self._clock
-        return time.time()
+        if self._clock is None:  # pragma: no cover - constructor/set_clock always normalizes
+            return 0.0
+        return self._clock
 
     # ------------------------------------------------------------------
     # Auth protocol

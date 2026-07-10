@@ -3,10 +3,10 @@
 # leaves, then three adversarial probes for scope escalation, stale ancestors,
 # and audience confusion.
 #
-# Under `auth: delegatable` the delegated_auth validators PASS. Switch this to
+# Under `auth: manifest_delegatable` the manifest_delegated_auth validators PASS. Switch this to
 # `jwt` to see all three validators FAIL against the central re-issuance
 # baseline.
-name: delegated_auth
+name: manifest_delegated_auth
 description: "Manifest-bound delegatable auth with cascading revocation and audience binding."
 
 tier: 1
@@ -30,7 +30,7 @@ layers:
   comms: nest_native
   identity: did_key
   registry: in_memory
-  auth: delegatable
+  auth: manifest_delegatable
   trust: score_average
   payments: prepaid_credits
   coordination: contract_net
@@ -40,7 +40,7 @@ layers:
   datafacts: datafacts_v1
 
 task:
-  type: delegated_auth
+  type: manifest_delegated_auth
   config:
     intermediaries: 3
     leaves_per_intermediary: 4
@@ -56,4 +56,4 @@ metrics:
   - agent_count
 
 output:
-  trace: ./traces/delegated_auth.jsonl
+  trace: ./traces/manifest_delegated_auth.jsonl

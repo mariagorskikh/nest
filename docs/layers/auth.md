@@ -48,17 +48,17 @@ delegation chain.
 
 Sources:
 
-- [`nest_plugins_reference/auth/delegatable.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/delegatable.py)
+- [`nest_plugins_reference/auth/manifest_delegatable.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/manifest_delegatable.py)
 - [`nest_plugins_reference/policy/manifest.py`](../../packages/nest-plugins-reference/nest_plugins_reference/policy/manifest.py)
 - [`nest_plugins_reference/policy/decide.py`](../../packages/nest-plugins-reference/nest_plugins_reference/policy/decide.py)
 - [`nest_plugins_reference/policy/scopes.py`](../../packages/nest-plugins-reference/nest_plugins_reference/policy/scopes.py)
 
 Scenario and validators:
 
-- [`scenarios/delegated_auth.yaml`](../../scenarios/delegated_auth.yaml)
-- `delegated_auth_scope_containment`
-- `delegated_auth_no_stale_parent`
-- `delegated_auth_audience_binding`
+- [`scenarios/manifest_delegated_auth.yaml`](../../scenarios/manifest_delegated_auth.yaml)
+- `manifest_delegated_auth_scope_containment`
+- `manifest_delegated_auth_no_stale_parent`
+- `manifest_delegated_auth_audience_binding`
 
 Judge-facing submission notes:
 [`docs/hackathon/charan-auth-delegation-submission.md`](../hackathon/charan-auth-delegation-submission.md).
@@ -70,9 +70,9 @@ pytest \
   packages/nest-plugins-reference/tests/test_manifest.py \
   packages/nest-plugins-reference/tests/test_decide.py \
   packages/nest-plugins-reference/tests/test_policy_core_properties.py \
-  packages/nest-plugins-reference/tests/test_delegatable.py \
-  packages/nest-plugins-reference/tests/test_delegatable_properties.py \
-  packages/nest-core/tests/test_delegated_auth.py
+  packages/nest-plugins-reference/tests/test_manifest_delegatable.py \
+  packages/nest-plugins-reference/tests/test_manifest_delegatable_properties.py \
+  packages/nest-core/tests/test_manifest_delegated_auth.py
 ```
 
 ## Writing your own

@@ -1904,7 +1904,7 @@ class TestValidatorRegistry:
             "comms_versioning",
             "comms_downgrade",
             "receipt_reputation",
-            "delegated_auth",
+            "manifest_delegated_auth",
             "multi_attribute_market",
             "provenance_supply_chain",
             "bft_hotstuff",

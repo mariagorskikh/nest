@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for DelegatableAuth — delegatable capability tokens.
+"""Unit tests for ManifestDelegatableAuth — delegatable capability tokens.
 
 Covers: root-issue scope clamping, delegation subset, all three attacks
 (scope escalation, revoked ancestor, audience mismatch), token tampering,
@@ -18,9 +18,9 @@ import pytest
 from nest_core.layers.auth import Auth
 from nest_core.plugins import PluginRegistry
 from nest_core.types import AgentId, Token
-from nest_plugins_reference.auth.delegatable import (
+from nest_plugins_reference.auth.manifest_delegatable import (
     AudienceMismatchError,
-    DelegatableAuth,
+    ManifestDelegatableAuth,
     RevokedAncestorError,
     ScopeEscalationError,
     TtlExceededError,
@@ -56,7 +56,7 @@ def _tamper_token_signature(token: Token) -> Token:
     return Token(f"{payload_json}|{sig[:-1]}{replacement}")
 
 
-def _register_forged_child(auth: DelegatableAuth, parent: Token, scopes: list[str]) -> Token:
+def _register_forged_child(auth: ManifestDelegatableAuth, parent: Token, scopes: list[str]) -> Token:
     parent_payload_json, parent_sig = str(parent).rsplit("|", 1)
     parent_data = json.loads(parent_payload_json)
     parent_tid = hashlib.sha256(parent_payload_json.encode()).hexdigest()
@@ -89,7 +89,7 @@ def _register_forged_child(auth: DelegatableAuth, parent: Token, scopes: list[st
 async def test_root_issue_clamps_to_manifest() -> None:
     """Scopes not in the manifest are dropped at issuance."""
     m = _manifest("a1", tools=["buy"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     token = await auth.issue(AgentId("a1"), ["tool:buy", "tool:admin", "tool:sell"])
     ctx = await auth.verify(token)
     assert ctx.scopes == ["tool:buy"]
@@ -108,7 +108,7 @@ async def test_root_issue_clamps_tool_spend_and_expose_scopes() -> None:
             budget=Budget(cap=500),
         ),
     )
-    auth = DelegatableAuth(
+    auth = ManifestDelegatableAuth(
         manifests={AgentId("a1"): signed},
         identities={AgentId("a1"): ident},
         clock=0.0,
@@ -134,7 +134,7 @@ async def test_root_issue_clamps_tool_spend_and_expose_scopes() -> None:
 @pytest.mark.asyncio
 async def test_root_issue_no_manifest_gives_empty_scopes() -> None:
     """Subject with no manifest receives empty scopes (deny-all root)."""
-    auth = DelegatableAuth(clock=0.0)
+    auth = ManifestDelegatableAuth(clock=0.0)
     token = await auth.issue(AgentId("unknown"), ["tool:buy"])
     ctx = await auth.verify(token)
     assert ctx.scopes == []
@@ -144,7 +144,7 @@ async def test_root_issue_no_manifest_gives_empty_scopes() -> None:
 async def test_root_issue_unsigned_manifest_gives_empty_scopes() -> None:
     """Unsigned manifests are deny-all, even when their content allows a tool."""
     manifest = PolicyManifest(agent_id=AgentId("a1"), tools=["buy"], budget=Budget(cap=1000))
-    auth = DelegatableAuth(manifests={AgentId("a1"): manifest}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): manifest}, clock=0.0)
     token = await auth.issue(AgentId("a1"), ["tool:buy"])
     ctx = await auth.verify(token)
     assert ctx.scopes == []
@@ -159,7 +159,7 @@ async def test_root_issue_tampered_manifest_gives_empty_scopes_when_identity_sup
         PolicyManifest(agent_id=AgentId("a1"), tools=["buy"], budget=Budget(cap=1000)),
     )
     tampered = signed.model_copy(update={"tools": ["buy", "admin"]})
-    auth = DelegatableAuth(
+    auth = ManifestDelegatableAuth(
         manifests={AgentId("a1"): tampered},
         identities={AgentId("a1"): ident},
         clock=0.0,
@@ -178,7 +178,7 @@ async def test_root_issue_forged_manifest_gives_empty_scopes_when_identity_suppl
         attacker,
         PolicyManifest(agent_id=AgentId("a1"), tools=["admin"], budget=Budget(cap=1000)),
     )
-    auth = DelegatableAuth(
+    auth = ManifestDelegatableAuth(
         manifests={AgentId("a1"): forged},
         identities={AgentId("a1"): honest},
         clock=0.0,
@@ -192,7 +192,7 @@ async def test_root_issue_forged_manifest_gives_empty_scopes_when_identity_suppl
 async def test_root_issue_deduplicates_scopes() -> None:
     """Duplicate scopes are removed; first occurrence is kept."""
     m = _manifest("a1", tools=["buy"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     token = await auth.issue(AgentId("a1"), ["tool:buy", "tool:buy", "tool:buy"])
     ctx = await auth.verify(token)
     assert ctx.scopes == ["tool:buy"]
@@ -207,7 +207,7 @@ async def test_root_issue_deduplicates_scopes() -> None:
 async def test_delegate_subset_ok() -> None:
     """Delegating a subset of parent scopes succeeds; child has only those scopes."""
     m = _manifest("a1", tools=["buy", "sell"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=300)
     ctx = await auth.verify(child, presenter=AgentId("a2"))
@@ -219,7 +219,7 @@ async def test_delegate_subset_ok() -> None:
 async def test_delegate_chain_expiry_within_parent() -> None:
     """Child expiry is correctly set to now + ttl."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=120)
     ctx = await auth.verify(child, presenter=AgentId("a2"))
@@ -235,7 +235,7 @@ async def test_delegate_chain_expiry_within_parent() -> None:
 async def test_scope_escalation_raises() -> None:
     """Requesting scopes outside the parent raises ScopeEscalationError."""
     m = _manifest("a1", tools=["buy"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
     with pytest.raises(ScopeEscalationError) as exc_info:
         await auth.delegate(root, AgentId("a2"), ["tool:buy", "tool:admin"], ttl=60)
@@ -246,7 +246,7 @@ async def test_scope_escalation_raises() -> None:
 async def test_equal_scope_delegation_raises() -> None:
     """Delegation must narrow authority; equal-scope child tokens are rejected."""
     m = _manifest("a1", tools=["buy"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
     with pytest.raises(ScopeEscalationError) as exc_info:
         await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=60)
@@ -257,7 +257,7 @@ async def test_equal_scope_delegation_raises() -> None:
 async def test_handcrafted_child_token_rejected_even_with_valid_parent_hmac() -> None:
     """A holder cannot bypass delegate() by signing a broader child payload."""
     m = _manifest("a1", tools=["buy"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
     parent_payload, parent_sig = str(root).rsplit("|", 1)
     parent_tid = hashlib.sha256(parent_payload.encode()).hexdigest()
@@ -288,7 +288,7 @@ async def test_handcrafted_child_token_rejected_even_with_valid_parent_hmac() ->
 async def test_cascading_revocation() -> None:
     """Revoking the root makes child and grandchild verify raise RevokedAncestorError."""
     m = _manifest("a1", tools=["buy", "sell", "query"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell", "tool:query"])
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy", "tool:sell"], ttl=1800)
     grandchild = await auth.delegate(child, AgentId("a3"), ["tool:buy"], ttl=900)
@@ -306,7 +306,7 @@ async def test_cascading_revocation() -> None:
 async def test_revoke_child_not_root() -> None:
     """Revoking a child token does not affect the root, but grandchild fails."""
     m = _manifest("a1", tools=["buy", "sell", "query"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell", "tool:query"])
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy", "tool:sell"], ttl=1800)
     grandchild = await auth.delegate(child, AgentId("a3"), ["tool:buy"], ttl=900)
@@ -334,7 +334,7 @@ async def test_revoke_child_not_root() -> None:
 async def test_audience_mismatch_raises() -> None:
     """Verifying with the wrong presenter raises AudienceMismatchError."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=300)
 
@@ -346,7 +346,7 @@ async def test_audience_mismatch_raises() -> None:
 async def test_audience_match_ok() -> None:
     """Verifying with the correct presenter succeeds."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=300)
     ctx = await auth.verify(child, presenter=AgentId("a2"))
@@ -357,7 +357,7 @@ async def test_audience_match_ok() -> None:
 async def test_verify_root_no_presenter() -> None:
     """Omitting presenter skips the audience check."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
     ctx = await auth.verify(root)
     assert ctx.subject == AgentId("a1")
@@ -367,7 +367,7 @@ async def test_verify_root_no_presenter() -> None:
 async def test_root_audience_mismatch_raises() -> None:
     """Root tokens are audience-bound when a presenter is supplied."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
 
     with pytest.raises(AudienceMismatchError):
@@ -392,7 +392,7 @@ async def test_root_audience_mismatch_raises() -> None:
 async def test_tampered_payload_rejected(field: str, value: object) -> None:
     """Changing signed payload fields while keeping the old signature is rejected."""
     m = _manifest("a1", tools=["buy", "sell"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=300)
 
@@ -406,7 +406,7 @@ async def test_tampered_payload_rejected(field: str, value: object) -> None:
 async def test_tampered_signature_rejected() -> None:
     """Changing only the signature on a known token is rejected."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
 
     with pytest.raises(ValueError, match="invalid signature"):
@@ -424,7 +424,7 @@ async def test_tampered_signature_rejected() -> None:
 async def test_registered_forged_child_rechecked_by_verify(forged_scopes: list[str]) -> None:
     """Verifier rejects registered children that violate delegation caveats."""
     m = _manifest("a1", tools=["buy", "sell"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     forged = _register_forged_child(auth, root, forged_scopes)
 
@@ -435,7 +435,7 @@ async def test_registered_forged_child_rechecked_by_verify(forged_scopes: list[s
 @pytest.mark.asyncio
 async def test_invalid_token_format_rejected() -> None:
     """A token without the payload/signature separator is malformed."""
-    auth = DelegatableAuth(clock=0.0)
+    auth = ManifestDelegatableAuth(clock=0.0)
     with pytest.raises(ValueError, match="invalid token format"):
         await auth.verify(Token("not-a-token"))
 
@@ -457,7 +457,7 @@ async def test_invalid_token_format_rejected() -> None:
 )
 async def test_malformed_token_payload_rejected_fail_closed(raw_token: str) -> None:
     """Malformed payloads raise ValueError before any authority is accepted."""
-    auth = DelegatableAuth(clock=0.0)
+    auth = ManifestDelegatableAuth(clock=0.0)
     with pytest.raises(ValueError, match="invalid token payload"):
         await auth.verify(Token(raw_token))
 
@@ -465,7 +465,7 @@ async def test_malformed_token_payload_rejected_fail_closed(raw_token: str) -> N
 def test_non_finite_injected_clock_rejected() -> None:
     """Injected clocks must be finite so issued expiries stay meaningful."""
     with pytest.raises(ValueError, match="clock must be finite"):
-        DelegatableAuth(clock=float("nan"))
+        ManifestDelegatableAuth(clock=float("nan"))
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +477,7 @@ def test_non_finite_injected_clock_rejected() -> None:
 async def test_ttl_exceeds_parent_raises() -> None:
     """TTL that would make child expire after parent raises TtlExceededError."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     # root expires at 3600; requesting ttl=3601 exceeds it
     with pytest.raises(TtlExceededError):
@@ -489,7 +489,7 @@ async def test_ttl_exceeds_parent_raises() -> None:
 async def test_invalid_ttl_rejected(ttl: float) -> None:
     """TTL must be finite and positive; NaN must not become a never-expiring token."""
     m = _manifest("a1", tools=["buy", "sell"])
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
 
     with pytest.raises(ValueError, match="ttl must be a finite positive number"):
@@ -504,7 +504,7 @@ async def test_ttl_at_parent_boundary_allowed() -> None:
     is False, so the exact boundary is permitted.
     """
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy", "tool:sell"])
     # child_exp == parent_exp is exactly equal — the check is >, so this is allowed
     child = await auth.delegate(root, AgentId("a2"), ["tool:buy"], ttl=3600)
@@ -516,7 +516,7 @@ async def test_ttl_at_parent_boundary_allowed() -> None:
 async def test_expired_token_rejected_on_verify() -> None:
     """A token cannot be verified after its exp timestamp."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
     auth.set_clock(3600.001)
 
@@ -533,7 +533,7 @@ async def test_expired_token_rejected_on_verify() -> None:
 async def test_revoked_parent_cannot_be_delegated() -> None:
     """Delegating from a revoked parent propagates the revocation error."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
     await auth.revoke(root)
     with pytest.raises(RevokedAncestorError):
@@ -544,7 +544,7 @@ async def test_revoked_parent_cannot_be_delegated() -> None:
 async def test_expired_parent_cannot_be_delegated() -> None:
     """Delegating from an expired parent propagates the expiry error."""
     m = _manifest("a1")
-    auth = DelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
+    auth = ManifestDelegatableAuth(manifests={AgentId("a1"): m}, clock=0.0)
     root = await auth.issue(AgentId("a1"), ["tool:buy"])
     # Advance clock past root expiry
     auth.set_clock(4000.0)
@@ -558,8 +558,8 @@ async def test_expired_parent_cannot_be_delegated() -> None:
 
 
 def test_isinstance_auth_protocol() -> None:
-    """DelegatableAuth satisfies the Auth runtime-checkable protocol."""
-    assert isinstance(DelegatableAuth(), Auth)
+    """ManifestDelegatableAuth satisfies the Auth runtime-checkable protocol."""
+    assert isinstance(ManifestDelegatableAuth(), Auth)
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +568,6 @@ def test_isinstance_auth_protocol() -> None:
 
 
 def test_resolvable_via_plugin_registry() -> None:
-    """DelegatableAuth is resolvable as ('auth', 'delegatable') via PluginRegistry."""
-    cls = PluginRegistry().resolve("auth", "delegatable")
-    assert cls is DelegatableAuth
+    """ManifestDelegatableAuth is resolvable as ('auth', 'delegatable') via PluginRegistry."""
+    cls = PluginRegistry().resolve("auth", "manifest_delegatable")
+    assert cls is ManifestDelegatableAuth

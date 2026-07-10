@@ -101,10 +101,10 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("receipt_reputation", receipt_reputation_factory)
-    elif name == "delegated_auth":
-        from nest_core.scenarios_builtin.delegated_auth import delegated_auth_factory
+    elif name == "manifest_delegated_auth":
+        from nest_core.scenarios_builtin.manifest_delegated_auth import manifest_delegated_auth_factory
 
-        register_scenario("delegated_auth", delegated_auth_factory)
+        register_scenario("manifest_delegated_auth", manifest_delegated_auth_factory)
     elif name == "empic_payments":
         from nest_core.scenarios_builtin.empic_payments import empic_payments_factory
 

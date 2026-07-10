@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Hypothesis property-based tests for DelegatableAuth.
+"""Hypothesis property-based tests for ManifestDelegatableAuth.
 
 Three invariants checked over generated inputs:
 
@@ -27,8 +27,8 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from nest_core.types import AgentId
-from nest_plugins_reference.auth.delegatable import (
-    DelegatableAuth,
+from nest_plugins_reference.auth.manifest_delegatable import (
+    ManifestDelegatableAuth,
     RevokedAncestorError,
     ScopeEscalationError,
 )
@@ -49,7 +49,7 @@ _SCOPE_STRAT = st.lists(
 )
 
 
-def _make_auth(tools: list[str] | None = None) -> DelegatableAuth:
+def _make_auth(tools: list[str] | None = None) -> ManifestDelegatableAuth:
     all_tools = tools or ["buy", "sell", "transfer", "query", "report"]
     ident = Ed25519RotatingIdentity(AgentId("root"), seed=b"prop-seed")
     manifest = PolicyManifest(
@@ -58,7 +58,7 @@ def _make_auth(tools: list[str] | None = None) -> DelegatableAuth:
         budget=Budget(cap=100_000),
     )
     signed = sign_manifest(ident, manifest)
-    return DelegatableAuth(manifests={AgentId("root"): signed}, clock=0.0)
+    return ManifestDelegatableAuth(manifests={AgentId("root"): signed}, clock=0.0)
 
 
 def _run(coro: Any) -> Any:
