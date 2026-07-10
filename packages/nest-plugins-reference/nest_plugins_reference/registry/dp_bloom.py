@@ -58,13 +58,16 @@ filter model of Naor and Yogev [1] and its learned extension by Almashaqbeh,
 Bishop, and Tirmazi [3].
 
 [1] Moni Naor and Eylon Yogev. Bloom Filters in Adversarial Environments. 2014.
-    arXiv:1412.8356.
+    `preprint <https://arxiv.org/abs/1412.8356>`_
 [2] Úlfar Erlingsson, Vasyl Pihur, and Aleksandra Korolova. RAPPOR: Randomized
     Aggregatable Privacy-Preserving Ordinal Response. ACM CCS, 2014.
+    `preprint <https://research.google.com/pubs/archive/42852.pdf>`_
 [3] Ghada Almashaqbeh, Allison Bishop, and Hayder Tirmazi. Adversary Resilient
-    Learned Bloom Filters. ASIACRYPT, 2025. arXiv:2409.06556.
+    Learned Bloom Filters. ASIACRYPT, 2025.
+    `preprint <https://arxiv.org/abs/2409.06556>`_
 [4] Hayder Tirmazi. Adversarially Robust Bloom Filters: Privacy, Reductions, and
-    Open Problems. 2025. arXiv:2501.15751.
+    Open Problems. 2025.
+    `preprint <https://arxiv.org/abs/2501.15751>`_
 
 Example::
 
