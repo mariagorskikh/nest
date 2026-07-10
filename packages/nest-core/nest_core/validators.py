@@ -272,11 +272,21 @@ def validate_auction_winner_highest(
                 winners[item] = (bidder, amount)
 
     violations: list[str] = []
-    for item, (_winner, winning_amount) in winners.items():
-        for bidder, amount in bids.get(item, []):
-            if amount > winning_amount:
+    for item, (winner, winning_amount) in winners.items():
+        item_bids = bids.get(item, [])
+        # The invariant is about the winner's REAL bid, not the announced
+        # amount. Trusting the announced amount lets an auctioneer award a low
+        # bidder while announcing a figure inflated past every real bid, and the
+        # check would pass. Use the winner's own highest observed bid; fall back
+        # to the announced amount only when the winner's bid was not observed
+        # (e.g. dropped under message loss), so this never fails a valid trace.
+        winner_bids = [amount for bidder, amount in item_bids if bidder == winner]
+        effective_winner_bid = max(winner_bids) if winner_bids else winning_amount
+        for bidder, amount in item_bids:
+            if amount > effective_winner_bid:
                 violations.append(
-                    f"item {item}: winner bid {winning_amount} but {bidder} bid {amount}"
+                    f"item {item}: winner {winner} bid {effective_winner_bid} "
+                    f"but {bidder} bid {amount}"
                 )
                 break
 
@@ -1691,6 +1701,7 @@ def validate_empic_pubsub_billing_caps(
         result = validate_empic_pubsub_billing_caps(events)[0]
     """
     audit = _empic_audit_events(events)
+    stream_refs: set[str] = set()
     streams: dict[str, tuple[int, int]] = {}
     accepted: dict[str, set[str]] = defaultdict(set)
     released: dict[str, int] = defaultdict(int)
@@ -1702,21 +1713,25 @@ def validate_empic_pubsub_billing_caps(
         if not ref:
             continue
         if event_type == "empic_stream_opened":
+            stream_refs.add(ref)
             rate = _safe_amount(ev.get("rate_per_tick"))
             max_total = _safe_amount(ev.get("max_total") or ev.get("amount"))
             if rate <= 0 or max_total <= 0:
                 violations.append(f"{ref}: invalid stream terms rate={rate} max_total={max_total}")
             else:
                 streams[ref] = (rate, max_total)
-        elif (
+            continue
+
+        is_pubsub_ref = ref in stream_refs or ev.get("mode") == "pubsub"
+        if (
             event_type == "empic_delivery_evaluated"
             and ev.get("accepted") is True
-            and ev.get("mode") == "pubsub"
+            and is_pubsub_ref
         ):
             delivery_id = _empic_delivery_id(ev)
             if delivery_id:
                 accepted[ref].add(delivery_id)
-        elif event_type == "empic_escrow_released" and ev.get("mode") == "pubsub":
+        elif event_type == "empic_escrow_released" and is_pubsub_ref:
             amount = _safe_amount(ev.get("amount"))
             delivery_id = _empic_delivery_id(ev)
             terms = streams.get(ref)
@@ -2150,7 +2165,7 @@ def validate_empic_no_drain_after_close(
                 close_tick[ref] = _event_tick(ev)
 
     for ev in audit:
-        if ev.get("event_type") != "empic_escrow_released" or ev.get("mode") != "pubsub":
+        if ev.get("event_type") != "empic_escrow_released":
             continue
         ref = str(ev.get("payment_ref", ""))
         closed_at = close_tick.get(ref)
@@ -2204,7 +2219,7 @@ def validate_empic_no_overbill_on_partition(
                 partition_start[edge] = tick
 
     for ev in audit:
-        if ev.get("event_type") != "empic_escrow_released" or ev.get("mode") != "pubsub":
+        if ev.get("event_type") != "empic_escrow_released":
             continue
         ref = str(ev.get("payment_ref", ""))
         parties = stream_parties.get(ref)
@@ -4595,11 +4610,325 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 # ---------------------------------------------------------------------------
+# Attested-peering trust validators
+# ---------------------------------------------------------------------------
+
+
+def _attested_observer_lines(events: list[dict[str, Any]]) -> list[str]:
+    """Return the observer's audit-line message bodies (deduped send events).
+
+    The observer emits ``verdict:``/``report:``/``repscore:`` lines by sending
+    them to the victim sink, so each line appears once as a ``send`` and once
+    as a ``receive``; we read only the authoritative ``send`` events.
+
+    Example::
+
+        lines = _attested_observer_lines(events)
+    """
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send" or ev.get("agent") != "observer":
+            continue
+        lines.append(str(ev.get("msg", "")))
+    return lines
+
+
+def _attested_verdicts(lines: list[str]) -> dict[str, tuple[str, bool, bool, bool]]:
+    """Parse ``verdict:`` lines into ``reporter -> (decision, foe, data, work)``.
+
+    Example::
+
+        verdicts = _attested_verdicts(_attested_observer_lines(events))
+    """
+    verdicts: dict[str, tuple[str, bool, bool, bool]] = {}
+    for line in lines:
+        if not line.startswith("verdict:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 7:
+            continue
+        _, reporter, _claimed, decision, foe, data, work = parts
+        verdicts[reporter] = (decision, foe == "1", data == "1", work == "1")
+    return verdicts
+
+
+def validate_attested_no_denied_admitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No peer with a failed (DENY) verdict ever has its evidence admitted.
+
+    The core safety invariant of the attested-peering gate: admission implies
+    an ALLOW verdict, and every ALLOW verdict has all three checks green
+    (friend-or-foe, trust-my-data, who-you-work-for). A trace with no verdict
+    lines (a baseline trust plugin that runs no handshake) cannot violate this
+    and passes vacuously.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+    verdicts = _attested_verdicts(lines)
+
+    if not verdicts:
+        return [
+            ValidationResult(
+                "attested_no_denied_admitted",
+                True,
+                "no attested-peering verdicts in trace (baseline plugin, nothing to gate)",
+            )
+        ]
+
+    violations: list[str] = []
+    for decision, foe, data, work in verdicts.values():
+        if decision == "ALLOW" and not (foe and data and work):
+            violations.append("ALLOW verdict with a failed check (inconsistent gate)")
+            break
+
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        entry = verdicts.get(reporter)
+        if entry is None:
+            violations.append(f"{reporter}: admitted with no verdict")
+        elif entry[0] != "ALLOW":
+            violations.append(f"{reporter}: admitted despite {entry[0]} verdict")
+
+    if violations:
+        return [ValidationResult("attested_no_denied_admitted", False, "; ".join(violations))]
+    allowed = sum(1 for v in verdicts.values() if v[0] == "ALLOW")
+    return [
+        ValidationResult(
+            "attested_no_denied_admitted",
+            True,
+            f"{allowed}/{len(verdicts)} peers admitted, all with an ALLOW verdict",
+        )
+    ]
+
+
+def validate_attested_sybil_quarantined(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An unauthenticated Sybil swarm cannot defame the honest victim.
+
+    Honest reporters file positive evidence, so an ungamed reputation sits at
+    or above the neutral prior (``0.5``); only *admitted* negative evidence can
+    push it below. The attested-peering gate quarantines every unattested
+    reporter, so the victim's score stays high. Under a baseline plugin with no
+    gate (``trust: score_average``) the Sybil swarm's negatives are admitted and
+    the score collapses below ``0.5`` — this validator FAILs there and PASSes
+    under ``trust: attested_peering``.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+
+    score: float | None = None
+    samples: int | None = None
+    for line in lines:
+        if not line.startswith("repscore:"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4 and parts[1] == "victim":
+            score = float(parts[2])
+            samples = int(parts[3])
+    if score is None or samples is None:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "no repscore:victim line found in trace (scenario setup failure)",
+            )
+        ]
+
+    verdicts = _attested_verdicts(lines)
+    admitted_attackers: list[str] = []
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        if not reporter.startswith("honest-"):
+            admitted_attackers.append(reporter)
+
+    if score < 0.5:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                (
+                    f"victim reputation {score:.3f} < 0.5 over {samples} admitted report(s) — "
+                    "an unauthenticated swarm manufactured a negative consensus (gate absent)"
+                ),
+            )
+        ]
+    if admitted_attackers:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "non-honest reporters admitted despite the gate: "
+                f"{sorted(set(admitted_attackers))}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "attested_sybil_quarantined",
+            True,
+            (
+                f"victim reputation {score:.3f} from {samples} attested report(s); "
+                f"{len([v for v in verdicts.values() if v[0] == 'DENY'])} unattested peer(s) "
+                "quarantined"
+            ),
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
 
+_SYBIL_FLOOR = 0.0
+"""Untrusted-floor score an unbonded identity may not exceed."""
+
+
+def _trustscores(events: list[dict[str, Any]]) -> dict[str, float]:
+    """Extract ``{agent: score}`` from ``trustscore:<agent>:<score>`` events.
+
+    The ``sybil_bond`` observer broadcasts one such event per agent after driving
+    the configured trust plugin, so these scores are the plugin's own verdict.
+    """
+    scores: dict[str, float] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("trustscore:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 3:
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+    return scores
+
+
+def validate_sybil_bond_no_free_trust(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No unbonded Sybil identity obtains trust above the untrusted floor.
+
+    FAILs on ``score_average`` (the clique's mutual endorsements promote it) and
+    PASSes on ``bonded_trust`` (free-minted identities stay inert).
+
+    Example::
+
+        results = validate_sybil_bond_no_free_trust(events)
+    """
+    scores = _trustscores(events)
+    escaped = {a: s for a, s in scores.items() if a.startswith("sybil-") and s > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils bought trust without bonding: {escaped}"
+        return [ValidationResult("sybil_bond_no_free_trust", False, detail)]
+    n_sybil = sum(1 for a in scores if a.startswith("sybil-"))
+    return [
+        ValidationResult(
+            "sybil_bond_no_free_trust",
+            True,
+            f"all {n_sybil} Sybils pinned at the untrusted floor",
+        )
+    ]
+
+
+def validate_sybil_bond_honest_trusted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Bonded honest traders rank strictly above every Sybil.
+
+    Guards against a degenerate trust layer that trivially passes the first check
+    by scoring *everyone* at the floor: honest bonded traders must actually rise.
+
+    Example::
+
+        results = validate_sybil_bond_honest_trusted(events)
+    """
+    scores = _trustscores(events)
+    honest = {a: s for a, s in scores.items() if a.startswith("honest-")}
+    if not honest:
+        return [ValidationResult("sybil_bond_honest_trusted", False, "no honest scores in trace")]
+    max_sybil = max((s for a, s in scores.items() if a.startswith("sybil-")), default=0.0)
+    laggards = {a: s for a, s in honest.items() if s <= max_sybil}
+    if laggards:
+        detail = f"honest traders not above Sybil ceiling {max_sybil}: {laggards}"
+        return [ValidationResult("sybil_bond_honest_trusted", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_honest_trusted",
+            True,
+            f"{len(honest)} honest traders trusted above Sybil ceiling {max_sybil}",
+        )
+    ]
+
+
+def validate_sybil_bond_attempts_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sybils *bid* for a bond yet stay at the floor — the ledger rejected them.
+
+    This is the enforcement check: it proves the defense is active (bond requests
+    denied), not merely assumed (Sybils declining to bond). It requires the trace
+    to contain Sybil ``bond:`` attempts, and that none of those bidders escaped
+    the untrusted floor.
+
+    Example::
+
+        results = validate_sybil_bond_attempts_rejected(events)
+    """
+    scores = _trustscores(events)
+    bidders: set[str] = set()
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        if agent.startswith("sybil-") and _message_body(ev).startswith("bond:"):
+            bidders.add(agent)
+    if not bidders:
+        return [
+            ValidationResult(
+                "sybil_bond_attempts_rejected",
+                False,
+                "no Sybil bond attempts in trace — cannot prove enforcement",
+            )
+        ]
+    escaped = {a: scores.get(a, 0.0) for a in bidders if scores.get(a, 0.0) > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils that bid for a bond escaped the floor: {escaped}"
+        return [ValidationResult("sybil_bond_attempts_rejected", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_attempts_rejected",
+            True,
+            f"{len(bidders)} Sybils bid for a bond and were all rejected to the floor",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "sybil_bond": [
+        validate_sybil_bond_no_free_trust,
+        validate_sybil_bond_honest_trusted,
+        validate_sybil_bond_attempts_rejected,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,
@@ -4639,6 +4968,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "identity_rotation": [
         validate_identity_rotation_occurred,
         validate_identity_rotation_signatures,
+    ],
+    "attested_peering": [
+        validate_attested_no_denied_admitted,
+        validate_attested_sybil_quarantined,
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
