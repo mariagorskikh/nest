@@ -4928,16 +4928,19 @@ def validate_sybil_bond_attempts_rejected(
 # ---------------------------------------------------------------------------
 
 
-def _pc_marker_events(events: list[dict[str, Any]]) -> list[tuple[int, str]]:
-    """Broadcast marker bodies in trace order, deduplicated at first occurrence.
+def _pc_marker_events(events: list[dict[str, Any]]) -> list[tuple[int, str, str]]:
+    """Broadcast ``(index, sender, marker body)`` in trace order, deduped by body.
 
     Marker broadcasts appear once as a ``broadcast`` record plus once per
     recipient as ``receive``/``dropped`` records, and senders re-broadcast
     functional markers for drop-redundancy. All duplicates collapse to the
-    first sighting so ordering logic sees each marker exactly once.
+    first sighting so ordering logic sees each marker exactly once. The
+    sender is the event's own ``agent`` field, not a claim inside the body --
+    callers that trust a marker's content (``score:``, ``fulfilled:``) must
+    check this against the principal the marker names.
     """
     seen: set[str] = set()
-    out: list[tuple[int, str]] = []
+    out: list[tuple[int, str, str]] = []
     for i, ev in enumerate(events):
         if ev.get("kind") not in ("broadcast", "send"):
             continue
@@ -4945,8 +4948,25 @@ def _pc_marker_events(events: list[dict[str, Any]]) -> list[tuple[int, str]]:
         if msg in seen:
             continue
         seen.add(msg)
-        out.append((i, msg))
+        out.append((i, str(ev.get("agent", "")), msg))
     return out
+
+
+def _pc_canonical_auditor(events: list[dict[str, Any]]) -> str | None:
+    """The sender of the first ``score:`` marker in the trace.
+
+    ``score:`` lines carry no principal of their own, so provenance for them
+    can't be checked the way ``fulfilled:<seller>`` is (the seller names
+    itself). The single trust-plugin owner finalizes and broadcasts its
+    scores before any adversary in this scenario acts, so the first sender
+    observed is the real auditor; a byzantine agent broadcasting a forged
+    ``score:`` line afterward is a different sender and is discarded rather
+    than winning last-write-wins.
+    """
+    for _, sender, msg in _pc_marker_events(events):
+        if msg.startswith("score:"):
+            return sender
+    return None
 
 
 def validate_commerce_discovery_precedes_bid(
@@ -4963,7 +4983,7 @@ def validate_commerce_discovery_precedes_bid(
     violations: list[str] = []
     bids = 0
 
-    for _, msg in _pc_marker_events(events):
+    for _, _sender, msg in _pc_marker_events(events):
         parts = msg.split(":")
         if len(parts) >= 3 and parts[0] == "discovered":
             discovered.add((parts[1], parts[2]))
@@ -5046,15 +5066,24 @@ def validate_commerce_undelivered_penalized(
     threshold — even when the seller wash-traded fake receipts. The
     ``score_average`` reference plugin rewards the fake receipts and fails
     here; ``agent_receipts`` severs the shill ring and passes.
+
+    Both marker types are bound to their expected principal: a ``fulfilled:``
+    line only counts if its broadcaster is the named seller, and a ``score:``
+    line only counts if its broadcaster is the canonical auditor
+    (:func:`_pc_canonical_auditor`) -- otherwise a byzantine agent could
+    forge either marker to false-pass a seller it doesn't control.
     """
     threshold = 0.3
+    auditor = _pc_canonical_auditor(events)
     fulfilled_refs: set[str] = set()
     drained: dict[str, str] = {}  # ref -> seller (streams that moved money)
     scores: dict[str, float] = {}
 
-    for _, msg in _pc_marker_events(events):
+    for _, sender, msg in _pc_marker_events(events):
         parts = msg.split(":")
         if len(parts) >= 4 and parts[0] == "fulfilled":
+            if sender != parts[1]:
+                continue
             fulfilled_refs.add(parts[3])
         elif len(parts) >= 6 and parts[0] == "stream" and parts[1] == "close":
             _, _, _buyer, seller, ref, total = parts[:6]
@@ -5064,6 +5093,8 @@ def validate_commerce_undelivered_penalized(
             except ValueError:
                 continue
         elif len(parts) >= 3 and parts[0] == "score":
+            if sender != auditor:
+                continue
             try:
                 scores[parts[1]] = float(parts[2])
             except ValueError:
@@ -5108,20 +5139,30 @@ def validate_commerce_delivery_rewarded(
     check: (a) each ``fulfilled:`` ref has a matching ``stream:open`` toward
     that seller, and (b) every seller with at least one fulfilment ends with a
     final trust score at or above the honest threshold.
+
+    Both marker types are bound to their expected principal -- see
+    :func:`validate_commerce_undelivered_penalized` -- so a byzantine agent
+    can't forge a ``fulfilled:`` for a seller it isn't, or overwrite the
+    auditor's ``score:`` with a fake one of its own.
     """
     threshold = 0.3
+    auditor = _pc_canonical_auditor(events)
     opened_refs: dict[str, str] = {}  # ref -> seller
     fulfilled_by: dict[str, list[str]] = {}  # seller -> refs
     scores: dict[str, float] = {}
     violations: list[str] = []
 
-    for _, msg in _pc_marker_events(events):
+    for _, sender, msg in _pc_marker_events(events):
         parts = msg.split(":")
         if len(parts) >= 6 and parts[0] == "stream" and parts[1] == "open":
             opened_refs[parts[4]] = parts[3]
         elif len(parts) >= 4 and parts[0] == "fulfilled":
+            if sender != parts[1]:
+                continue
             fulfilled_by.setdefault(parts[1], []).append(parts[3])
         elif len(parts) >= 3 and parts[0] == "score":
+            if sender != auditor:
+                continue
             try:
                 scores[parts[1]] = float(parts[2])
             except ValueError:
@@ -5153,7 +5194,6 @@ def validate_commerce_delivery_rewarded(
             f"all {len(fulfilled_by)} fulfilling sellers paid and scored >= {threshold}",
         )
     ]
-
 
 
 VALIDATORS: dict[str, list[Any]] = {

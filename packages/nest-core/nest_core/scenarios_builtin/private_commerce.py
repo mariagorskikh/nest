@@ -106,11 +106,16 @@ TICK_REDUNDANCY = 5
 drop the chain-death probability per tick to ``0.05 ** 5`` (~3e-7).
 """
 
-SEND_REDUNDANCY = 3
+SEND_REDUNDANCY = 5
 """Copies of each point-to-point functional message (bid, ack).
 
 Receivers deduplicate by reference, so redundancy is invisible above the
-wire. Markers don't need it — broadcasts are traced at send time.
+wire. Markers don't need it — broadcasts are traced at send time. Matches
+``TICK_REDUNDANCY``'s ``0.05 ** 5`` (~3e-7) chain-death budget per message;
+at redundancy 3 a bid died outright with p = 0.05**3 (1.25e-4), which over
+a multi-bid seed bank produced an honest seller with zero fulfilled markers
+and a trust score inside the offender band of
+``commerce_undelivered_penalized`` roughly 1 in 2000 runs.
 """
 
 DEFAULT_GOSSIP_INTERVAL = 200.0

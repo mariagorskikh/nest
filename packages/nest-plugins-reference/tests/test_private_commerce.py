@@ -42,9 +42,15 @@ from nest_core.validators import (
 SCENARIO_YAML = Path(__file__).resolve().parents[3] / "scenarios" / "private_commerce.yaml"
 
 
-def _bc(msg: str) -> dict[str, Any]:
-    """A broadcast trace event with the given body."""
-    return {"kind": "broadcast", "agent": "x", "msg": msg}
+def _bc(msg: str, agent: str = "x") -> dict[str, Any]:
+    """A broadcast trace event with the given body, from the given sender.
+
+    ``agent`` defaults to a bystander id ("x") for markers that don't carry
+    a principal to bind against. Markers the validators bind to a principal
+    (``fulfilled:<seller>``, ``score:`` from the auditor) must pass the
+    matching real sender explicitly.
+    """
+    return {"kind": "broadcast", "agent": agent, "msg": msg}
 
 
 def _send(msg: str) -> dict[str, Any]:
@@ -150,13 +156,27 @@ class TestUndeliveredPenalized:
     def test_delivered_stream_is_not_an_offense(self) -> None:
         events = [
             _bc("stream:open:buyer-0:seller-0:bid-buyer-0:10"),
-            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0"),
+            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0", agent="seller-0"),
             _bc("stream:close:buyer-0:seller-0:bid-buyer-0:200"),
         ]
         (result,) = validate_commerce_undelivered_penalized(events)
         # No offenders at all → the adversary never fired → validator fails loudly.
         assert not result.passed
         assert "adversary never fired" in result.detail
+
+    def test_forged_fulfilled_from_wrong_sender_does_not_count(self) -> None:
+        """A ``fulfilled:seller-0`` broadcast by someone other than seller-0
+        must not clear seller-0 of the drain -- the marker names a principal
+        it didn't actually come from."""
+        events = [
+            _bc("stream:open:buyer-0:shill_seller-0:bid-buyer-0:10"),
+            _bc("fulfilled:shill_seller-0:buyer-0:bid-buyer-0", agent="attacker-0"),
+            _bc("stream:close:buyer-0:shill_seller-0:bid-buyer-0:200"),
+            _bc("score:shill_seller-0:0.750000:0.500000"),
+        ]
+        (result,) = validate_commerce_undelivered_penalized(events)
+        assert not result.passed
+        assert "0.750" in result.detail
 
     def test_zero_total_stream_is_not_a_drain(self) -> None:
         events = [
@@ -172,7 +192,7 @@ class TestDeliveryRewarded:
     def test_passes_when_fulfilment_is_paid_and_scored(self) -> None:
         events = [
             _bc("stream:open:buyer-0:seller-0:bid-buyer-0:10"),
-            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0"),
+            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0", agent="seller-0"),
             _bc("score:seller-0:0.400000:1.000000"),
         ]
         (result,) = validate_commerce_delivery_rewarded(events)
@@ -180,7 +200,7 @@ class TestDeliveryRewarded:
 
     def test_fails_on_unpaid_fulfilment(self) -> None:
         events = [
-            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0"),
+            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0", agent="seller-0"),
             _bc("score:seller-0:0.400000:1.000000"),
         ]
         (result,) = validate_commerce_delivery_rewarded(events)
@@ -190,7 +210,7 @@ class TestDeliveryRewarded:
     def test_fails_when_fulfilling_seller_scores_low(self) -> None:
         events = [
             _bc("stream:open:buyer-0:seller-0:bid-buyer-0:10"),
-            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0"),
+            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0", agent="seller-0"),
             _bc("score:seller-0:0.100000:1.000000"),
         ]
         (result,) = validate_commerce_delivery_rewarded(events)
@@ -201,6 +221,34 @@ class TestDeliveryRewarded:
         (result,) = validate_commerce_delivery_rewarded([])
         assert not result.passed
         assert "no fulfilment markers" in result.detail
+
+    def test_forged_fulfilled_from_wrong_sender_does_not_count(self) -> None:
+        """A seller can't be credited with a fulfilment someone else claimed
+        on its behalf -- the marker's principal must match its broadcaster."""
+        events = [
+            _bc("stream:open:buyer-0:seller-0:bid-buyer-0:10"),
+            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0", agent="attacker-0"),
+            _bc("score:seller-0:0.400000:1.000000"),
+        ]
+        (result,) = validate_commerce_delivery_rewarded(events)
+        assert not result.passed
+        assert "no fulfilment markers" in result.detail
+
+    def test_forged_score_after_the_auditor_does_not_override_it(self) -> None:
+        """A byzantine agent broadcasting a ``score:`` line after the real
+        auditor finalized must not win last-write-wins: the canonical
+        auditor is whoever broadcast the *first* score: marker in the trace,
+        and every later score: from a different sender is discarded."""
+        events = [
+            _bc("stream:open:buyer-0:seller-0:bid-buyer-0:10"),
+            _bc("fulfilled:seller-0:buyer-0:bid-buyer-0", agent="seller-0"),
+            _bc("score:seller-0:0.750000:1.000000", agent="auditor-0"),
+            # Forged low score from a non-auditor sender, broadcast after the
+            # real one -- must not overwrite the honest 0.75.
+            _bc("score:seller-0:0.000000:0.000000", agent="attacker-0"),
+        ]
+        (result,) = validate_commerce_delivery_rewarded(events)
+        assert result.passed, result.detail
 
 
 # ---------------------------------------------------------------------------
@@ -226,23 +274,25 @@ class TestValidatorProperties:
     @settings(max_examples=20)
     def test_redundant_marker_copies_do_not_change_verdicts(self, copies: int) -> None:
         """Senders re-broadcast markers for drop-redundancy; dedup must hold."""
+        # (message, sender) -- fulfilled: and score: need their real principal
+        # as sender now that the validators check marker provenance.
         base = [
-            "discovered:buyer-0:seller-0",
-            "stream:open:buyer-0:seller-0:bid-buyer-0:10",
-            "bidmeta:buyer-0:seller-0:bid-buyer-0:150",
-            "fulfilled:seller-0:buyer-0:bid-buyer-0",
-            "stream:close:buyer-0:seller-0:bid-buyer-0:60",
-            "stream:open:buyer-1:shill_seller-0:bid-buyer-1:10",
-            "bidmeta:buyer-1:shill_seller-0:bid-buyer-1:150",
-            "discovered:buyer-1:shill_seller-0",
-            "stream:close:buyer-1:shill_seller-0:bid-buyer-1:60",
-            "score:seller-0:0.400000:1.000000",
-            "score:shill_seller-0:0.000000:0.000000",
+            ("discovered:buyer-0:seller-0", "x"),
+            ("stream:open:buyer-0:seller-0:bid-buyer-0:10", "x"),
+            ("bidmeta:buyer-0:seller-0:bid-buyer-0:150", "x"),
+            ("fulfilled:seller-0:buyer-0:bid-buyer-0", "seller-0"),
+            ("stream:close:buyer-0:seller-0:bid-buyer-0:60", "x"),
+            ("stream:open:buyer-1:shill_seller-0:bid-buyer-1:10", "x"),
+            ("bidmeta:buyer-1:shill_seller-0:bid-buyer-1:150", "x"),
+            ("discovered:buyer-1:shill_seller-0", "x"),
+            ("stream:close:buyer-1:shill_seller-0:bid-buyer-1:60", "x"),
+            ("score:seller-0:0.400000:1.000000", "auditor-0"),
+            ("score:shill_seller-0:0.000000:0.000000", "auditor-0"),
         ]
         # Move the second discovery before its bid to keep ordering legal.
         base.insert(5, base.pop(7))
-        once = [_bc(m) for m in base]
-        multi = [_bc(m) for m in base for _ in range(copies)]
+        once = [_bc(m, agent=a) for m, a in base]
+        multi = [_bc(m, agent=a) for m, a in base for _ in range(copies)]
         for validator in (
             validate_commerce_discovery_precedes_bid,
             validate_commerce_undelivered_penalized,
