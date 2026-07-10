@@ -22,7 +22,6 @@ import os
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
 from nest_core.types import (
     AgentCard,
     AgentId,
@@ -35,14 +34,15 @@ from nest_core.types import (
 # Number of intermediary hops to use for a circuit (e.g. 2 relays + 1 destination = 3)
 DEFAULT_CIRCUIT_LENGTH = 3
 
+
 def _get_key_for_agent(agent_id: AgentId) -> bytes:
     """Derive a deterministic 256-bit AES key for an agent's identity.
-    
+
     In a real production environment, this would use a public-key infrastructure (PKI)
-    where agents publish their RSA/Curve25519 public keys in the Registry, and we would 
-    perform ECDH to derive a shared symmetric key. For this hackathon, we use a 
+    where agents publish their RSA/Curve25519 public keys in the Registry, and we would
+    perform ECDH to derive a shared symmetric key. For this hackathon, we use a
     deterministic hash of the AgentId to simulate knowing their public key.
-    
+
     NOTE: This makes the current implementation intentionally insecure for demo purposes,
     as any agent can derive any other agent's key.
     """
@@ -51,7 +51,7 @@ def _get_key_for_agent(agent_id: AgentId) -> bytes:
 
 class OnionRoutingComms:
     """Tor-style Onion Routing communication protocol.
-    
+
     Provides anonymity and privacy by wrapping messages in layers of encryption.
     """
 
@@ -89,7 +89,7 @@ class OnionRoutingComms:
 
         inner_data = {
             "next_hop": next_hop,
-            "payload": base64.b64encode(payload_bytes).decode("ascii")
+            "payload": base64.b64encode(payload_bytes).decode("ascii"),
         }
         plaintext = json.dumps(inner_data).encode("utf-8")
         ciphertext = aesgcm.encrypt(nonce, plaintext, None)
@@ -145,22 +145,22 @@ class OnionRoutingComms:
                         "onion_action": "relay",
                         "onion_next_hop": next_hop,
                         "onion_raw_payload": payload_b64,  # keep as base64 string
-                    }
+                    },
                 )
         except Exception as exc:
             raise ValueError("Failed to decrypt or parse Onion packet") from exc
 
     async def send(self, to: AgentId, msg: Message) -> Response:
         """Send a message using Onion Routing.
-        
+
         If the message contains relay instructions in its metadata, it simply
         forwards the raw wrapped payload to the next hop.
-        Otherwise, it constructs a full multi-hop circuit, wraps the message in 
+        Otherwise, it constructs a full multi-hop circuit, wraps the message in
         layers of encryption, and sends it to the first relay.
         """
         if self._transport is None:
             return Response(success=True)
-            
+
         # 1. Check if we are just relaying an existing onion packet
         if msg.metadata.get("onion_action") == "relay":
             next_hop = AgentId(msg.metadata["onion_next_hop"])
@@ -170,7 +170,7 @@ class OnionRoutingComms:
                 return Response(success=False)
             await self._transport.send(next_hop, raw_payload)
             return Response(success=True)
-            
+
         # 2. We are the origin. Construct the circuit!
         circuit: list[AgentId] = []
 
@@ -179,9 +179,7 @@ class OnionRoutingComms:
         if self._registry is not None:
             cards = await self._registry.lookup(Query())
             # Exclude self and final destination from relays
-            available_relays = [
-                c.agent_id for c in cards if c.agent_id not in (self._agent_id, to)
-            ]
+            available_relays = [c.agent_id for c in cards if c.agent_id not in (self._agent_id, to)]
 
             # Pick up to (circuit_length - 1) relays
             needed = max(0, self.circuit_length - 1)
@@ -208,7 +206,7 @@ class OnionRoutingComms:
         # 5. Send to the first node in the circuit
         first_hop = circuit[0]
         await self._transport.send(first_hop, current_payload)
-        
+
         return Response(success=True)
 
     async def advertise(self, card: AgentCard) -> None:

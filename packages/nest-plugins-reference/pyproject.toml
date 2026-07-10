@@ -35,6 +35,8 @@ Repository = "https://github.com/projnanda/nandatown"
 # install-time discovery path described in CONTRIBUTING.md.
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
+onion = "nest_plugins_reference.comms.onion:OnionRoutingComms"
+
 
 [project.entry-points."nest.plugins.memory"]
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"
@@ -64,7 +66,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["nest_plugins_reference"]
-
-[project.entry-points."nest.plugins.comms"]
 onion = "nest_plugins_reference.comms.onion:OnionRoutingComms"
