@@ -37,9 +37,7 @@ export function isSafeExternalUrl(raw: string): boolean {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return false;
   }
-  const host = parsed.hostname.toLowerCase();
-  if (BLOCKED_HOSTNAMES.has(host) || host.endsWith(".localhost")) {
-    return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
   }
   if (isBlockedIpv6(host)) {
     return false;
