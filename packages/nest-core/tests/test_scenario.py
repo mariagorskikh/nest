@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import random
 from pathlib import Path
@@ -130,6 +131,24 @@ class TestPluginRegistry:
         plugins = reg.list_plugins("payments")
         assert ("payments", "prepaid_credits") in plugins
         assert ("payments", "empic_escrow") in plugins
+
+    def test_entry_points_cover_all_builtins(self) -> None:
+        """Every plugin in the built-in fallback must also have an entry point.
+
+        This guards against adding a reference plugin to ``nest-core`` but
+        forgetting to register it in ``nest-plugins-reference/pyproject.toml``.
+        """
+        reg = PluginRegistry()
+        all_plugins = set(reg.list_plugins())
+
+        entry_point_plugins: set[tuple[str, str]] = set()
+        for layer, _ in all_plugins:
+            group = f"nest.plugins.{layer}"
+            for ep in importlib.metadata.entry_points(group=group):
+                entry_point_plugins.add((layer, ep.name))
+
+        missing = all_plugins - entry_point_plugins
+        assert not missing, f"Missing entry points for plugins: {missing}"
 
 
 # ---------------------------------------------------------------------------
