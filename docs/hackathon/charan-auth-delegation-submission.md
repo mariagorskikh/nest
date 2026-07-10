@@ -13,11 +13,11 @@ scopes. Verification fails closed for invalid signatures, malformed payloads,
 scope widening, stale ancestors, expired tokens, and audience confusion.
 
 Current-main note: NANDA Town now also includes `auth: delegatable` from
-merged PR #138. This PR intentionally uses its own `manifest_delegatable`
-namespace and focuses on what that merged plugin does not cover:
-identity-verified manifests, manifest-bound root issuance, budget/approval
-policy decisions, `spend:` and `expose:` scope grammar, and strict rejection
-of equal-authority delegation.
+merged PR #138 and `auth: mesh_revocable` from merged PR #155. This PR
+intentionally uses its own `manifest_delegatable` namespace and focuses on
+what those merged plugins do not cover: identity-verified manifests,
+manifest-bound root issuance, budget/approval policy decisions, `spend:` and
+`expose:` scope grammar, and strict rejection of equal-authority delegation.
 
 ## Problem Solved
 

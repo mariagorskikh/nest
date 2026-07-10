@@ -150,6 +150,8 @@ class Simulator:
         byzantine_fraction: float = 0.0,
         partition_groups: list[list[str]] | None = None,
         partition_heal_at: int | None = None,
+        partition_start_at_time: float | None = None,
+        partition_heal_at_time: float | None = None,
         plugins: dict[str, Any] | None = None,
     ) -> None:
         if not 0.0 <= message_drop_rate <= 1.0:
@@ -174,9 +176,15 @@ class Simulator:
         self._byzantine_fraction = byzantine_fraction
         self._partition_groups = partition_groups
         self._partition_heal_at = partition_heal_at
+        self._partition_start_at_time = partition_start_at_time
+        self._partition_heal_at_time = partition_heal_at_time
+        # With no start time the partition is active from the first event
+        # (legacy behavior); otherwise it stays pending until that instant.
+        self._partition_started = partition_start_at_time is None
         self._partition_healed = False
         self._byzantine_agents: set[AgentId] = set()
         self._partition_map: dict[AgentId, int] = {}
+        self._pending_partition_map: dict[AgentId, int] = {}
         self._failure_rng = random.Random(self._master_rng.randint(0, 2**63))
         self._plugins: dict[str, Any] = plugins or {}
         self._agent_plugins: dict[AgentId, dict[str, Any]] = {}
@@ -251,7 +259,9 @@ class Simulator:
                 for agent_name in group:
                     aid = AgentId(agent_name)
                     if aid in self._agents:
-                        self._partition_map[aid] = group_idx
+                        self._pending_partition_map[aid] = group_idx
+            if self._partition_started:
+                self._partition_map = dict(self._pending_partition_map)
 
     def _should_drop(self, sender: AgentId, target: AgentId) -> bool:
         if self._message_drop_rate > 0 and self._failure_rng.random() < self._message_drop_rate:
@@ -310,9 +320,31 @@ class Simulator:
             self._tick_count += 1
 
             if (
-                self._partition_heal_at is not None
+                self._partition_start_at_time is not None
+                and not self._partition_started
                 and not self._partition_healed
-                and self._tick_count >= self._partition_heal_at
+                and self._clock.now >= self._partition_start_at_time
+            ):
+                self._partition_map = dict(self._pending_partition_map)
+                self._partition_started = True
+                if self._trace:
+                    self._trace.record(
+                        {
+                            "ts": self._clock.now,
+                            "agent": "_simulator",
+                            "kind": "partition_started",
+                        }
+                    )
+
+            if not self._partition_healed and (
+                (
+                    self._partition_heal_at is not None
+                    and self._tick_count >= self._partition_heal_at
+                )
+                or (
+                    self._partition_heal_at_time is not None
+                    and self._clock.now >= self._partition_heal_at_time
+                )
             ):
                 self._partition_map = {}
                 self._partition_healed = True

@@ -4201,14 +4201,24 @@ def validate_bft_no_stuck_view(
 # ---------------------------------------------------------------------------
 
 
-_MAX_PLAUSIBLE_GAP = 22.0
-"""Longest silence (logical time) that a *live* peer can plausibly produce.
+_GAP_MARGIN = 2.0
+"""Safety margin added to ``hb_max`` when deriving the plausible-gap bound.
 
-Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with ``hb_max == 20`` and
-zero message drop, so consecutive observer receipts from a living peer are at
-most 20 apart.  A 2-unit margin gives 22: if the observer received a heartbeat
-within this window, the peer was provably alive and any suspicion of it is a
-false positive.
+Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with zero message drop,
+so consecutive observer receipts from a living peer are at most ``hb_max``
+apart; the margin absorbs event-queue rounding.  If the observer received a
+heartbeat within ``hb_max + _GAP_MARGIN``, the peer was provably alive and any
+suspicion of it is a false positive.
+"""
+
+_MAX_PLAUSIBLE_GAP = 22.0
+"""Fallback plausible-gap bound for traces without an ``fd:config`` marker.
+
+Current scenario runs carry their heartbeat bound in an ``fd:config`` marker
+and :func:`_fd_max_plausible_gap` derives the bound from it, so re-running with
+different ``hb_max`` values cannot silently invalidate the accuracy check.
+This constant (the default ``hb_max == 20`` plus the margin) applies only to
+traces recorded before the marker existed.
 """
 
 _ACCURACY_WARMUP = 100.0
@@ -4239,6 +4249,32 @@ def _parse_fd_record(ev: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(obj, dict):
         return None
     return cast("dict[str, Any]", obj)
+
+
+def _fd_max_plausible_gap(events: list[dict[str, Any]], observer_ids: set[str]) -> float:
+    """Derive the live-peer plausible-gap bound from the trace itself.
+
+    The observer broadcasts one ``fd:config`` marker carrying the scenario's
+    ``hb_max``; the bound is ``hb_max + _GAP_MARGIN``.  Only a marker emitted by
+    an observer (an agent that also publishes ``fd:status`` verdicts) is
+    trusted, so a Byzantine emitter cannot broadcast a spoofed ``fd:config`` to
+    inflate the bound.  Traces without a trusted marker fall back to
+    :data:`_MAX_PLAUSIBLE_GAP`.
+
+    Example::
+
+        gap = _fd_max_plausible_gap(events, _fd_observer_ids(events))
+    """
+    for ev in events:
+        if ev.get("agent") not in observer_ids:
+            continue
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "config":
+            continue
+        hb_max = rec.get("hb_max")
+        if isinstance(hb_max, (int, float)):
+            return float(hb_max) + _GAP_MARGIN
+    return _MAX_PLAUSIBLE_GAP
 
 
 def _fd_observer_ids(events: list[dict[str, Any]]) -> set[str]:
@@ -4506,9 +4542,10 @@ def validate_failure_detection_accuracy(
 
     Accuracy: after a warm-up, while a peer is provably reachable -- it is inside
     a reachable ``fd:phase`` segment *and* the observer received a heartbeat from
-    it no longer than ``_MAX_PLAUSIBLE_GAP`` ago -- the detector must not suspect
-    it.  A tight fixed timeout violates this on the upper tail of normal
-    heartbeat jitter; an accrual detector does not.
+    it no longer than the plausible-gap bound ago (derived from the trace's
+    ``fd:config`` marker by :func:`_fd_max_plausible_gap`) -- the detector must
+    not suspect it.  A tight fixed timeout violates this on the upper tail of
+    normal heartbeat jitter; an accrual detector does not.
 
     Recovery: a peer that genuinely went down and came back must end its final
     reachable segment un-suspected.
@@ -4520,6 +4557,7 @@ def validate_failure_detection_accuracy(
     statuses = _fd_statuses(events)
     observer_ids = _fd_observer_ids(events)
     receipts = _fd_hb_receipts(events, observer_ids)
+    max_gap = _fd_max_plausible_gap(events, observer_ids)
     watched = sorted(statuses.keys())
 
     # ----- accuracy: no false suspicion of a provably-live peer -----
@@ -4543,7 +4581,7 @@ def validate_failure_detection_accuracy(
             if not _in_any_interval(t, intervals):
                 continue
             recent = _last_leq(peer_receipts, t)
-            if recent is not None and (t - recent) <= _MAX_PLAUSIBLE_GAP:
+            if recent is not None and (t - recent) <= max_gap:
                 false_positives.append(
                     f"{peer}: suspected at t={t} but a heartbeat arrived {round(t - recent, 3)} ago"
                 )
@@ -4602,6 +4640,95 @@ def validate_failure_detection_accuracy(
         )
 
     return [accuracy, recovery]
+
+
+def validate_failure_detection_no_forged_liveness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Forged heartbeats must not keep a genuinely dead peer looking alive.
+
+    The attack: while a peer is inside an unreachable ground-truth segment, a
+    Byzantine agent keeps broadcasting heartbeats that *claim* the dead peer's
+    id.  A forged receipt is any observer-received ``FDHB|`` payload whose
+    claimed id differs from the transport-level sender.  For every outage
+    segment during which such forgeries arrived, the detector must still have
+    the peer suspected at the last in-segment status update -- forged liveness
+    must not mask the crash.
+
+    A trace with no forged receipt at all, or whose forgeries never overlap an
+    outage, is a scenario setup failure: this validator is only registered for
+    the forgery scenario, whose entire point is that the attack fires.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+    observer_ids = _fd_observer_ids(events)
+
+    forged: dict[str, list[float]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive" or ev.get("agent") not in observer_ids:
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("FDHB|"):
+            continue
+        claimed = msg[len("FDHB|") :].split("|", 1)[0]
+        sender = ev.get("from")
+        ts = ev.get("ts")
+        if not claimed or not isinstance(sender, str) or not isinstance(ts, (int, float)):
+            continue
+        if claimed != sender:
+            forged[claimed].append(float(ts))
+
+    if not forged:
+        return [
+            ValidationResult(
+                "failure_detection_no_forged_liveness",
+                False,
+                "no forged heartbeat received in trace",
+            )
+        ]
+
+    failures: list[str] = []
+    checked = 0
+    for victim in sorted(forged):
+        forged_ts = forged[victim]
+        downs = [
+            (start, end)
+            for start, end, reachable in _segments_for_peer(transitions.get(victim, []), last_ts)
+            if not reachable
+        ]
+        victim_statuses = statuses.get(victim, [])
+        for u_start, u_end in downs:
+            if not any(u_start < t <= u_end for t in forged_ts):
+                continue
+            checked += 1
+            in_window = [(t, s) for (t, s) in victim_statuses if u_start < t <= u_end]
+            if not in_window:
+                failures.append(f"{victim}: no status during attacked outage [{u_start}, {u_end}]")
+            elif not in_window[-1][1]:
+                failures.append(
+                    f"{victim}: forged heartbeats masked the outage [{u_start}, {u_end}] "
+                    "(not suspected at segment end)"
+                )
+
+    if checked == 0:
+        return [
+            ValidationResult(
+                "failure_detection_no_forged_liveness",
+                False,
+                "forged heartbeats never overlapped an outage segment",
+            )
+        ]
+    if failures:
+        return [
+            ValidationResult("failure_detection_no_forged_liveness", False, "; ".join(failures))
+        ]
+    return [
+        ValidationResult(
+            "failure_detection_no_forged_liveness",
+            True,
+            f"forged liveness rejected across {checked} attacked outage segment(s)",
+        )
+    ]
 
 
 def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:
@@ -5152,6 +5279,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "failure_detection": [
         validate_failure_detection_completeness,
         validate_failure_detection_accuracy,
+    ],
+    "failure_detection_forgery": [
+        validate_failure_detection_completeness,
+        validate_failure_detection_accuracy,
+        validate_failure_detection_no_forged_liveness,
     ],
     "parc_migration": [
         validate_parc_honest_admitted,
