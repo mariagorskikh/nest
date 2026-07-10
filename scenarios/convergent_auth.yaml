@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Convergent-auth scenario: a coordinator issues one root capability and
+# delegates down a 1 -> 3 -> 12 tree; mid-run it revokes one intermediary and
+# gossips the revoked seal, which peer replicas fold in with a CRDT merge. The
+# convergent_auth validator then checks cascading revocation, convergence at a
+# non-issuer (edge) replica, three blocked attacks, and CRDT convergence.
+#
+# Uses the partition-tolerant `delegatable_crdt` auth plugin. Swap it for
+# `auth: jwt` to see the validator FAIL: the default plugin cannot delegate or
+# revoke transitively, so the tree is never built and no attack, convergence,
+# or edge-verification lines are emitted.
+name: convergent_auth
+description: "Coordinator + 3 intermediaries + 12 leaves; one intermediary revoked mid-run; revocation converges to peer replicas via CRDT merge and is enforced at the edge, under three attacks."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 16
+  brain: state-machine
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: delegatable_crdt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: convergent_auth
+  config:
+    intermediaries: 3
+    leaves_per_intermediary: 4
+    revoke_at_tick: 5.0
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+
+output:
+  trace: ./traces/convergent_auth.jsonl

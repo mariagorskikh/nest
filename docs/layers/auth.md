@@ -42,6 +42,33 @@ Source: [`nest_plugins_reference/auth/delegatable.py`](../../packages/nest-plugi
 Validators: [`nest_plugins_reference/validators/delegation_validators.py`](../../packages/nest-plugins-reference/nest_plugins_reference/validators/delegation_validators.py).
 Scenario: [`scenarios/delegated_auth.yaml`](../../scenarios/delegated_auth.yaml).
 
+## Partition-tolerant plugin: `delegatable_crdt`
+
+Same macaroon core as `delegatable` (offline delegation, cascading
+revocation by seal construction, audience binding), but treats the
+revocation set as replicated distributed state. Each verifier owns a
+`RevocationSet` — a grow-only set (G-Set CRDT) — and revocations spread by
+gossip: `merge` is the set union, so it is commutative, associative and
+idempotent and every replica converges to the same view after a partition
+heals. Safety is monotone (once a verifier has observed a revocation it
+never accepts that token again); a verifier that has not yet received a
+revocation still accepts until it merges one — the honest availability
+window, bounded and tested rather than hidden. Determinism: token identity
+is the seal (a pure function of content and secret), no `uuid` and no
+wall-clock.
+
+The `convergent_auth` scenario exercises this end to end: a coordinator
+revokes one intermediary and **gossips** the seal; peer replicas fold it in
+with an actual `RevocationSet.merge()`, and a **non-issuer (edge) replica**
+then rejects a descendant it learned about only by gossip — so cascade and
+convergence are demonstrated on a replica that never called `revoke()`
+itself, not merely asserted. The four validators (`tree_built`, `cascade`,
+`attacks_blocked`, `convergence`) fail against `jwt` and pass against
+`delegatable_crdt`.
+
+Source: [`nest_plugins_reference/auth/delegatable_crdt.py`](../../packages/nest-plugins-reference/nest_plugins_reference/auth/delegatable_crdt.py).
+Scenario: [`scenarios/convergent_auth.yaml`](../../scenarios/convergent_auth.yaml).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

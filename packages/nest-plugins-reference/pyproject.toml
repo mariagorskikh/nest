@@ -59,6 +59,9 @@ aae_permit_gate = "nest_plugins_reference.trust.aae_permit_gate:AAEPermitGate"
 bonded_trust = "nest_plugins_reference.trust.bonded_trust:BondedTrust"
 attested_peering = "nest_plugins_reference.trust.attested_peering:AttestedPeeringTrust"
 
+[project.entry-points."nest.plugins.auth"]
+delegatable_crdt = "nest_plugins_reference.auth.delegatable_crdt:CrdtDelegatableAuth"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

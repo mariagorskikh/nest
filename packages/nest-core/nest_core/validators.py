@@ -4923,7 +4923,238 @@ def validate_sybil_bond_attempts_rejected(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Convergent-auth validators (see scenarios_builtin/convergent_auth.py)
+#
+# These are adversarial: they PASS against a plugin that supports capability
+# delegation with cascading, convergent revocation, and FAIL against the
+# default ``jwt`` plugin (which emits ``unsupported`` markers and no revocation
+# or attack lines). Each reads the ``:``-delimited line protocol from ``msg``.
+# ---------------------------------------------------------------------------
+
+
+def _conv_lines(events: list[dict[str, Any]], prefix: str) -> list[tuple[int, str]]:
+    """Return ``(index, msg)`` for every *emitted* event starting with *prefix*.
+
+    Only ``send``/``broadcast`` events are counted; the simulator also logs a
+    mirrored ``receive`` per message, and counting both would double every
+    tally. Indices are positions in the full event list so cross-line ordering
+    checks (e.g. "after the revocation") stay valid.
+    """
+    out: list[tuple[int, str]] = []
+    for i, ev in enumerate(events):
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if msg.startswith(prefix):
+            out.append((i, msg))
+    return out
+
+
+def validate_convergent_auth_tree_built(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The full coordinator -> 3 intermediaries -> 12 leaves tree was delegated.
+
+    Fails on ``jwt``: without a ``delegate`` operation the agents emit
+    ``unsupported`` and no delegation ever succeeds.
+    """
+    inter_ok = 0
+    leaf_ok = 0
+    unsupported = 0
+    for _, msg in _conv_lines(events, "delegated:"):
+        parts = msg.split(":")
+        if len(parts) != 5:
+            continue
+        _, parent, _child, _seal, result = parts
+        if result == "unsupported":
+            unsupported += 1
+        elif result == "ok":
+            if parent == "coordinator":
+                inter_ok += 1
+            else:
+                leaf_ok += 1
+    if inter_ok >= 3 and leaf_ok >= 12:
+        return [
+            ValidationResult(
+                "convergent_auth_tree_built",
+                True,
+                f"{inter_ok} intermediary + {leaf_ok} leaf delegations succeeded",
+            )
+        ]
+    detail = (
+        f"delegation tree incomplete: {inter_ok}/3 intermediary, {leaf_ok}/12 leaf ok; "
+        f"{unsupported} unsupported (plugin cannot delegate)"
+    )
+    return [ValidationResult("convergent_auth_tree_built", False, detail)]
+
+
+def validate_convergent_auth_cascade(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Revoking an intermediary severs exactly its subtree, and no other leaf.
+
+    Fails on ``jwt``: no ``revoked:`` line is ever emitted (no transitive
+    revocation), so the cascade cannot be demonstrated.
+    """
+    revoked_idx: int | None = None
+    revoked_inter: str | None = None
+    for i, msg in _conv_lines(events, "revoked:"):
+        parts = msg.split(":")
+        if len(parts) == 3:
+            revoked_idx, revoked_inter = i, parts[1]
+            break
+    if revoked_inter is None or revoked_idx is None:
+        return [
+            ValidationResult(
+                "convergent_auth_cascade",
+                False,
+                "no revocation event (plugin cannot revoke transitively)",
+            )
+        ]
+
+    parent_of: dict[str, str] = {}
+    for _, msg in _conv_lines(events, "delegated:"):
+        parts = msg.split(":")
+        if len(parts) == 5 and parts[4] == "ok":
+            parent_of[parts[2]] = parts[1]
+    descendants = {leaf for leaf, parent in parent_of.items() if parent == revoked_inter}
+    siblings = {
+        leaf for leaf, parent in parent_of.items() if parent not in (revoked_inter, "coordinator")
+    }
+
+    leaked: set[str] = set()
+    seen_desc: set[str] = set()
+    over_revoked: set[str] = set()
+    for i, msg in _conv_lines(events, "verify:"):
+        if i <= revoked_idx:
+            continue
+        parts = msg.split(":")
+        if len(parts) != 4:
+            continue
+        _, leaf, _seal, verdict = parts
+        if leaf in descendants:
+            seen_desc.add(leaf)
+            if verdict == "ok":
+                leaked.add(leaf)
+        elif leaf in siblings and verdict != "ok":
+            over_revoked.add(leaf)
+
+    problems: list[str] = []
+    if leaked:
+        problems.append(f"revoked subtree still verified ok: {sorted(leaked)}")
+    if not seen_desc:
+        problems.append("no post-revocation verification of the revoked subtree")
+    if over_revoked:
+        problems.append(f"over-revocation hit unrelated leaves: {sorted(over_revoked)}")
+    if problems:
+        return [ValidationResult("convergent_auth_cascade", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "convergent_auth_cascade",
+            True,
+            f"revoking {revoked_inter} severed {len(seen_desc)} descendant leaves; siblings intact",
+        )
+    ]
+
+
+def validate_convergent_auth_attacks_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Scope-escalation, stale-parent and audience-confusion attacks all fail.
+
+    Fails on ``jwt``: none of the attacks can even be staged, so the required
+    attack kinds never appear in the trace.
+    """
+    seen: dict[str, list[str]] = {}
+    leaked: set[str] = set()
+    for _, msg in _conv_lines(events, "attack:"):
+        parts = msg.split(":")
+        if len(parts) != 4:
+            continue
+        _, kind, _seal, outcome = parts
+        seen.setdefault(kind, []).append(outcome)
+        if outcome == "LEAKED":
+            leaked.add(kind)
+    required = {"escalation", "stale_parent", "audience"}
+    missing = sorted(required - set(seen))
+    if missing:
+        return [
+            ValidationResult(
+                "convergent_auth_attacks_blocked",
+                False,
+                f"attacks not exercised: {missing} (plugin lacks delegation surface)",
+            )
+        ]
+    if leaked:
+        return [
+            ValidationResult(
+                "convergent_auth_attacks_blocked",
+                False,
+                f"attack(s) succeeded: {sorted(leaked)}",
+            )
+        ]
+    return [
+        ValidationResult("convergent_auth_attacks_blocked", True, f"all blocked: {sorted(seen)}")
+    ]
+
+
+def validate_convergent_auth_convergence(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Gossiped revocation converges: only the revoked intermediary is severed.
+
+    After the revoked seal is gossiped, the revoked intermediary can no longer
+    mint tokens (``severed``) while its siblings still can (``valid``) — proof
+    the revocation propagated via CRDT merge, not just on the coordinator.
+    Fails on ``jwt``: no convergence probes are emitted.
+    """
+    revoked_inter: str | None = None
+    for _, msg in _conv_lines(events, "revoked:"):
+        parts = msg.split(":")
+        if len(parts) == 3:
+            revoked_inter = parts[1]
+            break
+    states: dict[str, str] = {}
+    for _, msg in _conv_lines(events, "converge:"):
+        parts = msg.split(":")
+        if len(parts) == 4:
+            states[parts[1]] = parts[3]
+    if revoked_inter is None or not states:
+        return [
+            ValidationResult(
+                "convergent_auth_convergence",
+                False,
+                "no convergence probes (revocation did not propagate)",
+            )
+        ]
+    problems: list[str] = []
+    if states.get(revoked_inter) != "severed":
+        problems.append(
+            f"revoked intermediary {revoked_inter} still delegating "
+            f"(state={states.get(revoked_inter)!r}) — revocation did not converge"
+        )
+    for inter, state in states.items():
+        if inter != revoked_inter and state != "valid":
+            problems.append(f"unrelated intermediary {inter} severed (over-propagation)")
+    if problems:
+        return [ValidationResult("convergent_auth_convergence", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "convergent_auth_convergence",
+            True,
+            f"revocation converged: {revoked_inter} severed, {len(states) - 1} siblings valid",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "convergent_auth": [
+        validate_convergent_auth_tree_built,
+        validate_convergent_auth_cascade,
+        validate_convergent_auth_attacks_blocked,
+        validate_convergent_auth_convergence,
+    ],
     "sybil_bond": [
         validate_sybil_bond_no_free_trust,
         validate_sybil_bond_honest_trusted,
