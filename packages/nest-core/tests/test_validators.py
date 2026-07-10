@@ -246,6 +246,20 @@ class TestAuctionWinnerHighest:
         assert results[0].passed is False
         assert "200" in results[0].detail
 
+    def test_fail_inflated_announced_amount(self) -> None:
+        # The auctioneer awards a low bidder (bidder-0 bid 50) but announces an
+        # amount (150) inflated past every real bid. Trusting the announced
+        # amount would let this pass; the winner's real bid (50) is lower than
+        # bidder-1's 100, so it must fail.
+        events = [
+            _send("bidder-0", "auctioneer-0", "bid:item-1:50"),
+            _send("bidder-1", "auctioneer-0", "bid:item-1:100"),
+            _send("auctioneer-0", "bidder-0", "won:item-1:150"),
+        ]
+        results = validate_auction_winner_highest(events)
+        assert results[0].passed is False
+        assert "bidder-1" in results[0].detail
+
     def test_pass_no_auctions(self) -> None:
         events = [{"ts": 0.0, "agent": "auctioneer-0", "kind": "start"}]
         results = validate_auction_winner_highest(events)
@@ -1984,6 +1998,7 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "identity_rotation",
+            "attested_peering",
             "memory_concurrent_writers",
             "streaming_payments",
             "empic_payments",
@@ -1997,6 +2012,7 @@ class TestValidatorRegistry:
             "failure_detection",
             "parc_migration",
             "rogue_trusted_agent",
+            "sybil_bond",
             "delegated_auth",
         }
         assert set(VALIDATORS.keys()) == expected

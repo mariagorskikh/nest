@@ -15,7 +15,7 @@ Trace-line protocol (auditor ``send`` bodies, ``:``-delimited)::
     auth_issue:<agent>:<tok_id>:<scopes>
     auth_delegate:<parent>:<audience>:<tok_id>:<scopes>:<ttl>:<outcome>[:<detail>]
     auth_verify:<presenter>:<tok_id>:<outcome>:<detail>
-    auth_revoke:<agent>:<tok_id>
+    auth_revoke:<agent>:<holder>:<tok_id>
     auth_attack:<attack_type>
 
 Example::
@@ -25,6 +25,7 @@ Example::
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from nest_core.scenario import ScenarioConfig
@@ -32,6 +33,13 @@ from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, Token
 
 _AUDITOR = AgentId("auditor-0")
+_DEFAULT_ROOT_SCOPES = ["read", "write", "delegate"]
+_DEFAULT_TREE: dict[str, list[str]] = {
+    "coordinator-0": ["intermediary-0", "intermediary-1", "intermediary-2"],
+    "intermediary-0": ["leaf-0", "leaf-1", "leaf-2", "leaf-3"],
+    "intermediary-1": ["leaf-4", "leaf-5", "leaf-6", "leaf-7"],
+    "intermediary-2": ["leaf-8", "leaf-9", "leaf-10", "leaf-11"],
+}
 
 
 class _TokenStore:
@@ -46,12 +54,20 @@ def _scopes_str(scopes: list[str]) -> str:
     return ",".join(sorted(scopes))
 
 
+def _task_config(config: ScenarioConfig) -> dict[str, Any]:
+    return dict(config.task.config or {})
+
+
 def _instantiate_auth(auth_cls: Any, config: ScenarioConfig) -> Any:
     if not isinstance(auth_cls, type):
         return auth_cls
-    if hasattr(auth_cls, "set_clock"):
+    sig = inspect.signature(auth_cls.__init__)
+    if "clock" in sig.parameters:
         return auth_cls(clock=0.0)
-    return auth_cls()
+    instance = auth_cls()
+    if hasattr(instance, "set_clock"):
+        instance.set_clock(0.0)
+    return instance
 
 
 class AuditorAgent(StateMachineAgent):
@@ -70,11 +86,13 @@ class DelegatedAuthAgent(StateMachineAgent):
         turns: list[tuple[float, str]],
         auth: Any,
         store: _TokenStore,
+        root_scopes: list[str],
     ) -> None:
         self._id = agent_id
         self._turns = turns
         self._auth = auth
         self._store = store
+        self._root_scopes = root_scopes
         self._has_delegate = hasattr(auth, "delegate")
 
     async def on_start(self, ctx: AgentContext) -> None:
@@ -113,7 +131,7 @@ class DelegatedAuthAgent(StateMachineAgent):
         await ctx.send(_AUDITOR, line.encode())
 
     async def _issue_root(self, ctx: AgentContext, me: str) -> None:
-        scopes = ["delegate", "read", "write"]
+        scopes = list(self._root_scopes)
         token = await self._auth.issue(AgentId(me), scopes)
         tok_id = self._tok_id(token)
         self._store.by_agent[me] = token
@@ -178,7 +196,7 @@ class DelegatedAuthAgent(StateMachineAgent):
             return
         await self._auth.revoke(token)
         tok_id = self._tok_id(token)
-        await self._emit(ctx, f"auth_revoke:{me}:{tok_id}")
+        await self._emit(ctx, f"auth_revoke:{me}:{holder}:{tok_id}")
 
     async def _attack(self, ctx: AgentContext, me: str, action: str) -> None:
         attack_type = action.split(":", 1)[1]
@@ -189,7 +207,13 @@ class DelegatedAuthAgent(StateMachineAgent):
             await self._delegate(ctx, me, "delegate:leaf-99:read:5000")
         elif attack_type == "audience_confusion":
             await self._verify(ctx, "leaf-1", "verify:leaf-0")
-        elif attack_type in ("stale_parent", "transitive_revocation"):
+        elif attack_type == "leaf_sub_delegate":
+            await self._delegate(ctx, "leaf-0", "delegate:leaf-99:read:100")
+        elif attack_type == "stale_parent":
+            await self._revoke(ctx, me, "revoke:intermediary-0")
+            await self._verify(ctx, "leaf-0", "verify:leaf-0")
+        elif attack_type == "transitive_revocation":
+            await self._revoke(ctx, me, "revoke:coordinator-0")
             await self._verify(ctx, "leaf-0", "verify:leaf-0")
 
     def _tok_id(self, token: Token) -> str:
@@ -198,38 +222,44 @@ class DelegatedAuthAgent(StateMachineAgent):
         return str(token)[:16]
 
 
-def _build_schedule() -> dict[AgentId, list[tuple[float, str]]]:
-    """Fixed deterministic schedule for 16 agents."""
+def _build_schedule(config: ScenarioConfig) -> dict[AgentId, list[tuple[float, str]]]:
+    """Build a deterministic schedule from YAML ``root_scopes`` and ``delegation_tree``."""
+    task_cfg = _task_config(config)
+    tree: dict[str, list[str]] = dict(task_cfg.get("delegation_tree", _DEFAULT_TREE))
+
     schedule: dict[AgentId, list[tuple[float, str]]] = {}
     tick = 1.0
 
     coord: list[tuple[float, str]] = []
     coord.append((tick, "issue_root"))
     tick += 1
-    for i in range(3):
-        coord.append((tick, f"delegate:intermediary-{i}:read,delegate:800"))
+
+    for child in tree.get("coordinator-0", []):
+        coord.append((tick, f"delegate:{child}:read,delegate:800"))
         tick += 1
 
-    for i in range(3):
-        agent = AgentId(f"intermediary-{i}")
+    for parent, children in tree.items():
+        if not parent.startswith("intermediary"):
+            continue
         turns: list[tuple[float, str]] = []
-        for j in range(4):
-            leaf = i * 4 + j
-            turns.append((tick, f"delegate:leaf-{leaf}:read:400"))
+        for leaf in children:
+            turns.append((tick, f"delegate:{leaf}:read:400"))
             tick += 1
-        schedule[agent] = turns
+        schedule[AgentId(parent)] = turns
 
-    for i in range(12):
-        agent = AgentId(f"leaf-{i}")
-        schedule[agent] = [(tick, f"verify:leaf-{i}")]
-        tick += 1
+    for parent, children in tree.items():
+        if not parent.startswith("intermediary"):
+            continue
+        for leaf in children:
+            schedule[AgentId(leaf)] = [(tick, f"verify:{leaf}")]
+            tick += 1
 
     coord.extend(
         [
             (tick, "attack:scope_escalation"),
             (tick + 1, "attack:ttl_violation"),
             (tick + 2, "attack:audience_confusion"),
-            (tick + 3, "revoke:coordinator-0"),
+            (tick + 3, "attack:leaf_sub_delegate"),
             (tick + 4, "attack:stale_parent"),
             (tick + 5, "attack:transitive_revocation"),
         ]
@@ -248,11 +278,13 @@ def delegated_auth_factory(
 
         agents = delegated_auth_factory(config, plugins)
     """
+    task_cfg = _task_config(config)
+    root_scopes = list(task_cfg.get("root_scopes", _DEFAULT_ROOT_SCOPES))
     auth_cls = plugins.get("auth")
     auth = _instantiate_auth(auth_cls, config)
     store = _TokenStore()
-    schedule = _build_schedule()
+    schedule = _build_schedule(config)
     agents: dict[AgentId, StateMachineAgent] = {_AUDITOR: AuditorAgent()}
     for agent_id, turns in schedule.items():
-        agents[agent_id] = DelegatedAuthAgent(agent_id, turns, auth, store)
+        agents[agent_id] = DelegatedAuthAgent(agent_id, turns, auth, store, root_scopes)
     return agents

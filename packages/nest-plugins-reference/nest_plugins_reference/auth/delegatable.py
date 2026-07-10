@@ -157,6 +157,10 @@ class DelegatableAuth:
             raise ExpiredParentError(msg)
 
         parent_scopes = set(parent_data["scopes"])
+        if "delegate" not in parent_scopes:
+            msg = "Parent token lacks delegate scope required for delegation"
+            raise ScopeEscalationError(msg)
+
         child_scopes = set(scopes_subset)
         if not child_scopes < parent_scopes:
             child_sorted = sorted(child_scopes)
@@ -223,7 +227,10 @@ class DelegatableAuth:
 
         if data.get("kind") == "delegate":
             aud = str(data["aud"])
-            if presenter is not None and str(presenter) != aud:
+            if presenter is None:
+                msg = "Delegated token requires a presenting audience agent"
+                raise AudienceMismatchError(msg)
+            if str(presenter) != aud:
                 msg = f"Token audience {aud} does not match presenter {presenter}"
                 raise AudienceMismatchError(msg)
             self._walk_ancestors(data)

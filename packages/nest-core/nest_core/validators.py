@@ -272,11 +272,15 @@ def validate_auction_winner_highest(
                 winners[item] = (bidder, amount)
 
     violations: list[str] = []
-    for item, (_winner, winning_amount) in winners.items():
-        for bidder, amount in bids.get(item, []):
-            if amount > winning_amount:
+    for item, (winner, winning_amount) in winners.items():
+        item_bids = bids.get(item, [])
+        winner_bids = [amount for bidder, amount in item_bids if bidder == winner]
+        effective_winner_bid = max(winner_bids) if winner_bids else winning_amount
+        for bidder, amount in item_bids:
+            if amount > effective_winner_bid:
                 violations.append(
-                    f"item {item}: winner bid {winning_amount} but {bidder} bid {amount}"
+                    f"item {item}: winner {winner} bid {effective_winner_bid} "
+                    f"but {bidder} bid {amount}"
                 )
                 break
 
@@ -4600,6 +4604,251 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 # ---------------------------------------------------------------------------
+# Attested peering validators
+# ---------------------------------------------------------------------------
+
+
+def _attested_observer_lines(events: list[dict[str, Any]]) -> list[str]:
+    """Return the observer's audit-line message bodies (deduped send events)."""
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send" or ev.get("agent") != "observer":
+            continue
+        lines.append(str(ev.get("msg", "")))
+    return lines
+
+
+def _attested_verdicts(lines: list[str]) -> dict[str, tuple[str, bool, bool, bool]]:
+    """Parse ``verdict:`` lines into ``reporter -> (decision, foe, data, work)``."""
+    verdicts: dict[str, tuple[str, bool, bool, bool]] = {}
+    for line in lines:
+        if not line.startswith("verdict:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 7:
+            continue
+        _, reporter, _claimed, decision, foe, data, work = parts
+        verdicts[reporter] = (decision, foe == "1", data == "1", work == "1")
+    return verdicts
+
+
+def validate_attested_no_denied_admitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No peer with a failed (DENY) verdict ever has its evidence admitted."""
+    lines = _attested_observer_lines(events)
+    verdicts = _attested_verdicts(lines)
+
+    if not verdicts:
+        return [
+            ValidationResult(
+                "attested_no_denied_admitted",
+                True,
+                "no attested-peering verdicts in trace (baseline plugin, nothing to gate)",
+            )
+        ]
+
+    violations: list[str] = []
+    for decision, foe, data, work in verdicts.values():
+        if decision == "ALLOW" and not (foe and data and work):
+            violations.append("ALLOW verdict with a failed check (inconsistent gate)")
+            break
+
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        entry = verdicts.get(reporter)
+        if entry is None:
+            violations.append(f"{reporter}: admitted with no verdict")
+        elif entry[0] != "ALLOW":
+            violations.append(f"{reporter}: admitted despite {entry[0]} verdict")
+
+    if violations:
+        return [ValidationResult("attested_no_denied_admitted", False, "; ".join(violations))]
+    allowed = sum(1 for v in verdicts.values() if v[0] == "ALLOW")
+    return [
+        ValidationResult(
+            "attested_no_denied_admitted",
+            True,
+            f"{allowed}/{len(verdicts)} peers admitted, all with an ALLOW verdict",
+        )
+    ]
+
+
+def validate_attested_sybil_quarantined(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An unauthenticated Sybil swarm cannot defame the honest victim."""
+    lines = _attested_observer_lines(events)
+
+    score: float | None = None
+    samples: int | None = None
+    for line in lines:
+        if not line.startswith("repscore:"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4 and parts[1] == "victim":
+            score = float(parts[2])
+            samples = int(parts[3])
+    if score is None or samples is None:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "no repscore:victim line found in trace (scenario setup failure)",
+            )
+        ]
+
+    verdicts = _attested_verdicts(lines)
+    admitted_attackers: list[str] = []
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        if not reporter.startswith("honest-"):
+            admitted_attackers.append(reporter)
+
+    if score < 0.5:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                (
+                    f"victim reputation {score:.3f} < 0.5 over {samples} admitted report(s) — "
+                    "an unauthenticated swarm manufactured a negative consensus (gate absent)"
+                ),
+            )
+        ]
+    if admitted_attackers:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "non-honest reporters admitted despite the gate: "
+                f"{sorted(set(admitted_attackers))}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "attested_sybil_quarantined",
+            True,
+            (
+                f"victim reputation {score:.3f} from {samples} attested report(s); "
+                f"{len([v for v in verdicts.values() if v[0] == 'DENY'])} unattested peer(s) "
+                "quarantined"
+            ),
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Sybil bond validators
+# ---------------------------------------------------------------------------
+
+_SYBIL_FLOOR = 0.0
+"""Untrusted-floor score an unbonded identity may not exceed."""
+
+
+def _trustscores(events: list[dict[str, Any]]) -> dict[str, float]:
+    """Extract ``{agent: score}`` from ``trustscore:<agent>:<score>`` events."""
+    scores: dict[str, float] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("trustscore:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 3:
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+    return scores
+
+
+def validate_sybil_bond_no_free_trust(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No unbonded Sybil identity obtains trust above the untrusted floor."""
+    scores = _trustscores(events)
+    escaped = {a: s for a, s in scores.items() if a.startswith("sybil-") and s > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils bought trust without bonding: {escaped}"
+        return [ValidationResult("sybil_bond_no_free_trust", False, detail)]
+    n_sybil = sum(1 for a in scores if a.startswith("sybil-"))
+    return [
+        ValidationResult(
+            "sybil_bond_no_free_trust",
+            True,
+            f"all {n_sybil} Sybils pinned at the untrusted floor",
+        )
+    ]
+
+
+def validate_sybil_bond_honest_trusted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Bonded honest traders rank strictly above every Sybil."""
+    scores = _trustscores(events)
+    honest = {a: s for a, s in scores.items() if a.startswith("honest-")}
+    if not honest:
+        return [ValidationResult("sybil_bond_honest_trusted", False, "no honest scores in trace")]
+    max_sybil = max((s for a, s in scores.items() if a.startswith("sybil-")), default=0.0)
+    laggards = {a: s for a, s in honest.items() if s <= max_sybil}
+    if laggards:
+        detail = f"honest traders not above Sybil ceiling {max_sybil}: {laggards}"
+        return [ValidationResult("sybil_bond_honest_trusted", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_honest_trusted",
+            True,
+            f"{len(honest)} honest traders trusted above Sybil ceiling {max_sybil}",
+        )
+    ]
+
+
+def validate_sybil_bond_attempts_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sybils bid for a bond yet stay at the floor — the ledger rejected them."""
+    scores = _trustscores(events)
+    bidders: set[str] = set()
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        if agent.startswith("sybil-") and _message_body(ev).startswith("bond:"):
+            bidders.add(agent)
+    if not bidders:
+        return [
+            ValidationResult(
+                "sybil_bond_attempts_rejected",
+                False,
+                "no Sybil bond attempts in trace — cannot prove enforcement",
+            )
+        ]
+    escaped = {a: scores.get(a, 0.0) for a in bidders if scores.get(a, 0.0) > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils that bid for a bond escaped the floor: {escaped}"
+        return [ValidationResult("sybil_bond_attempts_rejected", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_attempts_rejected",
+            True,
+            f"{len(bidders)} Sybils bid for a bond and were all rejected to the floor",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Delegated auth validators (adversarial)
 # ---------------------------------------------------------------------------
 
@@ -4616,9 +4865,67 @@ def _collect_auth_lines(events: list[dict[str, Any]], prefix: str) -> list[str]:
     return lines
 
 
+def _collect_auth_lines_indexed(
+    events: list[dict[str, Any]],
+    prefix: str,
+) -> list[tuple[int, str]]:
+    """Collect auth trace lines with their event index for ordering checks."""
+    indexed: list[tuple[int, str]] = []
+    for index, ev in enumerate(events):
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if msg.startswith(prefix):
+            indexed.append((index, msg))
+    return indexed
+
+
 def _auth_attacks(events: list[dict[str, Any]]) -> list[str]:
     """Return declared auth attack types from the trace."""
     return [line.split(":", 1)[1] for line in _collect_auth_lines(events, "auth_attack:")]
+
+
+def _attack_index(events: list[dict[str, Any]], attack_type: str) -> int | None:
+    """Return the event index of ``auth_attack:<attack_type>`` if present."""
+    for index, line in _collect_auth_lines_indexed(events, "auth_attack:"):
+        if line == f"auth_attack:{attack_type}":
+            return index
+    return None
+
+
+def _revoke_holder(line: str) -> str | None:
+    """Return the revoked holder from ``auth_revoke:<agent>:<holder>:<tok_id>``."""
+    parts = line.split(":")
+    if len(parts) >= 4 and parts[0] == "auth_revoke":
+        return parts[2]
+    return None
+
+
+def _next_revoke_after(events: list[dict[str, Any]], start_index: int) -> tuple[int, str] | None:
+    """Return the first ``auth_revoke`` line at or after ``start_index``."""
+    for index, line in _collect_auth_lines_indexed(events, "auth_revoke:"):
+        if index >= start_index:
+            return index, line
+    return None
+
+
+def _verify_rejection_after(
+    events: list[dict[str, Any]],
+    *,
+    start_index: int,
+    presenter: str,
+    error_name: str,
+) -> tuple[int, str] | None:
+    """Return a rejected verify line for ``presenter`` after ``start_index``."""
+    for index, line in _collect_auth_lines_indexed(events, "auth_verify:"):
+        if index <= start_index:
+            continue
+        if not line.startswith(f"auth_verify:{presenter}:"):
+            continue
+        if ":rejected:" not in line or error_name not in line:
+            continue
+        return index, line
+    return None
 
 
 def validate_delegated_auth_scope_escalation(
@@ -4661,44 +4968,101 @@ def validate_delegated_auth_scope_escalation(
     ]
 
 
+def validate_delegated_auth_subdelegate_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Leaf tokens without delegate scope must not mint child tokens."""
+    attacks = _auth_attacks(events)
+    if "leaf_sub_delegate" not in attacks:
+        return [
+            ValidationResult(
+                "delegated_auth_subdelegate_blocked",
+                False,
+                "no leaf_sub_delegate attack declared in trace",
+            )
+        ]
+    blocked = any(
+        line.startswith("auth_delegate:leaf-0:")
+        and "leaf-99" in line
+        and ":blocked:ScopeEscalationError" in line
+        for line in _collect_auth_lines(events, "auth_delegate:")
+    )
+    if not blocked:
+        return [
+            ValidationResult(
+                "delegated_auth_subdelegate_blocked",
+                False,
+                "leaf sub-delegation was not blocked at delegation",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_subdelegate_blocked",
+            True,
+            "leaf sub-delegation blocked by delegate scope gate",
+        )
+    ]
+
+
 def validate_delegated_auth_stale_parent(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """After parent revocation, child verification must be rejected.
-
-    Example::
-
-        results = validate_delegated_auth_stale_parent(events)
-    """
-    attacks = _auth_attacks(events)
-    revokes = _collect_auth_lines(events, "auth_revoke:")
-    if "stale_parent" not in attacks or not revokes:
+    """After direct parent revocation, child verification must be rejected."""
+    attack_index = _attack_index(events, "stale_parent")
+    if attack_index is None:
         return [
             ValidationResult(
                 "delegated_auth_stale_parent",
                 False,
-                "no stale_parent attack or auth_revoke in trace",
+                "no stale_parent attack declared in trace",
             )
         ]
-    rejected = any(
-        line.startswith("auth_verify:")
-        and ":rejected:" in line
-        and ("RevokedAncestorError" in line or "revoked" in line.lower() or "ValueError" in line)
-        for line in _collect_auth_lines(events, "auth_verify:")
-    )
-    if not rejected:
+    revoke = _next_revoke_after(events, attack_index)
+    if revoke is None:
         return [
             ValidationResult(
                 "delegated_auth_stale_parent",
                 False,
-                "child still verified after parent revocation",
+                "no auth_revoke after stale_parent attack",
+            )
+        ]
+    revoke_index, revoke_line = revoke
+    if _revoke_holder(revoke_line) != "intermediary-0":
+        return [
+            ValidationResult(
+                "delegated_auth_stale_parent",
+                False,
+                f"stale_parent revoke did not target intermediary-0: {revoke_line}",
+            )
+        ]
+    rejection = _verify_rejection_after(
+        events,
+        start_index=revoke_index,
+        presenter="leaf-0",
+        error_name="RevokedAncestorError",
+    )
+    if rejection is None:
+        return [
+            ValidationResult(
+                "delegated_auth_stale_parent",
+                False,
+                "child verification was not rejected with RevokedAncestorError after parent revoke",
+            )
+        ]
+    reject_index, reject_line = rejection
+    if reject_index <= revoke_index:
+        return [
+            ValidationResult(
+                "delegated_auth_stale_parent",
+                False,
+                "rejection did not occur after the revoke event",
             )
         ]
     return [
         ValidationResult(
             "delegated_auth_stale_parent",
             True,
-            "revoked parent blocked child verification",
+            f"direct parent revoke blocked child verification ({reject_line})",
         )
     ]
 
@@ -4746,14 +5110,9 @@ def validate_delegated_auth_audience_confusion(
 def validate_delegated_auth_transitive_revocation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Revoking a grandparent must invalidate grandchild verification.
-
-    Example::
-
-        results = validate_delegated_auth_transitive_revocation(events)
-    """
-    attacks = _auth_attacks(events)
-    if "transitive_revocation" not in attacks:
+    """Revoking a grandparent must invalidate grandchild verification."""
+    attack_index = _attack_index(events, "transitive_revocation")
+    if attack_index is None:
         return [
             ValidationResult(
                 "delegated_auth_transitive_revocation",
@@ -4761,25 +5120,68 @@ def validate_delegated_auth_transitive_revocation(
                 "no transitive_revocation attack declared in trace",
             )
         ]
-    rejected = any(
-        line.startswith("auth_verify:leaf-0:")
-        and ":rejected:" in line
-        and "RevokedAncestorError" in line
-        for line in _collect_auth_lines(events, "auth_verify:")
-    )
-    if not rejected:
+    revoke = _next_revoke_after(events, attack_index)
+    if revoke is None:
         return [
             ValidationResult(
                 "delegated_auth_transitive_revocation",
                 False,
-                "grandchild still verified after grandparent revocation",
+                "no auth_revoke after transitive_revocation attack",
             )
         ]
+    revoke_index, revoke_line = revoke
+    if _revoke_holder(revoke_line) != "coordinator-0":
+        return [
+            ValidationResult(
+                "delegated_auth_transitive_revocation",
+                False,
+                f"transitive revoke did not target coordinator-0: {revoke_line}",
+            )
+        ]
+    rejection = _verify_rejection_after(
+        events,
+        start_index=revoke_index,
+        presenter="leaf-0",
+        error_name="RevokedAncestorError",
+    )
+    if rejection is None:
+        return [
+            ValidationResult(
+                "delegated_auth_transitive_revocation",
+                False,
+                "grandchild verification was not rejected with RevokedAncestorError",
+            )
+        ]
+    reject_index, reject_line = rejection
+    if reject_index <= revoke_index:
+        return [
+            ValidationResult(
+                "delegated_auth_transitive_revocation",
+                False,
+                "rejection did not occur after the ancestor revoke event",
+            )
+        ]
+    stale_attack_index = _attack_index(events, "stale_parent")
+    if stale_attack_index is not None:
+        stale_reject = _verify_rejection_after(
+            events,
+            start_index=stale_attack_index,
+            presenter="leaf-0",
+            error_name="RevokedAncestorError",
+        )
+        if stale_reject is not None and stale_reject[0] == reject_index:
+            return [
+                ValidationResult(
+                    "delegated_auth_transitive_revocation",
+                    False,
+                    "transitive_revocation shares the same verify rejection as stale_parent",
+                )
+            ]
     return [
         ValidationResult(
             "delegated_auth_transitive_revocation",
             True,
-            "transitive revocation blocked grandchild verification",
+            f"ancestor revoke blocked grandchild verification ({reject_line})",
         )
     ]
 
@@ -4936,8 +5338,18 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
     ],
+    "attested_peering": [
+        validate_attested_no_denied_admitted,
+        validate_attested_sybil_quarantined,
+    ],
+    "sybil_bond": [
+        validate_sybil_bond_no_free_trust,
+        validate_sybil_bond_honest_trusted,
+        validate_sybil_bond_attempts_rejected,
+    ],
     "delegated_auth": [
         validate_delegated_auth_scope_escalation,
+        validate_delegated_auth_subdelegate_blocked,
         validate_delegated_auth_stale_parent,
         validate_delegated_auth_audience_confusion,
         validate_delegated_auth_transitive_revocation,
