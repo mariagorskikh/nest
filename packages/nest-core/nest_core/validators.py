@@ -5280,11 +5280,242 @@ def validate_sybil_bond_attempts_rejected(
     ]
 
 
+# ---------------------------------------------------------------------------
+# RoboAgent Guard validators
+# ---------------------------------------------------------------------------
+
+_ROBOAGENT_RISK_TERMS = (
+    "cmd_vel",
+    "velocity",
+    "navigation_goal",
+    "slam",
+    "map_save",
+    "raw_camera",
+    "camera_frame",
+    "lidar_scan",
+    "person_detected",
+    "private_zone",
+)
+
+_ROBOAGENT_SAFETY_TERMS = (
+    "safety_approved",
+    "supervisor_approved",
+    "risk_checked",
+    "privacy_filtered",
+    "human_approved",
+    "safe_action",
+)
+
+_ROBOAGENT_COMMAND_TERMS = (
+    "cmd_vel",
+    "velocity",
+    "navigation_goal",
+)
+
+_ROBOAGENT_SUPERVISOR_MARKERS = (
+    "supervisor_approved",
+    "safety_approved",
+    "human_approved",
+)
+
+
+def _roboagent_endpoint(ev: dict[str, Any]) -> str:
+    agent = ev.get("agent", "")
+    target = ev.get("to", "*")
+    return f"{agent}->{target}"
+
+
+def _roboagent_field_value(msg: str, key: str) -> str | None:
+    prefix = f"{key}="
+    for token in msg.replace(":", " ").split():
+        if token.startswith(prefix):
+            return token[len(prefix) :]
+    return None
+
+
+def _roboagent_tokens(msg: str) -> list[str]:
+    return msg.replace(":", " ").split()
+
+
+def _roboagent_marker_matches_action(msg: str, marker: str) -> bool:
+    """Return whether a marker is present and, when action_id exists, matches it."""
+    action_id = _roboagent_field_value(msg, "action_id")
+    marker_value = _roboagent_field_value(msg, marker)
+    if marker_value is not None:
+        return action_id is None or marker_value == action_id
+    return marker in _roboagent_tokens(msg) and action_id is None
+
+
+def _roboagent_approval_action(msg: str) -> str | None:
+    for marker in _ROBOAGENT_SUPERVISOR_MARKERS:
+        value = _roboagent_field_value(msg, marker)
+        if value is not None:
+            return value
+    return None
+
+
+def _roboagent_has_prior_approval(
+    approvals: dict[str, set[str]],
+    action_id: str | None,
+    actor: str,
+) -> bool:
+    if action_id is None:
+        return False
+    return any(agent != actor for agent in approvals.get(action_id, set()))
+
+
+def validate_roboagent_guard_safety_markers(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Robot-agent autonomy messages should include a safety/privacy marker.
+
+    RoboAgent Guard is a lightweight validator for traces where agents exchange
+    robot navigation, SLAM, mapping, sensor, or privacy-sensitive commands. If a
+    send event contains robot-risk terms, the message should also carry an
+    explicit marker showing that risk, privacy, or supervisor approval was
+    considered before action.
+    """
+    violations: list[str] = []
+
+    checked = 0
+    approvals: dict[str, set[str]] = {}
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+
+        msg = _message_body(ev).lower()
+        has_robot_risk = any(term in msg for term in _ROBOAGENT_RISK_TERMS)
+        actor = str(ev.get("agent", ""))
+        if not has_robot_risk:
+            approval_action = _roboagent_approval_action(msg)
+            if approval_action is not None:
+                approvals.setdefault(approval_action, set()).add(actor)
+            continue
+
+        checked += 1
+        has_safety_marker = any(
+            _roboagent_marker_matches_action(msg, marker) for marker in _ROBOAGENT_SAFETY_TERMS
+        )
+        action_id = _roboagent_field_value(msg, "action_id")
+        needs_prior_approval = any(term in msg for term in _ROBOAGENT_COMMAND_TERMS)
+        has_prior_approval = _roboagent_has_prior_approval(approvals, action_id, actor)
+
+        if not has_safety_marker:
+            preview = msg[:80]
+            violations.append(f"{_roboagent_endpoint(ev)}: {preview}")
+        elif needs_prior_approval and not has_prior_approval:
+            preview = msg[:80]
+            violations.append(f"{_roboagent_endpoint(ev)}: missing prior approval for {preview}")
+
+        approval_action = _roboagent_approval_action(msg)
+        if approval_action is not None:
+            approvals.setdefault(approval_action, set()).add(actor)
+
+    if violations:
+        detail = "; ".join(violations[:5])
+        if len(violations) > 5:
+            detail += f"; +{len(violations) - 5} more"
+        return [ValidationResult("roboagent_guard_safety_markers", False, detail)]
+
+    if checked == 0:
+        return [
+            ValidationResult(
+                "roboagent_guard_safety_markers",
+                False,
+                "no robot-agent risk messages observed",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "roboagent_guard_safety_markers",
+            True,
+            f"checked {checked} robot-agent messages",
+        )
+    ]
+
+
+def validate_roboagent_guard_privacy_markers(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Privacy-sensitive robot sensor messages should include privacy filtering.
+
+    This catches traces where an agent sends private-zone, person-detection,
+    camera, or mapping data without explicitly marking that privacy filtering
+    was applied before sharing or saving the data.
+    """
+    privacy_terms = (
+        "private_zone",
+        "person_detected",
+        "raw_camera",
+        "camera_frame",
+        "map_save",
+    )
+    privacy_markers = (
+        "privacy_filtered",
+        "redacted",
+        "anonymized",
+        "no_raw_storage",
+        "human_approved",
+        "supervisor_approved",
+    )
+
+    violations: list[str] = []
+
+    checked = 0
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+
+        msg = _message_body(ev).lower()
+        has_privacy_risk = any(term in msg for term in privacy_terms)
+        if not has_privacy_risk:
+            continue
+
+        checked += 1
+        has_privacy_marker = any(
+            _roboagent_marker_matches_action(msg, marker) for marker in privacy_markers
+        )
+
+        if not has_privacy_marker:
+            preview = msg[:80]
+            violations.append(f"{_roboagent_endpoint(ev)}: {preview}")
+
+    if violations:
+        detail = "; ".join(violations[:5])
+        if len(violations) > 5:
+            detail += f"; +{len(violations) - 5} more"
+        return [ValidationResult("roboagent_guard_privacy_markers", False, detail)]
+
+    if checked == 0:
+        return [
+            ValidationResult(
+                "roboagent_guard_privacy_markers",
+                False,
+                "no privacy-sensitive robot messages observed",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "roboagent_guard_privacy_markers",
+            True,
+            f"checked {checked} privacy-sensitive robot messages",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
     "sybil_bond": [
         validate_sybil_bond_no_free_trust,
         validate_sybil_bond_honest_trusted,
         validate_sybil_bond_attempts_rejected,
+    ],
+    "roboagent_guard": [
+        validate_roboagent_guard_safety_markers,
+        validate_roboagent_guard_privacy_markers,
     ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,

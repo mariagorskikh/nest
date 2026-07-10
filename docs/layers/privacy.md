@@ -55,6 +55,20 @@ Source: [`nest_plugins_reference/privacy/trust_gated.py`](../../packages/nest-pl
 Full write-up: [`trust_gated_privacy.md`](trust_gated_privacy.md).
 See `scenarios/trust_gated_exchange.yaml` for a wired example.
 
+## Sensor-redaction plugin
+
+`sensor_redaction` — **deterministic robot-sensor filtering.** A narrower
+problem-09 plugin for traces that carry camera, lidar, mapping, person-detection,
+or private-zone payloads. It redacts sensitive sensor tokens before they are
+shared and stamps the payload with `privacy_filtered=<action_id>`,
+`no_raw_storage`, and `redacted` markers so trace validators can verify that raw
+sensor data did not leak. The paired `roboagent_guard` scenario demonstrates the
+adversarial path: `privacy: noop` leaks and fails, while
+`privacy: sensor_redaction` passes.
+
+Source: [`nest_plugins_reference/privacy/sensor_redaction.py`](../../packages/nest-plugins-reference/nest_plugins_reference/privacy/sensor_redaction.py).
+See `scenarios/roboagent_guard.yaml` for a wired example.
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under

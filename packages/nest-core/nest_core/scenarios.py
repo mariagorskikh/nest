@@ -197,3 +197,7 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("capability_spoofing", capability_spoofing_factory)
+    elif name == "roboagent_guard":
+        from nest_core.scenarios_builtin.roboagent_guard import roboagent_guard_factory
+
+        register_scenario("roboagent_guard", roboagent_guard_factory)

@@ -2146,9 +2146,164 @@ class TestValidatorRegistry:
             "parc_migration",
             "rogue_trusted_agent",
             "sybil_bond",
+            "roboagent_guard",
         }
         assert set(VALIDATORS.keys()) == expected
 
     def test_each_scenario_has_validators(self) -> None:
         for scenario, validators in VALIDATORS.items():
             assert len(validators) >= 2, f"{scenario} needs at least 2 validators"
+
+
+# ---------------------------------------------------------------------------
+# RoboAgent Guard validators
+# ---------------------------------------------------------------------------
+
+
+class TestRoboAgentGuard:
+    def test_passes_when_robot_and_privacy_messages_have_markers(self) -> None:
+        events = [
+            {
+                "kind": "send",
+                "agent": "supervisor_agent",
+                "to": "planner_agent",
+                "msg": "supervisor_approved=nav-1 action_id=nav-1",
+            },
+            {
+                "kind": "send",
+                "agent": "planner_agent",
+                "to": "robot_agent",
+                "msg": (
+                    "cmd_vel:0.10 navigation_goal:kitchen action_id=nav-1 "
+                    "risk_checked=nav-1 supervisor_approved=nav-1"
+                ),
+            },
+            {
+                "kind": "send",
+                "agent": "vision_agent",
+                "to": "mapping_agent",
+                "msg": (
+                    "camera_frame private_zone person_detected action_id=vision-1 "
+                    "privacy_filtered=vision-1 no_raw_storage"
+                ),
+            },
+        ]
+
+        results = validate_events(events, "roboagent_guard")
+
+        assert results[0].name == "roboagent_guard_safety_markers"
+        assert results[0].passed is True
+        assert results[1].name == "roboagent_guard_privacy_markers"
+        assert results[1].passed is True
+
+    def test_fails_when_robot_message_has_no_safety_marker(self) -> None:
+        events = [
+            {
+                "kind": "send",
+                "agent": "planner_agent",
+                "to": "robot_agent",
+                "msg": "cmd_vel:0.30 navigation_goal:kitchen action_id=nav-1",
+            }
+        ]
+
+        results = validate_events(events, "roboagent_guard")
+
+        assert results[0].name == "roboagent_guard_safety_markers"
+        assert results[0].passed is False
+        assert "planner_agent->robot_agent" in results[0].detail
+
+    def test_fails_when_robot_command_has_only_self_approval(self) -> None:
+        events = [
+            {
+                "kind": "send",
+                "agent": "planner_agent",
+                "to": "robot_agent",
+                "msg": (
+                    "cmd_vel:0.30 navigation_goal:kitchen action_id=nav-1 "
+                    "risk_checked=nav-1 supervisor_approved=nav-1"
+                ),
+            }
+        ]
+
+        results = validate_events(events, "roboagent_guard")
+
+        assert results[0].passed is False
+        assert "missing prior approval" in results[0].detail
+
+    def test_fails_when_marker_does_not_match_action_id(self) -> None:
+        events = [
+            {
+                "kind": "send",
+                "agent": "planner_agent",
+                "to": "robot_agent",
+                "msg": "cmd_vel action_id=nav-1 risk_checked=nav-2",
+            }
+        ]
+
+        results = validate_events(events, "roboagent_guard")
+
+        assert results[0].passed is False
+
+    def test_fails_marker_substring_spoofing(self) -> None:
+        for spoof in (
+            "cmd_vel:0.9 unsafe_action",
+            "cmd_vel:0.9 not_supervisor_approved",
+            "cmd_vel:0.9 risk_checked_skipped",
+        ):
+            results = validate_events(
+                [
+                    {
+                        "kind": "send",
+                        "agent": "planner_agent",
+                        "to": "robot_agent",
+                        "msg": spoof,
+                    }
+                ],
+                "roboagent_guard",
+            )
+            assert results[0].passed is False, spoof
+
+    def test_fails_when_no_robot_messages_exercise_guard(self) -> None:
+        events = [
+            {
+                "kind": "send",
+                "agent": "buyer",
+                "to": "seller",
+                "msg": "buy:book:10",
+            }
+        ]
+
+        results = validate_events(events, "roboagent_guard")
+
+        assert results[0].passed is False
+        assert "no robot-agent risk messages" in results[0].detail
+
+    def test_fails_when_privacy_message_has_no_privacy_marker(self) -> None:
+        events = [
+            {
+                "kind": "send",
+                "agent": "vision_agent",
+                "to": "mapping_agent",
+                "msg": "raw_camera person_detected private_zone",
+            }
+        ]
+
+        results = validate_events(events, "roboagent_guard")
+
+        assert results[1].name == "roboagent_guard_privacy_markers"
+        assert results[1].passed is False
+        assert "vision_agent->mapping_agent" in results[1].detail
+
+    def test_broadcast_robot_messages_are_checked(self) -> None:
+        events = [
+            {
+                "kind": "broadcast",
+                "agent": "planner_agent",
+                "msg": "cmd_vel action_id=nav-1",
+            }
+        ]
+
+        results = validate_events(events, "roboagent_guard")
+
+        assert results[0].passed is False
+        assert "planner_agent->*" in results[0].detail
