@@ -217,6 +217,8 @@ def short_description(body: str, max_len: int = 240) -> str:
 
     if not body:
         return ""
+
+    first_bullet: str | None = None
     for raw_line in body.splitlines():
         line = raw_line.strip()
         if not line:
@@ -228,8 +230,11 @@ def short_description(body: str, max_len: int = 240) -> str:
         if line.startswith("```"):
             continue
         # PR templates often begin with bullet lists or checklist items.
-        # Skip those so the marketplace card uses the actual explanation.
-        if re.match(r"^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?", line):
+        m = re.match(r"^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?", line)
+        if m:
+            # Remember the first skipped bullet's text (marker stripped)
+            if first_bullet is None:
+                first_bullet = line[m.end():].strip()
             continue
         # Drop bold markers and inline code backticks for the blurb.
         cleaned = line.replace("**", "").replace("`", "")
@@ -246,6 +251,23 @@ def short_description(body: str, max_len: int = 240) -> str:
         if space >= max_len // 2:
             return cut[:space].rstrip() + "…"
         return cut + "…"
+
+    # If we only saw bullets at the start, return the first bullet's text
+    # (marker stripped) so cards still surface useful content.
+    if first_bullet:
+        cleaned = first_bullet.replace("**", "").replace("`", "")
+        if len(cleaned) <= max_len:
+            return cleaned
+        cut = cleaned[:max_len]
+        for sep in (". ", "? ", "! "):
+            idx = cut.rfind(sep)
+            if idx >= max_len // 2:
+                return cut[: idx + 1].strip()
+        space = cut.rfind(" ")
+        if space >= max_len // 2:
+            return cut[:space].rstrip() + "…"
+        return cut + "…"
+
     return ""
 
 

@@ -201,6 +201,16 @@ def test_short_description_skips_leading_markdown_lists() -> None:
     assert short_description(body) == "The real first line of prose."
 
 
+def test_short_description_returns_first_bullet_when_only_bullets() -> None:
+    body = "- Added a new validator\n- Improved docs"
+    assert short_description(body) == "Added a new validator"
+
+
+def test_short_description_handles_checklist_only() -> None:
+    body = "- [x] Implemented feature X\n- [ ] Follow-up tasks"
+    assert short_description(body) == "Implemented feature X"
+
+
 def test_short_description_truncates_long_paragraphs() -> None:
     long = "Sentence one is short. " + ("word " * 200)
     out = short_description(long, max_len=80)
