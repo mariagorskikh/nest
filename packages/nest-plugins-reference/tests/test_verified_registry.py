@@ -17,6 +17,7 @@ from typing import cast
 
 import pytest
 from nest_core.layers.registry import Registry
+from nest_core.plugins import PluginRegistry
 from nest_core.types import AgentCard, AgentId, Query
 from nest_plugins_reference.identity.did_key import DidKeyIdentity
 from nest_plugins_reference.registry.verified import (
@@ -62,6 +63,11 @@ def _card(agent_id: AgentId) -> AgentCard:
 
 
 class TestProtocolConformance:
+    def test_resolves_and_conforms(self, registry: VerifiedRegistry) -> None:
+        resolved = PluginRegistry().resolve("registry", "verified")
+        assert resolved is VerifiedRegistry
+        assert isinstance(registry, Registry)
+
     def test_is_registry(self, registry: VerifiedRegistry) -> None:
         assert isinstance(registry, Registry)
 

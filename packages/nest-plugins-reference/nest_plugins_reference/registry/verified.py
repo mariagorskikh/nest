@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Signature-verified registry plugin — registration requires proof of identity.
 
-The default ``in_memory`` registry (and the gossip registry built on the same
-trust model) believes anyone: ``register(card)`` stores whatever ``AgentCard``
-it is handed.  Any agent can register a card carrying **another agent's**
+The default ``in_memory`` registry and the reference ``gossip`` registry
+believe anyone: ``register(card)`` stores whatever ``AgentCard`` it is handed.
+Any agent can register a card carrying **another agent's**
 ``agent_id`` — silently overwriting the victim's card and poisoning every
 subsequent ``lookup`` — or advertise capabilities it never proved it holds.
 
@@ -171,10 +171,11 @@ def _extract_signature(card: AgentCard) -> Signature:
 class VerifiedRegistry:
     """Dictionary-backed registry that admits only identity-signed cards.
 
-    Drop-in for the ``Registry`` protocol.  ``register`` verifies; ``lookup``,
-    ``subscribe``, and ``deregister`` behave like ``in_memory``.  Rejected
-    registrations mutate nothing: no card is stored and no subscriber is
-    notified.
+    Implements the ``Registry`` protocol but requires an ``Identity`` verifier
+    at construction time. ``register`` verifies; ``lookup``, ``subscribe``,
+    and ``deregister`` behave like ``in_memory``. Rejected registrations mutate
+    nothing: no card is stored and no subscriber is notified. This plugin does
+    not replicate cards or validate gossip traffic.
 
     Example::
 
