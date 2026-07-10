@@ -16,7 +16,7 @@ from threading import Lock
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -54,6 +54,7 @@ class EscrowCreateRequest(BaseModel):
     amount: float = Field(..., gt=0, description="Amount of credits/funds to be held in escrow.")
     timeout_seconds: float | None = Field(
         3600.0,
+        gt=0.0,
         description="Time in seconds before the escrow automatically expires and can be refunded.",
     )
     arbitrators: list[str] | None = Field(
@@ -65,6 +66,14 @@ class EscrowCreateRequest(BaseModel):
     vote_threshold: int | None = Field(
         3, ge=1, description="Number of matching votes required to resolve a dispute."
     )
+
+    @field_validator("buyer_id", "seller_id")
+    @classmethod
+    def validate_ids(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("ID cannot be empty or only whitespace.")
+        return stripped
 
 
 class EscrowResponse(BaseModel):
@@ -88,6 +97,14 @@ class EscrowActionRequest(BaseModel):
         description="ID of the agent initiating the action. Must be authorized for this escrow.",
     )
 
+    @field_validator("agent_id")
+    @classmethod
+    def validate_agent_id(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Agent ID cannot be empty or only whitespace.")
+        return stripped
+
 
 class EscrowDisputeRequest(BaseModel):
     agent_id: str = Field(
@@ -100,6 +117,14 @@ class EscrowDisputeRequest(BaseModel):
         None, description="Optional cryptographic hash of the evidence data."
     )
 
+    @field_validator("agent_id")
+    @classmethod
+    def validate_agent_id(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Agent ID cannot be empty or only whitespace.")
+        return stripped
+
 
 class JurorVoteRequest(BaseModel):
     juror_id: str = Field(..., description="ID of the juror agent casting the vote.")
@@ -107,6 +132,22 @@ class JurorVoteRequest(BaseModel):
     rationale: str = Field(
         ..., min_length=10, description="Plain English reasoning explaining the juror's vote."
     )
+
+    @field_validator("juror_id")
+    @classmethod
+    def validate_juror_id(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Juror ID cannot be empty or only whitespace.")
+        return stripped
+
+    @field_validator("rationale")
+    @classmethod
+    def validate_rationale(cls, v: str) -> str:
+        stripped = v.strip()
+        if len(stripped) < 10:
+            raise ValueError("Rationale must be at least 10 characters after stripping whitespace.")
+        return stripped
 
 
 class DisputeResponse(BaseModel):
@@ -210,6 +251,11 @@ async def create_escrow(req: EscrowCreateRequest):
     Creates a new escrow agreement. Buyer locks up funds/credits.
     """
     with db_lock:
+        if req.buyer_id == req.seller_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Buyer ID and Seller ID must be different.",
+            )
         arbitrators = req.arbitrators or []
         vote_threshold = req.vote_threshold or 3
         if arbitrators and vote_threshold > len(arbitrators):
@@ -405,6 +451,13 @@ async def vote_on_dispute(escrow_id: str, req: JurorVoteRequest):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Juror {req.juror_id} is not an authorized arbitrator for this escrow.",
+            )
+
+        # Reject self-arbitration / conflict of interest (buyer/seller cannot vote)
+        if req.juror_id in (escrow.buyer_id, escrow.seller_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="The buyer or seller of this escrow cannot act as a juror.",
             )
 
         # Ensure juror cannot vote twice

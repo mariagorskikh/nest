@@ -191,3 +191,90 @@ def test_escrow_invalid_vote_threshold():
     response = client.post("/escrow", json=create_req)
     assert response.status_code == 400
     assert "cannot exceed the number of designated arbitrators" in response.json()["detail"]
+
+
+def test_escrow_self_trade_rejected():
+    """Verify that a buyer cannot create an escrow with themselves as the seller."""
+    create_req = {
+        "buyer_id": "buyer-1",
+        "seller_id": "buyer-1",
+        "amount": 100.0,
+    }
+    response = client.post("/escrow", json=create_req)
+    assert response.status_code == 400
+    assert "Buyer ID and Seller ID must be different" in response.json()["detail"]
+
+
+def test_escrow_invalid_timeout():
+    """Verify that negative or zero timeouts are rejected by validation."""
+    create_req = {
+        "buyer_id": "buyer-1",
+        "seller_id": "seller-1",
+        "amount": 100.0,
+        "timeout_seconds": -10.0,
+    }
+    response = client.post("/escrow", json=create_req)
+    assert response.status_code == 422  # Pydantic validation error
+
+    create_req["timeout_seconds"] = 0.0
+    response = client.post("/escrow", json=create_req)
+    assert response.status_code == 422
+
+
+def test_escrow_self_arbitration_rejected():
+    """Verify that a buyer or seller cannot vote as a juror on their own dispute."""
+    create_req = {
+        "buyer_id": "buyer-1",
+        "seller_id": "seller-2",
+        "amount": 300.0,
+        "timeout_seconds": 60.0,
+        "arbitrators": ["buyer-1", "seller-2", "j-3"],
+        "vote_threshold": 2,
+    }
+    response = client.post("/escrow", json=create_req)
+    escrow_id = response.json()["id"]
+
+    dispute_req = {"agent_id": "buyer-1", "evidence_url": "http://logs", "evidence_hash": "hash"}
+    client.post(f"/escrow/{escrow_id}/dispute", json=dispute_req)
+
+    # 1. Buyer attempts to vote as a juror - should fail with 403
+    vote_req_buyer = {
+        "juror_id": "buyer-1",
+        "vote": "REFUND",
+        "rationale": "I want my money back please.",
+    }
+    response = client.post(f"/disputes/{escrow_id}/vote", json=vote_req_buyer)
+    assert response.status_code == 403
+    assert "cannot act as a juror" in response.json()["detail"]
+
+    # 2. Seller attempts to vote as a juror - should fail with 403
+    vote_req_seller = {
+        "juror_id": "seller-2",
+        "vote": "RELEASE",
+        "rationale": "I delivered the work successfully.",
+    }
+    response = client.post(f"/disputes/{escrow_id}/vote", json=vote_req_seller)
+    assert response.status_code == 403
+    assert "cannot act as a juror" in response.json()["detail"]
+
+
+def test_escrow_empty_or_whitespace_ids_rejected():
+    """Verify that empty or whitespace IDs are rejected."""
+    # Empty buyer_id
+    create_req = {
+        "buyer_id": "",
+        "seller_id": "seller-1",
+        "amount": 100.0,
+    }
+    response = client.post("/escrow", json=create_req)
+    assert response.status_code == 422
+
+    # Whitespace seller_id
+    create_req = {
+        "buyer_id": "buyer-1",
+        "seller_id": "   ",
+        "amount": 100.0,
+    }
+    response = client.post("/escrow", json=create_req)
+    assert response.status_code == 422
+
