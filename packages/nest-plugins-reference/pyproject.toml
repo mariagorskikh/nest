@@ -49,6 +49,9 @@ byzantine_gossip = "nest_plugins_reference.registry.byzantine_gossip:ByzantineGo
 hybrid_x25519 = "nest_plugins_reference.privacy.hybrid_x25519:HybridX25519Privacy"
 trust_gated = "nest_plugins_reference.privacy.trust_gated:TrustGatedPrivacy"
 
+[project.entry-points."nest.plugins.identity"]
+ed25519_recoverable = "nest_plugins_reference.identity.ed25519_recoverable:Ed25519RecoverableIdentity"
+
 [project.entry-points."nest.plugins.datafacts"]
 cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
 
