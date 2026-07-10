@@ -416,10 +416,17 @@ def _provision_auth(plugins: dict[str, Any], agent_ids: list[AgentId]) -> None:
     auth_cls = plugins.get("auth")
     if auth_cls is None or not isinstance(auth_cls, type):
         return
+    # clock=0.0 pins plugins that would otherwise fall back to wall-clock time
+    # (e.g. JwtAuth, which has no set_clock) so both arms of the scenario stay
+    # byte-deterministic; the TypeError ladder keeps narrower constructors
+    # runnable.
     try:
-        shared = auth_cls(secret=b"delegated-auth-scenario-root")
+        shared = auth_cls(secret=b"delegated-auth-scenario-root", clock=0.0)
     except TypeError:
-        shared = auth_cls()
+        try:
+            shared = auth_cls(secret=b"delegated-auth-scenario-root")
+        except TypeError:
+            shared = auth_cls()
     agent_plugins: dict[AgentId, dict[str, Any]] = plugins.setdefault("_agent_plugins", {})
     for aid in agent_ids:
         agent_plugins.setdefault(aid, {})["auth"] = shared

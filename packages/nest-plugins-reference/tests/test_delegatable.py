@@ -138,6 +138,30 @@ async def test_ttl_nesting_enforced_at_mint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_midlife_delegation_anchors_ttl_at_now() -> None:
+    """Delegating mid-life anchors the child at the current clock, not the root's iat."""
+    auth = DelegatableAuth(secret=b"s", clock=0.0)
+    root = await auth.issue(AgentId("a"), ["read"])  # iat=0, exp=3600
+    auth.set_clock(3000.0)
+    child = await auth.delegate(root, AgentId("b"), ["read"], ttl=600.0)
+    ctx = await auth.verify(child, presenter=AgentId("b"))
+    assert ctx.issued_at == 3000.0
+    assert ctx.expires_at == 3600.0  # capped exactly at the parent's expiry
+    auth.set_clock(3500.0)
+    assert (await auth.verify(child, presenter=AgentId("b"))).scopes == ["read"]
+
+
+@pytest.mark.asyncio
+async def test_midlife_delegation_that_would_outlive_parent_raises() -> None:
+    """A ttl the parent cannot cover raises at mint — never a dead-on-arrival child."""
+    auth = DelegatableAuth(secret=b"s", clock=0.0)
+    root = await auth.issue(AgentId("a"), ["read"])  # exp=3600
+    auth.set_clock(3000.0)
+    with pytest.raises(TtlViolationError):
+        await auth.delegate(root, AgentId("b"), ["read"], ttl=601.0)
+
+
+@pytest.mark.asyncio
 async def test_expiry_enforced_at_verify() -> None:
     """A token past its expiry fails verification against the logical clock."""
     auth = DelegatableAuth(secret=b"s", clock=0.0)

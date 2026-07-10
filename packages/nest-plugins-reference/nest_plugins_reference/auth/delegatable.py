@@ -14,10 +14,14 @@ all. This plugin adds the missing capability-delegation shape:
   parent's chain prefix. Every descendant token embeds that prefix, so all of
   them fail ``verify`` with :class:`RevokedAncestorError` from the next call
   on — no per-child bookkeeping.
-* **Scope attenuation.** A child's scopes must be a strict subset of its
-  parent's, enforced both at mint time and (independently) at verify time —
-  the HMAC chain alone cannot stop a malicious holder from *writing* broader
-  scopes into a link, so the verifier re-walks the chain.
+* **Scope attenuation.** A child's scopes must be a subset of its parent's —
+  subset-or-equal (``<=``), not strict-subset — enforced both at mint time
+  and (independently) at verify time: the HMAC chain alone cannot stop a
+  malicious holder from *writing* broader scopes into a link, so the verifier
+  re-walks the chain. Equality is deliberately allowed because re-binding the
+  same scopes to a new audience or a shorter TTL is still attenuation (the
+  macaroon semantics), and cascading revocation relies on equal-scope
+  re-delegation being expressible.
 * **Audience binding.** Each delegation names an audience; ``verify`` rejects
   a token presented by any agent other than the final audience
   (:class:`AudienceMismatchError`).
@@ -179,6 +183,7 @@ def attenuate(
     audience: AgentId,
     scopes: list[str],
     ttl: float,
+    now: float | None = None,
 ) -> Token:
     """Mint a narrower child token from *parent_token* — offline, no secret.
 
@@ -189,6 +194,13 @@ def attenuate(
     parent's *claimed* link (defense in depth: ``verify`` re-checks them
     against the whole chain, so a tampered parent link still fails).
 
+    The child's lifetime is anchored at *now* when given (the anchor becomes
+    the child's ``iat`` and ``exp = now + ttl``); without a clock the anchor
+    falls back to the parent's ``iat``, so purely offline attenuation keeps
+    working. Either way the child may never outlive its parent — a *ttl*
+    that cannot be honored raises :class:`TtlViolationError` at mint rather
+    than silently minting a shorter-lived (or dead-on-arrival) token.
+
     Example::
 
         child = attenuate(root, AgentId("worker-1"), ["read"], ttl=600)
@@ -197,7 +209,9 @@ def attenuate(
         parent_token: The token being attenuated.
         audience: Agent the child token is bound to.
         scopes: Child scopes; must be a subset of the parent link's scopes.
-        ttl: Child lifetime in logical-clock units from the parent's ``iat``.
+        ttl: Child lifetime in logical-clock units from the anchor.
+        now: Logical time anchoring the child's ``iat``/``exp``; defaults to
+            the parent's ``iat`` for clock-free offline use.
 
     Returns:
         The child token.
@@ -216,7 +230,8 @@ def attenuate(
         msg = f"child scopes {extra} not held by parent"
         raise ScopeEscalationError(msg)
 
-    child_exp = float(parent_link["iat"]) + float(ttl)
+    anchor = float(parent_link["iat"]) if now is None else float(now)
+    child_exp = anchor + float(ttl)
     if child_exp > float(parent_link["exp"]):
         msg = f"child exp {child_exp} > parent exp {parent_link['exp']}"
         raise TtlViolationError(msg)
@@ -224,7 +239,7 @@ def attenuate(
     child_link = {
         "aud": str(audience),
         "exp": child_exp,
-        "iat": float(parent_link["iat"]),
+        "iat": anchor,
         "scopes": sorted(scopes),
         "sub": parent_link.get("aud") or parent_link["sub"],
     }
@@ -304,6 +319,12 @@ class DelegatableAuth:
         :func:`attenuate` — and the resulting child will fail ``verify``,
         which is the property that matters.)
 
+        The child's lifetime is anchored at the plugin's current logical
+        clock: ``ttl=600`` means "usable for 600 units from *now*", capped by
+        the parent's own expiry — delegating late in the parent's life with a
+        *ttl* the parent cannot cover raises :class:`TtlViolationError`
+        instead of minting a dead-on-arrival token.
+
         Example::
 
             child = await auth.delegate(root, AgentId("worker"), ["read"], 600)
@@ -314,7 +335,7 @@ class DelegatableAuth:
             TtlViolationError: If the child would outlive the parent.
         """
         await self.verify(parent_token)
-        return attenuate(parent_token, audience, scopes, ttl)
+        return attenuate(parent_token, audience, scopes, ttl, now=self._now())
 
     async def verify(self, token: Token, presenter: AgentId | None = None) -> AuthContext:
         """Verify a token: chain HMAC, subsets, TTLs, revocation, audience.
