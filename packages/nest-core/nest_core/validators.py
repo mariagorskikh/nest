@@ -24,6 +24,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from nest_core.scenarios_builtin.delegated_admission import (
+    ADMISSION_KIND_LIVE,
+    ADMISSION_KIND_NO_GRANT,
+    ADMISSION_KIND_REVOKED,
+    ADMISSION_KIND_SCOPE_INVALID,
+    ADMISSION_KIND_STALE,
+)
+
 
 class ValidationResult:
     """Result of a protocol validation check."""
@@ -4793,6 +4801,362 @@ def validate_attested_sybil_quarantined(
 
 
 # ---------------------------------------------------------------------------
+# Delegated-admission trust validators
+# ---------------------------------------------------------------------------
+
+
+def _delegated_observer_lines(events: list[dict[str, Any]]) -> list[str]:
+    """Return the observer's audit-line message bodies in trace order.
+
+    The observer emits ``cascade:``/``admission:``/``report:``/``repscore:``
+    lines by sending them to the victim sink, so each appears once as a
+    ``send`` and once as a ``receive``; we read only the authoritative
+    ``send`` events (which preserves emission order).
+
+    Example::
+
+        lines = _delegated_observer_lines(events)
+    """
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send" or ev.get("agent") != "observer":
+            continue
+        lines.append(str(ev.get("msg", "")))
+    return lines
+
+
+def _delegated_admission_kinds(lines: list[str]) -> dict[str, str]:
+    """Return ``reporter -> role_kind`` parsed from ``admission:`` trace lines.
+
+    Example::
+
+        kinds = _delegated_admission_kinds(_delegated_observer_lines(events))
+    """
+    kinds: dict[str, str] = {}
+    for line in lines:
+        if not line.startswith("admission:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 4:
+            continue
+        _, reporter, role_kind, _fate = parts
+        kinds[reporter] = role_kind
+    return kinds
+
+
+def _delegated_admitted_reporters(lines: list[str]) -> set[str]:
+    """Reporters that have at least one ``admission:...:admitted`` line.
+
+    Example::
+
+        admitted = _delegated_admitted_reporters(lines)
+    """
+    admitted: set[str] = set()
+    for line in lines:
+        if not line.startswith("admission:"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4 and parts[3] == "admitted":
+            admitted.add(parts[1])
+    return admitted
+
+
+def _delegated_repscore(lines: list[str]) -> tuple[float, int] | None:
+    """Return ``(score, sample_count)`` from the ``repscore:victim:`` line.
+
+    Example::
+
+        rep = _delegated_repscore(lines)
+    """
+    for line in lines:
+        if not line.startswith("repscore:"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4 and parts[1] == "victim":
+            try:
+                return float(parts[2]), int(parts[3])
+            except ValueError:
+                return None
+    return None
+
+
+def validate_delegated_unattested_quarantined(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No reporter without a grant is admitted, and honest reporters *are* admitted.
+
+    This is the discriminating safety property of the delegated-admission
+    gate: reporters labelled ``no-grant`` in the trace must never produce
+    an ``admitted`` report line, the victim's final ``repscore`` must sit
+    at or above the neutral prior ``0.5`` (a Sybil swarm's negatives cannot
+    have polluted the average), and — the anti-degenerate guard — honest
+    reporters (``live``) must actually appear as admitted, so a plugin
+    that quarantines *everything* cannot pass this validator trivially.
+
+    Under ``trust: score_average`` every negative is admitted; the victim's
+    average collapses to (well) under 0.5 and this validator FAILs. Under
+    ``trust: delegated_admission`` only ``live`` reporters are admitted and
+    it PASSes.
+
+    Example::
+
+        results = validate_trace(Path("traces/delegated_admission.jsonl"), "delegated_admission")
+    """
+    lines = _delegated_observer_lines(events)
+    kinds = _delegated_admission_kinds(lines)
+    admitted = _delegated_admitted_reporters(lines)
+
+    if not kinds:
+        return [
+            ValidationResult(
+                "delegated_unattested_quarantined",
+                False,
+                "no admission: trace lines observed (scenario setup failure)",
+            )
+        ]
+
+    no_grant_reporters = {r for r, k in kinds.items() if k == ADMISSION_KIND_NO_GRANT}
+    honest_reporters = {r for r, k in kinds.items() if k == ADMISSION_KIND_LIVE}
+    admitted_sybils = sorted(no_grant_reporters & admitted)
+
+    problems: list[str] = []
+    if admitted_sybils:
+        problems.append(
+            f"no-grant reporters admitted: {admitted_sybils[:5]}"
+            f"{'…' if len(admitted_sybils) > 5 else ''}"
+        )
+
+    rep = _delegated_repscore(lines)
+    if rep is None:
+        problems.append("no repscore:victim line found")
+    else:
+        score, samples = rep
+        if score < 0.5:
+            problems.append(
+                f"victim reputation {score:.3f} < 0.5 over {samples} admitted report(s) — "
+                "unattested reporters polluted the average"
+            )
+
+    # Anti-degenerate guard: a plugin that quarantines *everyone* cannot pass.
+    if honest_reporters:
+        quarantined_honest = sorted(honest_reporters - admitted)
+        if quarantined_honest:
+            problems.append(
+                f"honest reporters not admitted (degenerate gate): "
+                f"{quarantined_honest[:5]}"
+                f"{'…' if len(quarantined_honest) > 5 else ''}"
+            )
+
+    if problems:
+        return [
+            ValidationResult(
+                "delegated_unattested_quarantined",
+                False,
+                "; ".join(problems),
+            )
+        ]
+
+    score_str = f"{rep[0]:.3f}" if rep is not None else "?"
+    return [
+        ValidationResult(
+            "delegated_unattested_quarantined",
+            True,
+            (
+                f"{len(honest_reporters)} honest reporter(s) admitted, "
+                f"{len(no_grant_reporters)} no-grant reporter(s) quarantined, "
+                f"victim reputation {score_str}"
+            ),
+        )
+    ]
+
+
+def validate_delegated_revocation_cascade(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """After the cascade line, no ``revoked`` reporter is ever admitted.
+
+    Enforcement-not-assumption: the trace must contain at least one
+    ``cascade:<root>:<n_descendants>`` line with ``n_descendants >= 1``
+    (proving the plugin actually revoked a parent grant and propagated the
+    revocation), and any ``admission:<r>:revoked:admitted`` line that
+    appears strictly after that cascade line is a violation. Under a
+    baseline plugin without a ``revoke`` surface no cascade line is
+    emitted, so this validator FAILs on baseline.
+
+    Example::
+
+        results = validate_trace(Path("traces/delegated_admission.jsonl"), "delegated_admission")
+    """
+    lines = _delegated_observer_lines(events)
+
+    cascade_indices: list[tuple[int, int]] = []
+    for i, line in enumerate(lines):
+        if not line.startswith("cascade:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 3:
+            continue
+        try:
+            n_desc = int(parts[2])
+        except ValueError:
+            continue
+        cascade_indices.append((i, n_desc))
+
+    if not cascade_indices:
+        return [
+            ValidationResult(
+                "delegated_revocation_cascade",
+                False,
+                "no cascade: line found in trace — revocation was never exercised",
+            )
+        ]
+
+    max_n_desc = max(n for _i, n in cascade_indices)
+    if max_n_desc < 1:
+        return [
+            ValidationResult(
+                "delegated_revocation_cascade",
+                False,
+                f"cascade line has n_descendants={max_n_desc}; the attack did not touch any child",
+            )
+        ]
+
+    first_cascade_idx = cascade_indices[0][0]
+    violations: list[str] = []
+    for i, line in enumerate(lines):
+        if i <= first_cascade_idx:
+            continue
+        if not line.startswith("admission:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 4:
+            continue
+        _, reporter, role_kind, fate = parts
+        if role_kind == ADMISSION_KIND_REVOKED and fate == "admitted":
+            violations.append(f"{reporter} admitted after cascade (line #{i})")
+
+    if violations:
+        return [
+            ValidationResult(
+                "delegated_revocation_cascade",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_revocation_cascade",
+            True,
+            f"cascade revoked {max_n_desc} descendant(s); no revoked reporter admitted afterwards",
+        )
+    ]
+
+
+def _validate_delegated_role_denied(
+    events: list[dict[str, Any]],
+    *,
+    validator_name: str,
+    role_kind: str,
+) -> list[ValidationResult]:
+    """Common shape for ``scope-invalid`` / ``stale-proof`` gate validators.
+
+    Requires at least one ``admission:<r>:<role_kind>:...`` line in the
+    trace (enforcement-not-assumption: the attempt must be present) and
+    fails if any such reporter appears with fate ``admitted``.
+
+    Example::
+
+        results = _validate_delegated_role_denied(
+            events,
+            validator_name="delegated_scope_escalation_blocked",
+            role_kind="scope-invalid",
+        )
+    """
+    lines = _delegated_observer_lines(events)
+
+    attempts = 0
+    admitted: list[str] = []
+    for line in lines:
+        if not line.startswith("admission:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 4:
+            continue
+        _, reporter, kind, fate = parts
+        if kind != role_kind:
+            continue
+        attempts += 1
+        if fate == "admitted":
+            admitted.append(reporter)
+
+    if attempts == 0:
+        return [
+            ValidationResult(
+                validator_name,
+                False,
+                f"no {role_kind} admission attempts in trace — cannot prove enforcement",
+            )
+        ]
+    if admitted:
+        return [
+            ValidationResult(
+                validator_name,
+                False,
+                f"{role_kind} reporter(s) admitted despite the gate: {sorted(set(admitted))}",
+            )
+        ]
+    return [
+        ValidationResult(
+            validator_name,
+            True,
+            f"{attempts} {role_kind} attempt(s) present, all quarantined",
+        )
+    ]
+
+
+def validate_delegated_scope_escalation_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A grant that does not carry the required scope cannot admit evidence.
+
+    Requires at least one ``admission:<r>:scope-invalid:...`` line and
+    fails on any ``scope-invalid`` admission with fate ``admitted``. Under
+    a baseline plugin the required scope is never consulted so every
+    scope-invalid attempt is admitted and this validator FAILs.
+
+    Example::
+
+        results = validate_trace(Path("traces/delegated_admission.jsonl"), "delegated_admission")
+    """
+    return _validate_delegated_role_denied(
+        events,
+        validator_name="delegated_scope_escalation_blocked",
+        role_kind=ADMISSION_KIND_SCOPE_INVALID,
+    )
+
+
+def validate_delegated_stale_proof_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A proof outside the freshness window cannot admit evidence.
+
+    Requires at least one ``admission:<r>:stale-proof:...`` line and fails
+    on any ``stale-proof`` admission with fate ``admitted``. Under a
+    baseline plugin the proof clock is never consulted so every stale
+    attempt is admitted and this validator FAILs.
+
+    Example::
+
+        results = validate_trace(Path("traces/delegated_admission.jsonl"), "delegated_admission")
+    """
+    return _validate_delegated_role_denied(
+        events,
+        validator_name="delegated_stale_proof_rejected",
+        role_kind=ADMISSION_KIND_STALE,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -4972,6 +5336,12 @@ VALIDATORS: dict[str, list[Any]] = {
     "attested_peering": [
         validate_attested_no_denied_admitted,
         validate_attested_sybil_quarantined,
+    ],
+    "delegated_admission": [
+        validate_delegated_unattested_quarantined,
+        validate_delegated_revocation_cascade,
+        validate_delegated_scope_escalation_blocked,
+        validate_delegated_stale_proof_rejected,
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,

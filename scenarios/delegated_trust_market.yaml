@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated-admission trust scenario: five reporter roles stress a live-grant
+# admission gate. Honest reporters hold fresh in-scope grants; a Sybil swarm
+# has no grant at all; a chain-root revocation cascades through the revoked
+# reporters mid-scenario; an escalator holds a grant whose scope excludes the
+# required scope; a stale reporter presents a proof outside the freshness
+# window. Swap `trust: delegated_admission` for `trust: score_average` and
+# every one of the four `validate_delegated_...` validators flips to FAIL.
+name: delegated_admission
+description: "32 reporters attack one victim across five failure modes; only live in-scope grants count."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 34
+  brain: state-machine
+  roles:
+    - name: honest
+      count: 8
+    - name: sybil
+      count: 20
+    - name: revoked
+      count: 2
+    - name: escalator
+      count: 1
+    - name: stale
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: delegated_admission
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: delegated_admission
+  config:
+    victim: victim
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+
+output:
+  trace: ./traces/delegated_admission.jsonl

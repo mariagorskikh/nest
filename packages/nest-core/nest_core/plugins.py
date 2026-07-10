@@ -33,6 +33,7 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("trust", "aae_permit_gate"): f"{_REF}.trust.aae_permit_gate:AAEPermitGate",
     ("trust", "bonded_trust"): f"{_REF}.trust.bonded_trust:BondedTrust",
     ("trust", "attested_peering"): f"{_REF}.trust.attested_peering:AttestedPeeringTrust",
+    ("trust", "delegated_admission"): f"{_REF}.trust.delegated_admission:DelegatedAdmissionTrust",
     ("payments", "prepaid_credits"): f"{_REF}.payments.prepaid_credits:PrepaidCredits",
     ("payments", "streaming"): f"{_REF}.payments.streaming:StreamingPayments",
     ("payments", "empic_escrow"): f"{_REF}.payments.empic_escrow:EMPICEscrowPayments",

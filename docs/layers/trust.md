@@ -245,6 +245,68 @@ Spend *real* bond, gain real influence — intended ("most at stake, most say"),
 [`sybil_bond.yaml`](../../scenarios/sybil_bond.yaml) · `sybil_bond_*` in
 [`validators.py`](../../packages/nest-core/nest_core/validators.py)
 
+## `delegated_admission` — gate evidence on live proof-of-human grants
+
+Every other trust plugin here scores evidence *after* accepting it.
+`delegated_admission` decides which evidence is even eligible for
+scoring: a reporter's evidence is admitted iff, at the current
+injected logical clock, the reporter holds a delegation grant from a
+trusted principal, the grant is not revoked (directly or via a
+revoked ancestor within `MAX_HOPS`), its scope contains the
+verifier's `required_scope`, its proof-of-human envelope is fresh
+within `PUH_FRESHNESS_MS` (with `PUH_SKEW_MS` slack), and — by
+default in this port — that proof carries a valid Ed25519 signature
+by the principal's trusted key over the canonical envelope bytes.
+
+**What it does.** Ports `nexartis-nanda-node/src/lib/server/delegation-grants.ts`
+byte-for-byte for the canonical proof envelope
+(a fixed test vector locks that), including the CRITICAL-3 patch that
+narrows a grant's effective expiry to any earlier ancestor expiry.
+Nothing calls a wall clock, no OS randomness is used, and delegation
+ids are `del-<sha256(canonical || counter)[:24]>` — the same scenario
+seed produces the same delegation graph run-to-run.
+
+**Policy knobs** (`AdmissionPolicy`):
+
+- `trusted_principals: dict[str, bytes]` — `pk-...` handle → raw 32-byte
+  Ed25519 public key.
+- `require_signed_puh: bool = True` — this Python port is stricter than
+  the production toggle; see honest limitations below.
+- `puh_freshness_ms: int = 300_000` and `puh_skew_ms: int = 30_000` —
+  the forward-age and clock-skew bounds against the injected `now_ms`.
+- `required_scope: str = "trust.report"` — the scope string a grant
+  must contain for its holder's evidence to be admitted.
+
+**Trace lines** (emitted by the scenario observer to the victim sink):
+
+- `cascade:<root_id>:<n_descendants>` — the plugin's own report of a
+  parent revocation (root + BFS descendants, cycle-safe). Absent under
+  a baseline plugin because there is nothing to revoke.
+- `admission:<reporter>:<live|no-grant|revoked|scope-invalid|stale-proof>:<admitted|quarantined>`
+  — the role the scenario assigned this reporter, plus what the
+  configured plugin actually did with its report.
+- `report:<reporter>:<subject>:<kind>:<admitted|quarantined>` — the
+  fate of one evidence report (identical structure to the
+  attested-peering observer's line).
+- `repscore:<victim>:<score>:<sample_count>` — the victim's final
+  reputation, formatted to six decimals.
+
+**Provenance.** Deterministic port of nexartis-nanda-node
+`src/lib/server/delegation-grants.ts` (functions
+`canonicalProofEnvelope`, `verifyPuhProof`, `grantDelegation`,
+`revokeDelegation`, `checkDelegation`, `assertChainNarrowing`, and
+`collectDescendants`, together with the CRITICAL-3 ancestor-expiry
+narrowing patch). A companion `delegated_trust_market` scenario plus
+four `validate_delegated_...` trace validators red-team the
+`score_average` baseline against this plugin.
+
+**Source:**
+[`delegated_admission.py`](../../packages/nest-plugins-reference/nest_plugins_reference/trust/delegated_admission.py) ·
+[`delegated_trust_market.yaml`](../../scenarios/delegated_trust_market.yaml) ·
+`delegated_*` in
+[`validators.py`](../../packages/nest-core/nest_core/validators.py) ·
+[`VERIFICATION.md`](../../packages/nest-plugins-reference/nest_plugins_reference/trust/VERIFICATION.md).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under entry point group `nest.plugins.trust`.
