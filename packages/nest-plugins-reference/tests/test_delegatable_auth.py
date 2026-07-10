@@ -12,6 +12,8 @@ Covers:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from nest_core.types import AgentId, AuthContext, Token
 from nest_plugins_reference.auth.delegatable import (
@@ -251,6 +253,41 @@ class TestAdversarial:
             await auth.verify(tampered, presenter=AgentId("worker"))
 
     @pytest.mark.asyncio
+    async def test_path_rewrite_rejected(self, auth: DelegatableAuth) -> None:
+        """Rewriting the path on a revoked-ancestor child must NOT bypass revocation.
+
+        Before the fix, path was not in the HMAC, so an attacker could:
+        1. Obtain a valid child token whose parent was revoked
+        2. Rewrite path_hex to a non-revoked prefix
+        3. The HMAC still checked out (path wasn't signed)
+        4. The revocation check passed (new path doesn't match revoked prefix)
+        """
+        root = await auth.issue(AgentId("admin"), ["read"])
+        child = await auth.delegate(
+            root,
+            audience=AgentId("worker"),
+            scopes=["read"],
+            ttl=100,
+        )
+        # Revoke the root
+        await auth.revoke(root)
+
+        # Now try to rewrite the path to bypass revocation
+        child_str = str(child)
+        parts = child_str.split("|")
+        assert len(parts) == 3
+        _path_hex, payload_b64, nonce = parts
+
+        # Craft a *different* path (non-revoked) with the same payload and nonce
+        forged_path = json.dumps(["fresh-handle"]).encode().hex()
+        forged_token = Token(f"{forged_path}|{payload_b64}|{nonce}")
+
+        # Must fail — either the HMAC doesn't match (path is signed now) or
+        # the revocation check catches it. Both are acceptable defences.
+        with pytest.raises((ValueError, InvalidDelegationChainError, RevokedAncestorError)):
+            await auth.verify(forged_token, presenter=AgentId("worker"))
+
+    @pytest.mark.asyncio
     async def test_ttl_enforced(self, auth: DelegatableAuth) -> None:
         past_time = 0.0
         auth._clock = past_time  # type: ignore[reportPrivateUsage]
@@ -383,8 +420,8 @@ class TestDeterminism:
         a2 = DelegatableAuth(secret=b"fixed-secret")
         t1 = await a1.issue(AgentId("admin"), ["read"])
         t2 = await a2.issue(AgentId("admin"), ["read"])
-        # Tokens differ because handles are random, but should both be valid
-        assert t1 != t2
+        # Tokens are deterministic (same secret → same handles)
+        assert t1 == t2
         ctx1 = await a1.verify(t1)
         ctx2 = await a2.verify(t2)
         assert ctx1.subject == ctx2.subject

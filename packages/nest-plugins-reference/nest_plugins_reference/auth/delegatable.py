@@ -60,7 +60,6 @@ import base64
 import hashlib
 import hmac
 import json
-import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -143,14 +142,21 @@ def _chain_nonce(
     secret: bytes,
     ancestor_payloads: list[dict[str, Any]],
     leaf_payload: dict[str, Any],
+    path: list[str],
 ) -> str:
-    """Compute the HMAC nonce over the full chain.
+    """Compute the HMAC nonce over the full chain including path.
 
     Concatenates the canonical forms of all ancestor payloads (from root to
-    parent) followed by the canonical form of the leaf payload.
+    parent), the canonical form of the leaf payload, and the canonical JSON
+    of the path.  Binding the path into the HMAC prevents an attacker from
+    rewriting the path prefix to bypass revocation.
     """
-    chain_bytes = b"".join(_canonical(a) for a in ancestor_payloads) + _canonical(leaf_payload)
-    return hmac.new(chain_bytes, secret, hashlib.sha256).hexdigest()
+    chain_bytes = (
+        b"".join(_canonical(a) for a in ancestor_payloads)
+        + _canonical(leaf_payload)
+        + json.dumps(path, sort_keys=True, separators=(",", ":")).encode()
+    )
+    return hmac.new(secret, chain_bytes, hashlib.sha256).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +214,7 @@ def _make_payload(
     scopes: list[str],
     *,
     audience: AgentId | None = None,
-    ttl: int = 3600,
+    ttl: float = 3600,
     iat: float | None = None,
     ancestors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -260,6 +266,7 @@ class DelegatableAuth:
         self._revoked_paths: set[tuple[str, ...]] = (
             revoked_paths if revoked_paths is not None else set()
         )
+        self._handle_counter: int = 0
 
     # -- Auth protocol methods -------------------------------------------
 
@@ -273,10 +280,11 @@ class DelegatableAuth:
 
             token = await auth.issue(AgentId("admin"), ["read", "write"])
         """
-        handle = secrets.token_hex(16)
+        handle = self._make_handle(str(subject))
         payload = _make_payload(subject, scopes)
-        nonce = _chain_nonce(self._secret, [], payload)
-        tok = _DelegationToken(path=[handle], payload=payload, nonce=nonce)
+        path = [handle]
+        nonce = _chain_nonce(self._secret, [], payload, path)
+        tok = _DelegationToken(path=path, payload=payload, nonce=nonce)
         return Token(tok.serialize())
 
     async def verify(
@@ -307,7 +315,9 @@ class DelegatableAuth:
         tok = _DelegationToken.deserialize(str(token))
 
         # --- HMAC chain ---
-        expected = _chain_nonce(self._secret, tok.ancestors, _strip_ancestors(tok.payload))
+        expected = _chain_nonce(
+            self._secret, tok.ancestors, _strip_ancestors(tok.payload), tok.path
+        )
         if not hmac.compare_digest(expected, tok.nonce):
             msg = "Invalid delegation nonce chain"
             raise InvalidDelegationChainError(msg)
@@ -341,6 +351,18 @@ class DelegatableAuth:
             expires_at=issued_at + ttl,
         )
 
+    async def verify_presented(self, token: Token, presenter: AgentId) -> AuthContext:
+        """Verify a token *and* that the presenter matches its bound audience.
+
+        Convenience wrapper around :meth:`verify` — equivalent to
+        ``verify(token, presenter=presenter)``.
+
+        Example::
+
+            ctx = await auth.verify_presented(child, AgentId("worker"))
+        """
+        return await self.verify(token, presenter=presenter)
+
     async def revoke(self, token: Token) -> None:
         """Revoke a token and every descendant in its subtree.
 
@@ -352,6 +374,14 @@ class DelegatableAuth:
             await auth.revoke(root)
         """
         tok = _DelegationToken.deserialize(str(token))
+        # Verify the nonce before accepting the path — prevents an attacker
+        # from crafting a token with an arbitrary path to revoke.
+        expected = _chain_nonce(
+            self._secret, tok.ancestors, _strip_ancestors(tok.payload), tok.path
+        )
+        if not hmac.compare_digest(expected, tok.nonce):
+            msg = "Invalid nonce chain — cannot revoke"
+            raise InvalidDelegationChainError(msg)
         self._revoked_paths.add(tuple(tok.path))
 
     # -- New API: delegation ---------------------------------------------
@@ -359,10 +389,9 @@ class DelegatableAuth:
     async def delegate(
         self,
         parent_token: Token,
-        *,
         audience: AgentId,
         scopes: list[str],
-        ttl: int,
+        ttl: float,
     ) -> Token:
         """Create a delegated child token from *parent_token*.
 
@@ -379,8 +408,7 @@ class DelegatableAuth:
         Example::
 
             child = await auth.delegate(
-                root, audience=AgentId("worker"),
-                scopes=["read"], ttl=100,
+                root, AgentId("worker"), ["read"], ttl=100,
             )
         """
         parent = _DelegationToken.deserialize(str(parent_token))
@@ -390,6 +418,7 @@ class DelegatableAuth:
             self._secret,
             parent.ancestors,
             _strip_ancestors(parent.payload),
+            parent.path,
         )
         if not hmac.compare_digest(parent_expected, parent.nonce):
             msg = "Parent token has invalid nonce chain"
@@ -425,9 +454,9 @@ class DelegatableAuth:
         child_ancestors = parent.ancestors + [parent_stripped]
 
         # --- Construct child ---
-        child_handle = secrets.token_hex(16)
-        child_path = parent.path + [child_handle]
         child_subject = parent_payload["sub"]
+        child_handle = self._make_handle(str(child_subject))
+        child_path = parent.path + [child_handle]
         child_payload = _make_payload(
             AgentId(child_subject),
             scopes,
@@ -436,12 +465,24 @@ class DelegatableAuth:
             iat=now,
             ancestors=child_ancestors,
         )
-        child_nonce = _chain_nonce(self._secret, child_ancestors, _strip_ancestors(child_payload))
+        child_nonce = _chain_nonce(
+            self._secret, child_ancestors, _strip_ancestors(child_payload), child_path
+        )
 
         child = _DelegationToken(path=child_path, payload=child_payload, nonce=child_nonce)
         return Token(child.serialize())
 
     # -- Internal ---------------------------------------------------------
+
+    def _make_handle(self, subject: str) -> str:
+        """Derive a deterministic handle using HMAC + monotonic counter.
+
+        Ensures Tier 1 determinism: same sequence of operations with the
+        same secret always yields the same handles.
+        """
+        self._handle_counter += 1
+        material = f"handle:{subject}:{self._handle_counter}".encode()
+        return hmac.new(self._secret, material, hashlib.sha256).hexdigest()[:32]
 
     def _now(self) -> float:
         return self._clock if self._clock is not None else 0.0
