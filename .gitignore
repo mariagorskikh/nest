@@ -16,3 +16,4 @@ data/hackathon-runs/*.png
 # Per-agent isolated worktrees / clones.
 .harness-work/
 .DS_Store
+.superpowers/

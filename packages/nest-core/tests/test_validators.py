@@ -1999,6 +1999,7 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "identity_rotation",
+            "attested_peering",
             "memory_concurrent_writers",
             "streaming_payments",
             "empic_payments",
@@ -2012,6 +2013,7 @@ class TestValidatorRegistry:
             "failure_detection",
             "parc_migration",
             "rogue_trusted_agent",
+            "sybil_bond",
         }
         assert set(VALIDATORS.keys()) == expected
 
