@@ -20,7 +20,11 @@ export function checkSkillsWriteRateLimit(request: NextRequest): Response | null
   }
   bucket.count += 1;
   if (bucket.count > RATE_LIMIT_MAX) {
-    return Response.json({ error: "Rate limit exceeded. Try again later." }, { status: 429 });
+    const retryAfterSec = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+    return Response.json(
+      { error: "Rate limit exceeded. Try again later." },
+      { status: 429, headers: { "Retry-After": String(retryAfterSec) } },
+    );
   }
   return null;
 }
@@ -54,7 +58,7 @@ export async function readSkillsJsonBody(
     }
   }
   const raw = await request.text();
-  if (raw.length > MAX_SKILLS_BODY_BYTES) {
+  if (new TextEncoder().encode(raw).length > MAX_SKILLS_BODY_BYTES) {
     return {
       error: Response.json({ error: "Request body too large." }, { status: 413 }),
     };

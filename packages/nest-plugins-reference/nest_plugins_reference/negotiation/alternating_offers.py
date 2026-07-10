@@ -61,8 +61,8 @@ class AlternatingOffers:
             resp = await neg.respond(session)
         """
         if session.current_terms is None or session.current_terms.price is None:
-            session.status = NegotiationStatus.AGREED
-            return NegotiationResponse(accepted=True)
+            session.status = NegotiationStatus.REJECTED
+            return NegotiationResponse(accepted=False)
         rounds = len(session.history)
         threshold = session.current_terms.price.amount * (self._patience**rounds)
         if session.current_terms.price.amount <= threshold or rounds >= 10:

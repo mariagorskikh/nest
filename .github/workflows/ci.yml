@@ -58,7 +58,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --frozen
-      - run: uv run pytest -v -m "not slow"
+      - run: uv run pytest -v -m "not slow and not live"
 
   security:
     runs-on: ubuntu-latest

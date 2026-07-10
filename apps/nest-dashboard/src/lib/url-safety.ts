@@ -17,6 +17,16 @@ function isPrivateIpv4(host: string): boolean {
   if (a === 192 && b === 168) return true;
   return false;
 }
+function isBlockedIpv6(host: string): boolean {
+  if (host === "::" || host === "::1") return true;
+  if (host.startsWith("fe80:")) return true;
+  const firstHextet = host.split(":")[0] ?? "";
+  if (firstHextet.startsWith("fc") || firstHextet.startsWith("fd")) return true;
+  if (host.startsWith("::ffff:")) {
+    return isPrivateIpv4(host.slice("::ffff:".length));
+  }
+  return false;
+}
 export function isSafeExternalUrl(raw: string): boolean {
   let parsed: URL;
   try {
@@ -31,7 +41,7 @@ export function isSafeExternalUrl(raw: string): boolean {
   if (BLOCKED_HOSTNAMES.has(host) || host.endsWith(".localhost")) {
     return false;
   }
-  if (host === "::1" || host.startsWith("fe80:")) {
+  if (isBlockedIpv6(host)) {
     return false;
   }
   if (isPrivateIpv4(host)) {

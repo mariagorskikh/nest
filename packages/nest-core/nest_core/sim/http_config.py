@@ -81,7 +81,8 @@ def http_auth_valid(headers: dict[str, str]) -> bool:
     if secret is None:
         return True
     header = http_auth_header_name().lower()
-    provided = headers.get(header) or ""
+    normalized = {k.lower(): v for k, v in headers.items()}
+    provided = normalized.get(header) or ""
     return hmac.compare_digest(provided, secret)
 
 

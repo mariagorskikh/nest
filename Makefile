@@ -34,12 +34,12 @@ ci-local: ## Run the exact Python CI command sequence; hard-fail on the first re
 	uv run pip-audit
 	@echo ">>> [8/9] uv run bandit -r packages/ -c pyproject.toml"
 	uv run bandit -r packages/ -c pyproject.toml
-	@echo ">>> [9/9] uv run pytest -v -m \"not slow\""
-	uv run pytest -v -m "not slow"
+	@echo ">>> [9/9] uv run pytest -v -m \"not slow and not live\""
+	uv run pytest -v -m "not slow and not live"
 	@echo ""
 	@echo "ci-local: all Python checks passed. Safe to push."
 test-fast: ## Run fast tests only (exclude @pytest.mark.slow).
-	uv run pytest -v -m "not slow"
+	uv run pytest -v -m "not slow and not live"
 clean: ## Remove dist/, coverage, and trace artifacts.
 	uv run python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p in ('dist','htmlcov','.pytest_cache','traces')]; pathlib.Path('.coverage').unlink(missing_ok=True)"
 ci-dashboard: ## Run nest-dashboard frontend CI (typecheck, lint, build).

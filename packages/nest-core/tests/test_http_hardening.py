@@ -26,6 +26,7 @@ class TestHttpAuthConfig:
         monkeypatch.setenv("NEST_HTTP_SHARED_SECRET", "s3cret")
         assert http_auth_headers() == {"X-Nest-Auth": "s3cret"}
         assert http_auth_valid({"x-nest-auth": "s3cret"}) is True
+        assert http_auth_valid({"X-Nest-Auth": "s3cret"}) is True
         assert http_auth_valid({"x-nest-auth": "wrong"}) is False
 
 

@@ -450,7 +450,8 @@ class TestAlternatingOffers:
         neg = AlternatingOffers(AgentId("a1"))
         session = await neg.open(AgentId("a2"), Terms())
         resp = await neg.respond(session)
-        assert resp.accepted is True
+        assert resp.accepted is False
+        assert session.status == NegotiationStatus.REJECTED
 
 
 # ---------------------------------------------------------------------------
