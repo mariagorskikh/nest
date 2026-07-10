@@ -43,11 +43,14 @@ def _attempt(actor: str, claimed: str, attack: str, verdict: str, reason: str) -
     return _send(actor, "auditor-0", msg)
 
 
-def _lookup(claimed: str, present: int, authentic: int) -> Event:
+def _lookup(claimed: str, present: int, authentic: int, squatting: int = 0) -> Event:
     return _send(
         "auditor-0",
         "auditor-0",
-        f"reg:lookup:claimed={claimed}:present={present}:authentic={authentic}",
+        (
+            f"reg:lookup:claimed={claimed}:present={present}:"
+            f"authentic={authentic}:squatting={squatting}"
+        ),
         ts=1.0,
     )
 
@@ -120,6 +123,12 @@ class TestValidatorsSynthetic:
         assert not res.passed
         assert "not discoverable" in res.detail
 
+    def test_capability_squatting_fails_discovery(self) -> None:
+        events = [*_honest_trace(), _lookup("honest-2", 1, 1, squatting=1)]
+        res = validate_registry_authentic_discovery(events)[0]
+        assert not res.passed
+        assert "squatted" in res.detail
+
     def test_receive_copies_do_not_double_count(self) -> None:
         events = _honest_trace()
         receive_copy = dict(events[2])
@@ -184,7 +193,10 @@ class TestScenarioEndToEnd:
         assert not by_name["registry_authentic_discovery"].passed
         # The honest-admission guard still holds: in_memory admits everyone.
         assert by_name["registry_honest_admitted"].passed
-        assert "attack=impersonate" in result.read_text()
+        text = result.read_text()
+        assert "attack=impersonate" in text
+        # The accepted tamper card claims service:honest-0 under sybil-2's ID.
+        assert "claimed=honest-0:present=1:authentic=0:squatting=1" in text
 
     @pytest.mark.asyncio
     async def test_deterministic(self, tmp_path: Path) -> None:

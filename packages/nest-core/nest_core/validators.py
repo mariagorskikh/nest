@@ -4077,7 +4077,6 @@ def validate_bft_no_stuck_view(
 
 
 # ---------------------------------------------------------------------------
-
 # Failure-detection validators
 # ---------------------------------------------------------------------------
 
@@ -4282,7 +4281,6 @@ def validate_failure_detection_completeness(
     ]
 
 
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Portable-reputation (PARC) migration validators
 #
@@ -4534,6 +4532,41 @@ def validate_registry_rejection_reasons(
     ]
 
 
+def validate_registry_authentic_discovery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Discovery must resolve honest capabilities without poisoning or squatting.
+
+    Scans the auditor's ``reg:lookup:`` lines and fails if any honest agent
+    is missing from discovery (``present=0``), resolves to a card that no
+    longer points at the owner's true endpoint (``authentic=0``), or has a
+    different agent advertising the same capability (``squatting=1``).
+
+    Example::
+
+        results = validate_registry_authentic_discovery(events)
+    """
+    name = "registry_authentic_discovery"
+    lookups = [rec for rec in _parse_registry_events(events) if rec["kind"] == "lookup"]
+    if not lookups:
+        return [ValidationResult(name, False, "no discovery audit lines in trace")]
+
+    violations: list[str] = []
+    for rec in lookups:
+        claimed = rec.get("claimed", "?")
+        if rec.get("present") != "1":
+            violations.append(f"{claimed} not discoverable")
+        elif rec.get("authentic") != "1":
+            violations.append(f"{claimed} resolves to a poisoned card")
+        if rec.get("squatting") != "0":
+            violations.append(f"{claimed} capability is squatted")
+    if violations:
+        return [ValidationResult(name, False, "; ".join(violations))]
+    return [
+        ValidationResult(name, True, f"discovery authentic for all {len(lookups)} honest agents")
+    ]
+
+
 def validate_failure_detection_accuracy(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -4637,39 +4670,6 @@ def validate_failure_detection_accuracy(
         )
 
     return [accuracy, recovery]
-
-
-def validate_registry_authentic_discovery(
-    events: list[dict[str, Any]],
-) -> list[ValidationResult]:
-    """Discovery must resolve every honest agent to its authentic card.
-
-    Scans the auditor's ``reg:lookup:`` lines and fails if any honest agent
-    is missing from discovery (``present=0``) or resolves to a card that no
-    longer points at the owner's true endpoint (``authentic=0``) -- the
-    poisoned-lookup outcome of a successful impersonation.
-
-    Example::
-
-        results = validate_registry_authentic_discovery(events)
-    """
-    name = "registry_authentic_discovery"
-    lookups = [rec for rec in _parse_registry_events(events) if rec["kind"] == "lookup"]
-    if not lookups:
-        return [ValidationResult(name, False, "no discovery audit lines in trace")]
-
-    violations: list[str] = []
-    for rec in lookups:
-        claimed = rec.get("claimed", "?")
-        if rec.get("present") != "1":
-            violations.append(f"{claimed} not discoverable")
-        elif rec.get("authentic") != "1":
-            violations.append(f"{claimed} resolves to a poisoned card")
-    if violations:
-        return [ValidationResult(name, False, "; ".join(violations))]
-    return [
-        ValidationResult(name, True, f"discovery authentic for all {len(lookups)} honest agents")
-    ]
 
 
 def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:

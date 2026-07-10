@@ -35,10 +35,11 @@ Trace line protocol (carried in message bodies, ``:``-delimited ``k=v``):
   — one registration attempt; ``kind`` is ``honest``/``impersonate``/
   ``unsigned``/``tamper``; ``verdict`` is ``accepted``/``rejected``;
   ``reason`` is ``ok`` or the plugin's typed rejection reason.
-* ``reg:lookup:claimed=<id>:present=<0|1>:authentic=<0|1>`` — the auditor's
-  post-hoc discovery check for one honest agent: ``present`` means a card
-  with that ``agent_id`` is discoverable, ``authentic`` means that card still
-  points at the owner's true endpoint.
+* ``reg:lookup:claimed=<id>:present=<0|1>:authentic=<0|1>:squatting=<0|1>``
+  is the auditor's post-hoc discovery check for one honest agent: ``present``
+  means a card with that ``agent_id`` is discoverable, ``authentic`` means it
+  still points at the owner's endpoint, and ``squatting`` means a different
+  agent advertises the honest agent's capability.
 
 Example::
 
@@ -286,13 +287,18 @@ class AuditorAgent(StateMachineAgent):
         for hid in self._honest_ids:
             cards = await registry.lookup(Query(capabilities=[_service_capability(hid)]))
             owner: AgentCard | None = None
+            squatting = False
             for card in cards:
                 if card.agent_id == hid:
                     owner = card
-                    break
+                else:
+                    squatting = True
             present = owner is not None
             authentic = present and owner is not None and owner.endpoint == _own_endpoint(hid)
-            line = f"reg:lookup:claimed={hid}:present={int(present)}:authentic={int(authentic)}"
+            line = (
+                f"reg:lookup:claimed={hid}:present={int(present)}:"
+                f"authentic={int(authentic)}:squatting={int(squatting)}"
+            )
             await ctx.send(self._id, line.encode())
 
 
