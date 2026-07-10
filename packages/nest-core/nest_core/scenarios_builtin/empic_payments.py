@@ -354,7 +354,7 @@ class WeatherConsumerAgent(StateMachineAgent):
             return
 
         if self._mode == "pull":
-            await payments.pay(
+            await payments.open_pull_escrow(
                 self._provider,
                 quote.price,
                 self._ref,

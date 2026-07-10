@@ -272,11 +272,21 @@ def validate_auction_winner_highest(
                 winners[item] = (bidder, amount)
 
     violations: list[str] = []
-    for item, (_winner, winning_amount) in winners.items():
-        for bidder, amount in bids.get(item, []):
-            if amount > winning_amount:
+    for item, (winner, winning_amount) in winners.items():
+        item_bids = bids.get(item, [])
+        # The invariant is about the winner's REAL bid, not the announced
+        # amount. Trusting the announced amount lets an auctioneer award a low
+        # bidder while announcing a figure inflated past every real bid, and the
+        # check would pass. Use the winner's own highest observed bid; fall back
+        # to the announced amount only when the winner's bid was not observed
+        # (e.g. dropped under message loss), so this never fails a valid trace.
+        winner_bids = [amount for bidder, amount in item_bids if bidder == winner]
+        effective_winner_bid = max(winner_bids) if winner_bids else winning_amount
+        for bidder, amount in item_bids:
+            if amount > effective_winner_bid:
                 violations.append(
-                    f"item {item}: winner bid {winning_amount} but {bidder} bid {amount}"
+                    f"item {item}: winner {winner} bid {effective_winner_bid} "
+                    f"but {bidder} bid {amount}"
                 )
                 break
 
@@ -1691,6 +1701,7 @@ def validate_empic_pubsub_billing_caps(
         result = validate_empic_pubsub_billing_caps(events)[0]
     """
     audit = _empic_audit_events(events)
+    stream_refs: set[str] = set()
     streams: dict[str, tuple[int, int]] = {}
     accepted: dict[str, set[str]] = defaultdict(set)
     released: dict[str, int] = defaultdict(int)
@@ -1702,21 +1713,25 @@ def validate_empic_pubsub_billing_caps(
         if not ref:
             continue
         if event_type == "empic_stream_opened":
+            stream_refs.add(ref)
             rate = _safe_amount(ev.get("rate_per_tick"))
             max_total = _safe_amount(ev.get("max_total") or ev.get("amount"))
             if rate <= 0 or max_total <= 0:
                 violations.append(f"{ref}: invalid stream terms rate={rate} max_total={max_total}")
             else:
                 streams[ref] = (rate, max_total)
-        elif (
+            continue
+
+        is_pubsub_ref = ref in stream_refs or ev.get("mode") == "pubsub"
+        if (
             event_type == "empic_delivery_evaluated"
             and ev.get("accepted") is True
-            and ev.get("mode") == "pubsub"
+            and is_pubsub_ref
         ):
             delivery_id = _empic_delivery_id(ev)
             if delivery_id:
                 accepted[ref].add(delivery_id)
-        elif event_type == "empic_escrow_released" and ev.get("mode") == "pubsub":
+        elif event_type == "empic_escrow_released" and is_pubsub_ref:
             amount = _safe_amount(ev.get("amount"))
             delivery_id = _empic_delivery_id(ev)
             terms = streams.get(ref)
@@ -2150,7 +2165,7 @@ def validate_empic_no_drain_after_close(
                 close_tick[ref] = _event_tick(ev)
 
     for ev in audit:
-        if ev.get("event_type") != "empic_escrow_released" or ev.get("mode") != "pubsub":
+        if ev.get("event_type") != "empic_escrow_released":
             continue
         ref = str(ev.get("payment_ref", ""))
         closed_at = close_tick.get(ref)
@@ -2204,7 +2219,7 @@ def validate_empic_no_overbill_on_partition(
                 partition_start[edge] = tick
 
     for ev in audit:
-        if ev.get("event_type") != "empic_escrow_released" or ev.get("mode") != "pubsub":
+        if ev.get("event_type") != "empic_escrow_released":
             continue
         ref = str(ev.get("payment_ref", ""))
         parties = stream_parties.get(ref)
@@ -4599,6 +4614,132 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 # ---------------------------------------------------------------------------
 
 
+_SYBIL_FLOOR = 0.0
+"""Untrusted-floor score an unbonded identity may not exceed."""
+
+
+def _trustscores(events: list[dict[str, Any]]) -> dict[str, float]:
+    """Extract ``{agent: score}`` from ``trustscore:<agent>:<score>`` events.
+
+    The ``sybil_bond`` observer broadcasts one such event per agent after driving
+    the configured trust plugin, so these scores are the plugin's own verdict.
+    """
+    scores: dict[str, float] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("trustscore:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 3:
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+    return scores
+
+
+def validate_sybil_bond_no_free_trust(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No unbonded Sybil identity obtains trust above the untrusted floor.
+
+    FAILs on ``score_average`` (the clique's mutual endorsements promote it) and
+    PASSes on ``bonded_trust`` (free-minted identities stay inert).
+
+    Example::
+
+        results = validate_sybil_bond_no_free_trust(events)
+    """
+    scores = _trustscores(events)
+    escaped = {a: s for a, s in scores.items() if a.startswith("sybil-") and s > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils bought trust without bonding: {escaped}"
+        return [ValidationResult("sybil_bond_no_free_trust", False, detail)]
+    n_sybil = sum(1 for a in scores if a.startswith("sybil-"))
+    return [
+        ValidationResult(
+            "sybil_bond_no_free_trust",
+            True,
+            f"all {n_sybil} Sybils pinned at the untrusted floor",
+        )
+    ]
+
+
+def validate_sybil_bond_honest_trusted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Bonded honest traders rank strictly above every Sybil.
+
+    Guards against a degenerate trust layer that trivially passes the first check
+    by scoring *everyone* at the floor: honest bonded traders must actually rise.
+
+    Example::
+
+        results = validate_sybil_bond_honest_trusted(events)
+    """
+    scores = _trustscores(events)
+    honest = {a: s for a, s in scores.items() if a.startswith("honest-")}
+    if not honest:
+        return [ValidationResult("sybil_bond_honest_trusted", False, "no honest scores in trace")]
+    max_sybil = max((s for a, s in scores.items() if a.startswith("sybil-")), default=0.0)
+    laggards = {a: s for a, s in honest.items() if s <= max_sybil}
+    if laggards:
+        detail = f"honest traders not above Sybil ceiling {max_sybil}: {laggards}"
+        return [ValidationResult("sybil_bond_honest_trusted", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_honest_trusted",
+            True,
+            f"{len(honest)} honest traders trusted above Sybil ceiling {max_sybil}",
+        )
+    ]
+
+
+def validate_sybil_bond_attempts_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sybils *bid* for a bond yet stay at the floor — the ledger rejected them.
+
+    This is the enforcement check: it proves the defense is active (bond requests
+    denied), not merely assumed (Sybils declining to bond). It requires the trace
+    to contain Sybil ``bond:`` attempts, and that none of those bidders escaped
+    the untrusted floor.
+
+    Example::
+
+        results = validate_sybil_bond_attempts_rejected(events)
+    """
+    scores = _trustscores(events)
+    bidders: set[str] = set()
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        if agent.startswith("sybil-") and _message_body(ev).startswith("bond:"):
+            bidders.add(agent)
+    if not bidders:
+        return [
+            ValidationResult(
+                "sybil_bond_attempts_rejected",
+                False,
+                "no Sybil bond attempts in trace — cannot prove enforcement",
+            )
+        ]
+    escaped = {a: scores.get(a, 0.0) for a in bidders if scores.get(a, 0.0) > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils that bid for a bond escaped the floor: {escaped}"
+        return [ValidationResult("sybil_bond_attempts_rejected", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_attempts_rejected",
+            True,
+            f"{len(bidders)} Sybils bid for a bond and were all rejected to the floor",
+        )
+    ]
+
+
 def _sic_field_msg(events: list[dict[str, Any]], prefix: str) -> list[list[str]]:
     """Collect ``|``-delimited trace rows for the serialization_invariance scenario.
 
@@ -4701,6 +4842,16 @@ def validate_sic_phantom_parent_rejected(
 
 
 VALIDATORS: dict[str, list[Any]] = {
+    "serialization_invariance": [
+        validate_sic_launder_neutralized,
+        validate_sic_tamper_still_detected,
+        validate_sic_phantom_parent_rejected,
+    ],
+    "sybil_bond": [
+        validate_sybil_bond_no_free_trust,
+        validate_sybil_bond_honest_trusted,
+        validate_sybil_bond_attempts_rejected,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,
@@ -4772,11 +4923,6 @@ VALIDATORS: dict[str, list[Any]] = {
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
         validate_multi_attribute_individually_rational,
-    ],
-    "serialization_invariance": [
-        validate_sic_launder_neutralized,
-        validate_sic_tamper_still_detected,
-        validate_sic_phantom_parent_rejected,
     ],
     "provenance_supply_chain": [
         validate_provenance_chain_integrity,
