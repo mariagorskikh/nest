@@ -12,9 +12,14 @@ Four attacks are blocked:
   if the requested child scopes are not a strict subset of the parent's.
 * **Stale-parent revocation** — ``verify()`` walks the ancestry chain and
   raises ``RevokedAncestorError`` if any ancestor token has been revoked.
-* **Audience confusion at verify** — ``verify(token, caller=agent_id)`` raises
-  ``AudienceConfusionError`` when the caller is not the token's declared
-  audience.
+* **Audience confusion at verify** — ``verify()`` raises
+  ``AudienceConfusionError`` when the token has a declared audience and
+  ``caller`` is absent OR does not match that audience.  The check is
+  unconditional: omitting ``caller=`` on an audience-bound token is rejected
+  just as firmly as passing the wrong identity.  Only root tokens (which carry
+  no audience field) may be verified without a caller.  A gap where the
+  no-``caller=`` path was silently accepted was found and closed during the
+  same review cycle as the ``delegate()`` fix below.
 * **Audience confusion at delegate** — ``delegate()`` raises
   ``AudienceConfusionError`` when the parent token has a declared audience and
   ``caller`` is absent OR does not match that audience.  This blocks the exploit
@@ -292,10 +297,11 @@ class DelegatableAuth:
             rec = self._registry.get(current_id)
             current_id = rec.parent_id if rec is not None else None
 
-        # Audience check
+        # Audience check — unconditional when the token has a declared audience.
+        # Mirrors delegate()'s fix: omitting caller= is as wrong as supplying a wrong one.
         raw_aud = data.get("aud")
         audience: AgentId | None = AgentId(str(raw_aud)) if raw_aud is not None else None
-        if caller is not None and audience is not None and caller != audience:
+        if audience is not None and (caller is None or caller != audience):
             msg = f"token issued for {audience!r}; presented by {caller!r}"
             raise AudienceConfusionError(msg)
 

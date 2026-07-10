@@ -234,12 +234,14 @@ class TestAudienceConfusion:
         with pytest.raises(AudienceConfusionError):
             await auth.verify(child, caller=AgentId("intruder"))
 
-    async def test_no_caller_skips_audience_check(self, auth: DelegatableAuth) -> None:
+    async def test_verify_without_caller_rejected_for_audience_bound(
+        self, auth: DelegatableAuth
+    ) -> None:
         root = await auth.issue(AgentId("coord"), ["read", "write"])
         child = await auth.delegate(root, AgentId("worker"), ["read"], ttl=600.0)
-        # Callers that don't pass caller= still work (backward compat)
-        ctx = await auth.verify(child)
-        assert ctx.scopes == ["read"]
+        # audience-bound tokens require an explicit caller; omitting it is an error
+        with pytest.raises(AudienceConfusionError):
+            await auth.verify(child)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +299,37 @@ class TestAdversarialValidators:
         child = await jwt.issue(AgentId("worker"), ["read"])
         report = await check_audience_confusion_blocked(jwt, child, AgentId("intruder"))
         assert not report.passed, "jwt should fail: no audience binding"
+
+
+# ---------------------------------------------------------------------------
+# Adversarial: verify() caller bypass
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyCallerBypass:
+    async def test_verify_without_caller_rejected_for_audience_bound_token(
+        self, auth: DelegatableAuth
+    ) -> None:
+        """A delegated (audience-bound) token presented to verify() with NO caller
+        must be rejected unconditionally, the same way delegate() was fixed.
+
+        Before fix: verify() only checks audience when caller is not None, so
+        omitting caller= silently bypassed the audience check.
+        After fix: audience is not None → AudienceConfusionError regardless of caller.
+        """
+        root = await auth.issue(AgentId("coord"), ["read", "write"])
+        child = await auth.delegate(root, AgentId("worker"), ["read"], ttl=600.0)
+        # child has aud="worker"; presenting it with no caller must be rejected
+        with pytest.raises(AudienceConfusionError):
+            await auth.verify(child)
+
+    async def test_verify_root_token_without_caller_still_passes(
+        self, auth: DelegatableAuth
+    ) -> None:
+        """Root tokens have no audience; caller=None is legitimate for them."""
+        root = await auth.issue(AgentId("coord"), ["read", "write"])
+        ctx = await auth.verify(root)
+        assert ctx.subject == AgentId("coord")
 
 
 # ---------------------------------------------------------------------------
