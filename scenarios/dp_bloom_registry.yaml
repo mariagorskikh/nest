@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Differentially private registry scenario.
 #
-# A marketplace of 20 buyers and 20 sellers running on the `dp_bloom`
-# registry instead of `in_memory`. Discovery still works exactly (lookups
-# are served from the true card store), but the registry's *published*
-# membership index is epsilon-DP: an observer who reads it off the wire
-# cannot confirm whether any specific agent registered beyond an e^eps
-# factor. Swap `registry: dp_bloom` back to `in_memory` and the
-# membership-inference validator flips from PASS to FAIL on the same seed.
+# A marketplace of 20 buyers and 20 sellers runs on the dp_bloom registry
+# instead of in_memory. Discovery still works exactly, since lookups read the
+# true card store. The registry's published membership index is epsilon-DP, so
+# an observer who reads it off the wire cannot confirm whether any specific
+# agent registered beyond an e^eps factor. Swap the registry back to in_memory
+# and the membership-inference validator flips from pass to fail on the same
+# seed.
 #
-# Deterministic under seeds 42, 7, 1337 — the randomized-response coins are
-# drawn from a seeded PRF and the plugin never reads wall-clock time.
+# The scenario is deterministic under seeds 42, 7, and 1337. The
+# randomized-response coins come from a seeded PRF and the plugin never reads
+# wall-clock time.
 name: dp_bloom_registry
 description: "40-agent marketplace on an epsilon-DP membership registry."
 

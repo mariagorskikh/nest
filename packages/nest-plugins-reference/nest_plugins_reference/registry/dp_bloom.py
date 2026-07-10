@@ -1,70 +1,78 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Differentially private registry: membership queries under an epsilon bound.
+"""Differentially private registry with a bounded membership leak.
 
-The default registry plugin
-:class:`~nest_plugins_reference.registry.in_memory.InMemoryRegistry` answers
-*"who is registered, and what can they do?"* from a plain ``dict``. That is
-functionally correct and **operationally a privacy leak**: anyone who can query
-the registry (or read the published index off the wire) can enumerate the exact
-member set and every agent's capabilities. Membership is often the sensitive
-bit — that a given agent registered a ``sell_medical_data`` capability at all
-can be more revealing than any single message it later encrypts. The
-:doc:`registry wishlist </layers/registry>` calls out "capability queries";
-this plugin adds the query surface *and* a formal privacy guarantee over it.
+The default registry answers who is registered and what each agent can do
+exactly. A caller reads the answer from a plain dict. The behavior is correct
+for discovery and it leaks membership. Anyone who queries the registry, or reads
+the published index off the wire, recovers the full member set and every
+advertised capability. Membership is often the sensitive fact. That an agent
+registered a ``sell_medical_data`` capability at all can reveal more than any
+message the agent later encrypts. ``DPBloomRegistry`` adds a capability-query
+surface and gives it a formal privacy guarantee.
 
 What it does
-------------
 
 ``DPBloomRegistry`` serves legitimate ``lookup`` from a true card store, exactly
-like the in-memory reference (so scenarios that depend on discovery keep
-working). Alongside that, every registration is folded into a **published
-membership index** — a Bloom filter whose bits are perturbed by RAPPOR-style
-permanent randomized response before anyone outside the registry may read them.
-Curious peers and passive observers see only :meth:`published_index` and answer
-membership through :meth:`membership_query`; the raw card store never crosses
-that boundary. The index is what appears on the wire / in the trace, so the
-privacy claim is about the artifact an adversary can actually obtain.
+like the in-memory reference, so discovery keeps working. Every registration
+also folds into a published membership index. The index is a Bloom filter whose
+bits are perturbed by RAPPOR-style permanent randomized response [2] before
+anyone outside the registry reads them. Curious peers and passive observers see only
+:meth:`published_index` and test membership through :meth:`membership_query`. The
+raw card store never crosses that boundary. The published index is the artifact
+an adversary can obtain, so the privacy claim is about the index, not the store.
 
 The guarantee
--------------
 
 Fix the number of hashes ``k``. Inserting one member sets at most ``k`` bits of
 the true filter, so two registries whose member sets differ by a single agent
-(*neighboring* inputs) differ in at most ``k`` bit positions. Each published bit
-is flipped independently with probability ``p``; a single differing bit then
-satisfies ``Pr[r=1 | true=1] / Pr[r=1 | true=0] = (1 - p) / p``, i.e. per-bit
-``eps0 = ln((1 - p) / p)``. Sequential composition over the ``<= k`` differing
-bits gives ``eps = k * ln((1 - p) / p)`` — **epsilon-differential privacy with
-the unit of privacy being one agent's membership**. Solving for the flip
-probability that hits a target budget:
+differ in at most ``k`` bit positions. The plugin flips each published bit
+independently with probability ``p``. A single differing bit then satisfies
+``Pr[r=1 | true=1] / Pr[r=1 | true=0] = (1 - p) / p``, so the per-bit budget is
+``eps0 = ln((1 - p) / p)``. Sequential composition over the at most ``k``
+differing bits gives ``eps = k * ln((1 - p) / p)``, which is
+epsilon-differential privacy with one agent's membership as the unit of privacy.
+Inverting for a target budget gives the calibrated flip probability
+``p = 1 / (1 + exp(eps / k))``. A smaller ``eps`` moves ``p`` toward ``1/2``,
+which adds noise, strengthens privacy, and lowers query accuracy. The trade-off
+between membership privacy and query accuracy stays explicit rather than silent.
 
-    ``p = 1 / (1 + exp(eps / k))``
+Randomness and determinism
 
-So a caller asks for ``epsilon`` and ``k`` and the plugin calibrates ``p``.
-Smaller ``epsilon`` → ``p`` closer to ``1/2`` → more noise, stronger privacy,
-lower query accuracy. This is the classic membership/accuracy trade-off, made
-explicit rather than silent.
+Differential privacy is a property of the mechanism's coin flips. The plugin
+draws those flips once from a keyed PRF over a secret per-instance ``seed``,
+following RAPPOR memoization [2]. An adversary without the seed observes only the
+published bits and gains advantage at most ``e^eps``. Fixing the seed fixes one
+draw of the coins and makes a Tier 1 trace byte-identical on replay. A fixed
+seed does not weaken the guarantee for a seedless adversary, the same way
+publishing a ciphertext does not weaken a cipher whose key stays secret. The
+``trust_gated`` plugin takes the same stance when it separates
+``deterministic=True`` from its secure default.
 
-Where the randomness lives (and why the trace is still deterministic)
----------------------------------------------------------------------
+References
 
-The privacy is over the mechanism's coin flips, and those flips are drawn once —
-RAPPOR calls this *permanent randomized response* / memoization — from a keyed
-PRF over a per-instance ``seed``. An adversary who does not hold the seed sees
-only the published bits and faces advantage at most ``e^eps``; that is the
-threat model. Fixing ``seed`` fixes one realization of the coin flips, which is
-what makes a Tier-1 trace byte-identical on replay. It does **not** weaken the
-guarantee for a seed-less adversary, any more than publishing a ciphertext
-weakens a cipher whose key stays secret. (Same stance ``trust_gated`` takes when
-it separates ``deterministic=True`` from its secure default.)
+The mechanism composes two lines of prior work. Randomized response over the
+filter bits, and the memoization that fixes each instance's coins once, follow
+RAPPOR [2]. The membership-privacy goal and the differentially private Bloom
+filter construction follow Tirmazi [4], which builds on the adversarial Bloom
+filter model of Naor and Yogev [1] and its learned extension by Almashaqbeh,
+Bishop, and Tirmazi [3].
+
+[1] Moni Naor and Eylon Yogev. Bloom Filters in Adversarial Environments. 2014.
+    arXiv:1412.8356.
+[2] Úlfar Erlingsson, Vasyl Pihur, and Aleksandra Korolova. RAPPOR: Randomized
+    Aggregatable Privacy-Preserving Ordinal Response. ACM CCS, 2014.
+[3] Ghada Almashaqbeh, Allison Bishop, and Hayder Tirmazi. Adversary Resilient
+    Learned Bloom Filters. ASIACRYPT, 2025. arXiv:2409.06556.
+[4] Hayder Tirmazi. Adversarially Robust Bloom Filters: Privacy, Reductions, and
+    Open Problems. 2025. arXiv:2501.15751.
 
 Example::
 
     reg = DPBloomRegistry(seed=b"reg-42", epsilon=1.0, num_hashes=5, num_bits=4096)
     await reg.register(AgentCard(agent_id=AgentId("a1"), name="Seller", capabilities=["sell"]))
-    hits = await reg.lookup(Query(capabilities=["sell"]))       # true store, exact
-    observer_view = reg.published_index()                       # perturbed, epsilon-DP
-    maybe = reg.membership_query(observer_view, AgentId("a1"))  # noisy membership test
+    hits = await reg.lookup(Query(capabilities=["sell"]))
+    observer_view = reg.published_index()
+    maybe = reg.membership_query(observer_view, AgentId("a1"))
 """
 
 from __future__ import annotations
@@ -78,16 +86,16 @@ from dataclasses import dataclass
 from nest_core.types import AgentCard, AgentId, Query
 
 _PRF_DOMAIN = b"nest/dp_bloom/flip/1"
-"""Domain-separation tag mixed into the flip PRF so the seed cannot collide with
-any other seeded use of the same bytes elsewhere in the stack."""
+"""Domain-separation tag for the flip PRF. The tag stops the seed from colliding
+with any other seeded use of the same bytes in the stack."""
 
 
 def calibrate_flip_probability(epsilon: float, num_hashes: int) -> float:
     """Return the per-bit flip probability that achieves ``epsilon``-DP.
 
-    Inverts ``eps = k * ln((1 - p) / p)`` for ``p``. The unit of privacy is one
-    agent's membership (at most ``k`` set bits), so the budget is split evenly
-    across the ``k`` hashes by sequential composition.
+    The function inverts ``eps = k * ln((1 - p) / p)`` for ``p``. Sequential
+    composition splits the budget evenly across the ``k`` hashes, so the unit of
+    privacy is one agent's membership at its at most ``k`` set bits.
 
     Example::
 
@@ -106,9 +114,9 @@ def calibrate_flip_probability(epsilon: float, num_hashes: int) -> float:
 def epsilon_for(flip_probability: float, num_hashes: int) -> float:
     """Return the epsilon guaranteed by a given flip probability and ``k``.
 
-    Inverse of :func:`calibrate_flip_probability`; used by the adversarial
-    validator to check that a plugin's *claimed* budget matches the noise it
-    actually injects.
+    The function is the inverse of :func:`calibrate_flip_probability`. The
+    adversarial validator uses it to check that a plugin's claimed budget matches
+    the noise the plugin actually injects.
 
     Example::
 
@@ -128,9 +136,9 @@ def epsilon_for(flip_probability: float, num_hashes: int) -> float:
 class PublishedIndex:
     """The observer-facing, epsilon-DP membership index for a registry snapshot.
 
-    Carries the perturbed Bloom bits plus the public parameters needed to run a
-    membership query. It deliberately does **not** carry the true card store, the
-    seed, or the un-perturbed bits — that is the whole point of the boundary.
+    The index carries the perturbed Bloom bits and the public parameters a
+    membership query needs. The index omits the true card store, the seed, and
+    the unperturbed bits, which is the whole point of the boundary.
 
     Example::
 
@@ -147,11 +155,12 @@ class PublishedIndex:
 class DPBloomRegistry:
     """Registry whose published membership index is epsilon-differentially private.
 
-    Implements the :class:`~nest_core.layers.registry.Registry` protocol.
-    ``lookup``/``subscribe`` behave like the in-memory reference (exact, served
-    from the true store) so discovery keeps working for legitimate agents; the
-    differential privacy applies to :meth:`published_index` and
-    :meth:`membership_query`, the surface an observer actually sees.
+    The class implements the :class:`~nest_core.layers.registry.Registry`
+    protocol. ``lookup`` and ``subscribe`` behave like the in-memory reference
+    and serve exact results from the true store, so discovery keeps working for
+    legitimate agents. The differential privacy applies to
+    :meth:`published_index` and :meth:`membership_query`, the surface an observer
+    actually sees.
 
     Example::
 
@@ -179,8 +188,6 @@ class DPBloomRegistry:
         self._true_bits: list[bool] = [False] * num_bits
         self._subscribers: list[asyncio.Queue[AgentCard]] = []
 
-    # -- introspection --------------------------------------------------------
-
     @property
     def epsilon(self) -> float:
         """The privacy budget this registry's published index satisfies.
@@ -193,7 +200,7 @@ class DPBloomRegistry:
 
     @property
     def flip_probability(self) -> float:
-        """Per-bit randomized-response flip probability (calibrated from epsilon).
+        """Per-bit randomized-response flip probability, calibrated from epsilon.
 
         Example::
 
@@ -201,50 +208,47 @@ class DPBloomRegistry:
         """
         return self._flip_p
 
-    # -- Bloom hashing --------------------------------------------------------
-
     def _positions(self, token: str) -> list[int]:
         """Deterministic ``k`` bit positions for a membership token.
 
-        Double hashing over SHA-256 halves — no external RNG, so positions are a
-        pure function of the token and reproduce byte-for-byte across runs.
+        Double hashing over the two halves of a SHA-256 digest replaces an
+        external RNG, so the positions are a pure function of the token and
+        reproduce byte-for-byte across runs.
         """
         digest = hashlib.sha256(token.encode("utf-8")).digest()
         h1 = int.from_bytes(digest[:16], "big")
-        h2 = int.from_bytes(digest[16:], "big") | 1  # odd => full period
+        h2 = int.from_bytes(digest[16:], "big") | 1  # an odd step visits every bucket
         return [(h1 + i * h2) % self._num_bits for i in range(self._num_hashes)]
 
     @staticmethod
     def _tokens(card: AgentCard) -> list[str]:
-        """Membership tokens contributed by a card: the agent id and each capability.
+        """Membership tokens a card contributes: its agent id and each capability.
 
-        Capabilities are namespaced so ``cap:sell`` cannot collide with an agent
-        literally named ``sell``.
+        The ``cap:`` prefix namespaces capabilities so ``cap:sell`` cannot
+        collide with an agent literally named ``sell``.
         """
         tokens = [f"agent:{card.agent_id}"]
         tokens.extend(f"cap:{cap}" for cap in card.capabilities)
         return tokens
 
-    # -- randomized response --------------------------------------------------
-
     def _flip(self, position: int) -> bool:
-        """Return the permanent RR coin for one bit (True => flip that bit).
+        """Return the permanent randomized-response coin for one bit.
 
-        Keyed by the secret seed, so the coins are unpredictable to a seed-less
-        adversary yet reproducible for the trace. Memoized-by-construction: the
-        same ``(seed, position)`` always yields the same coin.
+        A ``True`` result means flip the bit. The secret seed keys the draw, so
+        the coins stay unpredictable to a seedless adversary and reproducible for
+        the trace. The draw is memoized by construction, so the same ``seed`` and
+        ``position`` always yield the same coin.
         """
         material = _PRF_DOMAIN + self._seed + b"|" + position.to_bytes(8, "big")
         draw = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
         return draw / 2**64 < self._flip_p
 
     def published_index(self) -> PublishedIndex:
-        """Return the epsilon-DP membership index an observer is allowed to read.
+        """Return the epsilon-DP membership index an observer may read.
 
-        Applies permanent randomized response to the true Bloom bits. Calling it
-        repeatedly on the same registry state returns identical bits (the coins
-        are memoized via the seed), so it does not leak extra information through
-        re-sampling.
+        The method applies permanent randomized response to the true Bloom bits.
+        Repeated calls on the same registry state return identical bits because
+        the seed memoizes the coins, so re-sampling leaks nothing extra.
 
         Example::
 
@@ -262,18 +266,16 @@ class DPBloomRegistry:
     def membership_query(self, index: PublishedIndex, agent: AgentId) -> bool:
         """Test whether ``agent`` looks present in a published index.
 
-        The honest membership test on a (perturbed) Bloom filter: report present
-        iff every hashed position is set. Noise makes this answer probabilistic —
-        that imprecision is exactly the privacy — so a single query is evidence,
-        not proof, of membership.
+        The test reports present when every hashed position is set, the standard
+        membership test on a Bloom filter. Noise makes the answer probabilistic,
+        and that imprecision is the privacy, so a single query is evidence rather
+        than proof of membership.
 
         Example::
 
             present = reg.membership_query(reg.published_index(), AgentId("a1"))
         """
         return all(index.bits[pos] for pos in self._positions(f"agent:{agent}"))
-
-    # -- Registry protocol ----------------------------------------------------
 
     async def register(self, card: AgentCard) -> None:
         """Register a card in the true store and fold it into the DP index.
@@ -290,7 +292,7 @@ class DPBloomRegistry:
             await q.put(card)
 
     async def lookup(self, query: Query) -> list[AgentCard]:
-        """Look up agents matching ``query`` (exact, from the true store).
+        """Look up agents matching ``query`` with exact results from the true store.
 
         Example::
 
@@ -319,11 +321,11 @@ class DPBloomRegistry:
     async def deregister(self, agent: AgentId) -> None:
         """Remove an agent from the true store.
 
-        Note: the DP index is monotone (bits are not cleared) because a Bloom
-        filter cannot un-set a bit shared with another member without corrupting
-        it. Deregistration therefore hides *future* lookups but leaves the
-        agent's historical membership bits in the index until the filter is
-        rebuilt — a deliberate, documented limitation, not a bug.
+        The DP index is monotone because a Bloom filter cannot clear a bit it
+        shares with another member without corrupting it. Deregistration hides
+        future lookups but leaves the agent's historical membership bits in the
+        index until the filter rebuilds. The residue is a documented limitation,
+        not a bug.
 
         Example::
 

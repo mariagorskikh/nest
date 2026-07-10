@@ -1,41 +1,38 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Adversarial validator for the ``dp_bloom`` registry: membership inference.
+"""Adversarial validator for the ``dp_bloom`` registry.
 
-The attack the default ``in_memory`` registry silently allows is **membership
-inference**: an adversary who can read the registry's observable membership
-surface decides, for a target agent, whether that agent is registered. Against a
-plain registry this is not an attack so much as a lookup — the surface *is* the
-member set, so the adversary is always right. That is the leak ``dp_bloom`` is
-built to bound.
+The attack the default ``in_memory`` registry allows is membership inference. An
+adversary reads the registry's observable membership surface and decides, for a
+target agent, whether that agent registered. Against a plain registry the task is
+a lookup rather than an attack. The observable surface is the member set, so the
+adversary is always right. Bounding that leak is what ``dp_bloom`` is built for.
+The framing follows the adversarial Bloom filter literature cited in
+:mod:`nest_plugins_reference.registry.dp_bloom`.
 
-The game (a standard DP membership-inference experiment)
---------------------------------------------------------
+The game
 
-For a fixed target agent, compare two neighboring worlds:
-
-* **present** — the registry holds a background set *plus* the target;
-* **absent**  — the registry holds only the background set.
-
-An oracle plays one world under one seed and returns the single bit the
-adversary observes: *does the target look registered?* Sweeping the seed bank
-estimates ``p1 = Pr[reported present | present]`` and
-``p0 = Pr[reported present | absent]``. The adversary's distinguishing power is
-the larger log-likelihood ratio across the two possible reports, which is
-exactly an empirical epsilon:
+For a fixed target agent the validator compares two neighboring worlds. In the
+present world the registry holds a background set and the target. In the absent
+world the registry holds only the background set. An oracle plays one world under
+one seed and returns the single bit the adversary observes, namely whether the
+target looks registered. Sweeping the seed bank estimates
+``p1 = Pr[reported present | present]`` and ``p0 = Pr[reported present | absent]``.
+The adversary's distinguishing power is the larger log-likelihood ratio across
+the two possible reports, which is an empirical epsilon.
 
     ``eps_hat = max( |ln(p1/p0)|, |ln((1-p1)/(1-p0))| )``
 
-By the post-processing property of differential privacy, any function of an
-``epsilon``-DP published index — and :meth:`DPBloomRegistry.membership_query` is
-one — is itself ``epsilon``-DP, so a correctly calibrated ``dp_bloom`` yields
-``eps_hat`` at or below its claimed budget (up to finite-sample slack). A registry
-that answers membership exactly yields ``p1 = 1, p0 = 0`` and an unbounded
-``eps_hat`` — it cannot satisfy any finite budget, which is the charter's bar for
-an adversarial validator that the reference plugin must fail.
+The membership query reads only an epsilon-DP published index, so by the
+post-processing property of differential privacy the query is itself epsilon-DP.
+A correctly calibrated ``dp_bloom`` therefore yields ``eps_hat`` at or below its
+claimed budget, allowing for finite-sample slack. A registry that answers
+membership exactly yields ``p1 = 1`` and ``p0 = 0`` and an unbounded ``eps_hat``.
+The exact registry cannot satisfy any finite budget, which is the charter's bar
+for an adversarial validator that the reference plugin must fail.
 
-Probabilities are Jeffreys-smoothed (add ``0.5``) so a deterministic leaker maps
-to a large-but-finite ``eps_hat`` rather than a raw division by zero, keeping the
-report a clean numeric comparison.
+The validator Jeffreys-smooths the probabilities by adding ``0.5`` to each count,
+so a deterministic leaker maps to a large but finite ``eps_hat`` rather than a raw
+division by zero, and the report stays a clean numeric comparison.
 
 Example::
 
@@ -52,19 +49,21 @@ from nest_plugins_reference.validators.gossip_validators import ValidatorReport
 
 MembershipOracle = Callable[[int, bool], bool]
 """Plays the game under one seed. ``oracle(seed, include_target)`` builds the
-registry (background set, plus the target iff ``include_target``) seeded by
-``seed`` and returns the membership bit an adversary observes for the target."""
+registry with the background set, adds the target when ``include_target`` is true,
+seeds the mechanism with ``seed``, and returns the membership bit an adversary
+observes for the target."""
 
 _DEFAULT_SEEDS = 400
-"""Seed-bank size. Large enough that ``p0 = Pr[present | absent]`` (roughly
-``p**k``) is estimated from several hits, small enough that the validator runs in
-well under a second on the tiny filters used in scenarios."""
+"""Seed-bank size. The bank is large enough to estimate
+``p0 = Pr[present | absent]``, which is roughly ``p**k``, from several hits, and
+small enough that the validator runs in well under a second on the tiny filters
+scenarios use."""
 
 _DEFAULT_SLACK = 1.0
-"""Additive tolerance on the epsilon bound, absorbing finite-sample variance and
-Jeffreys-smoothing bias. Comfortably separates a calibrated ``dp_bloom``
-(``eps_hat`` near the budget) from an exact registry (``eps_hat`` in the 6-7 range
-for this bank)."""
+"""Additive tolerance on the epsilon bound. The slack absorbs finite-sample
+variance and Jeffreys-smoothing bias. A calibrated ``dp_bloom`` sits near the
+budget while an exact registry sits in the 6 to 7 range for this bank, so the
+slack separates the two comfortably."""
 
 
 def _smoothed(hits: int, total: int) -> float:
@@ -75,8 +74,9 @@ def _smoothed(hits: int, total: int) -> float:
 def empirical_epsilon(hits_present: int, n_present: int, hits_absent: int, n_absent: int) -> float:
     """Return the empirical epsilon of a membership-inference game's counts.
 
-    ``hits_*`` count seeds under which the adversary saw *reported present*;
-    ``n_*`` are the seed totals for each world.
+    ``hits_present`` and ``hits_absent`` count the seeds under which the adversary
+    saw a reported-present outcome. ``n_present`` and ``n_absent`` are the seed
+    totals for each world.
 
     Example::
 
@@ -99,15 +99,15 @@ def check_membership_inference_bounded(
 ) -> ValidatorReport:
     """Assert a registry's membership surface leaks no more than ``claimed_epsilon``.
 
-    Runs the two-world game over seeds ``0 .. num_seeds - 1`` (deterministic, so
-    the report replays byte-identically) and passes iff the empirical epsilon is
-    within ``claimed_epsilon + slack``.
+    The check runs the two-world game over seeds ``0`` to ``num_seeds - 1``. The
+    sweep is deterministic, so the report replays byte-identically. The check
+    passes when the empirical epsilon is within ``claimed_epsilon + slack``.
 
-    * Against ``dp_bloom`` calibrated to ``claimed_epsilon`` the bound holds
-      (post-processing of an epsilon-DP index), so it **passes**.
-    * Against ``in_memory`` the target is reported present iff it is registered,
-      giving an unbounded empirical epsilon, so it **fails** — the validator
-      cannot be satisfied by the exact reference registry.
+    A ``dp_bloom`` calibrated to ``claimed_epsilon`` holds the bound because the
+    membership query is post-processing of an epsilon-DP index, so it passes. The
+    exact ``in_memory`` registry reports the target present exactly when it is
+    registered, which gives an unbounded empirical epsilon, so it fails. The exact
+    reference registry cannot satisfy the check.
 
     Example::
 

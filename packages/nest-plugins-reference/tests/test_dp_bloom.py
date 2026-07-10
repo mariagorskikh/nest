@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the ``dp_bloom`` differentially private registry and its validator.
 
-Covers four things: the epsilon<->flip-probability calibration is a correct
-inverse pair; legitimate ``lookup`` stays exact (differential privacy applies to
-the *published* index, not to in-registry discovery); the published index is
-byte-deterministic under a fixed seed and seed-sensitive across seeds; and the
-adversarial membership-inference validator PASSES ``dp_bloom`` while FAILING the
-exact ``in_memory`` reference — the charter's mandatory FAIL/PASS gate.
+The suite covers four properties. The epsilon and flip-probability calibration
+is a correct inverse pair. Legitimate ``lookup`` stays exact, since differential
+privacy applies to the published index and not to in-registry discovery. The
+published index is byte-deterministic under a fixed seed and seed-sensitive
+across seeds. The adversarial membership-inference validator passes ``dp_bloom``
+and fails the exact ``in_memory`` reference, which is the charter's mandatory
+fail-then-pass gate.
 """
 
 from __future__ import annotations
@@ -34,9 +35,6 @@ _BACKGROUND = [
 _TARGET = AgentCard(agent_id=AgentId("target"), name="Target", capabilities=["sell"])
 
 
-# -- calibration --------------------------------------------------------------
-
-
 def test_calibration_is_an_inverse_pair() -> None:
     p = calibrate_flip_probability(_EPS, _K)
     assert 0.0 < p < 0.5
@@ -54,9 +52,6 @@ def test_non_positive_epsilon_rejected(bad: float) -> None:
         calibrate_flip_probability(bad, _K)
 
 
-# -- functionality preserved --------------------------------------------------
-
-
 def test_lookup_is_exact_despite_privacy() -> None:
     reg = DPBloomRegistry(seed=b"s", epsilon=_EPS, num_hashes=_K, num_bits=_BITS)
 
@@ -68,9 +63,6 @@ def test_lookup_is_exact_despite_privacy() -> None:
 
     hits = asyncio.run(run())
     assert {c.agent_id for c in hits} == {c.agent_id for c in _BACKGROUND}
-
-
-# -- determinism --------------------------------------------------------------
 
 
 def _build_index_bits(seed: bytes) -> tuple[bool, ...]:
@@ -91,9 +83,6 @@ def test_published_index_is_deterministic_under_fixed_seed() -> None:
 def test_published_index_depends_on_seed() -> None:
     # Different secret seeds draw different randomized-response coins.
     assert _build_index_bits(b"seed-42") != _build_index_bits(b"seed-7")
-
-
-# -- adversarial FAIL/PASS gate ----------------------------------------------
 
 
 def _dp_bloom_oracle(seed: int, include_target: bool) -> bool:
