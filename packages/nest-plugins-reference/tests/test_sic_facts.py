@@ -273,8 +273,9 @@ json_value = st.recursive(
     | st.integers(min_value=-(2**53), max_value=2**53)
     | st.floats(allow_nan=False, allow_infinity=False)
     | st.text(max_size=12),
-    lambda children: st.lists(children, max_size=4)
-    | st.dictionaries(_ascii_key, children, max_size=4),
+    lambda children: (
+        st.lists(children, max_size=4) | st.dictionaries(_ascii_key, children, max_size=4)
+    ),
     max_leaves=12,
 )
 
