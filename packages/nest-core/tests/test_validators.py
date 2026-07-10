@@ -2145,6 +2145,7 @@ class TestValidatorRegistry:
             "failure_detection_forgery",
             "parc_migration",
             "rogue_trusted_agent",
+            "delegated_auth",
             "sybil_bond",
         }
         assert set(VALIDATORS.keys()) == expected

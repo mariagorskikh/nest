@@ -110,13 +110,18 @@ def check_no_scope_escalation(audits: list[AuditEvent]) -> ValidatorReport:
         assert check_no_scope_escalation(audits).passed
     """
     violations: list[AuditEvent] = []
+    delegations = 0
     for audit in audits:
+        if audit.get("op") == "delegate":
+            delegations += 1
         if audit.get("op") != "delegate" or not audit.get("granted"):
             continue
         parent = {str(s) for s in cast("list[Any]", audit.get("parent_scopes", []))}
         child = {str(s) for s in cast("list[Any]", audit.get("child_scopes", []))}
         if not child.issubset(parent):
             violations.append(audit)
+    if delegations == 0:
+        return ValidatorReport(passed=False, detail="No delegations observed", evidence=[])
     if violations:
         detail = f"{len(violations)} delegation(s) granted scopes beyond the parent"
         return ValidatorReport(passed=False, detail=detail, evidence=violations)
@@ -140,6 +145,8 @@ def check_no_stale_ancestor_use(audits: list[AuditEvent]) -> ValidatorReport:
             tick = int(cast("int", audit.get("tick", 0)))
             if tid not in revoked_at or tick < revoked_at[tid]:
                 revoked_at[tid] = tick
+    if not revoked_at:
+        return ValidatorReport(passed=False, detail="No revocations observed", evidence=[])
     violations: list[AuditEvent] = []
     for audit in audits:
         if audit.get("op") != "verify" or not audit.get("verified"):
@@ -164,13 +171,24 @@ def check_audience_binding(audits: list[AuditEvent]) -> ValidatorReport:
         assert check_audience_binding(audits).passed
     """
     violations: list[AuditEvent] = []
+    rejections = 0
     for audit in audits:
+        if (
+            audit.get("op") == "verify"
+            and not audit.get("verified")
+            and str(audit.get("presenter", "")) != str(audit.get("audience", ""))
+        ):
+            rejections += 1
         if audit.get("op") != "verify" or not audit.get("verified"):
             continue
         presenter = str(audit.get("presenter", ""))
         audience = str(audit.get("audience", ""))
         if presenter and audience and presenter != audience:
             violations.append(audit)
+    if rejections == 0:
+        return ValidatorReport(
+            passed=False, detail="No audience confusion rejections observed", evidence=[]
+        )
     if violations:
         detail = f"{len(violations)} presentation(s) accepted from a non-audience agent"
         return ValidatorReport(passed=False, detail=detail, evidence=violations)

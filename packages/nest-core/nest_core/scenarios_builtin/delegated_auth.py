@@ -193,7 +193,9 @@ class IntermediaryAgent(StateMachineAgent):
             return
         try:
             result = await auth.verify(self._my_token, presenter=self._id)
-            await ctx.broadcast(f"auth:verify:OK:{self._id}:{','.join(sorted(result.scopes))}".encode())
+            await ctx.broadcast(
+                f"auth:verify:OK:{self._id}:{','.join(sorted(result.scopes))}".encode()
+            )
         except Exception as exc:
             await ctx.broadcast(f"auth:verify:FAIL:{self._id}:{type(exc).__name__}".encode())
 
@@ -243,10 +245,14 @@ class LeafAgent(StateMachineAgent):
                 try:
                     await auth.verify(self._my_token, presenter=AgentId("wrong-audience"))
                 except Exception as exc:
-                    await ctx.broadcast(f"auth:verify:FAIL:{self._id}:{type(exc).__name__}".encode())
+                    await ctx.broadcast(
+                        f"auth:verify:FAIL:{self._id}:{type(exc).__name__}".encode()
+                    )
 
             result = await auth.verify(self._my_token, presenter=self._id)
-            await ctx.broadcast(f"auth:verify:OK:{self._id}:{','.join(sorted(result.scopes))}".encode())
+            await ctx.broadcast(
+                f"auth:verify:OK:{self._id}:{','.join(sorted(result.scopes))}".encode()
+            )
         except Exception as exc:
             await ctx.broadcast(f"auth:verify:FAIL:{self._id}:{type(exc).__name__}".encode())
 
@@ -256,9 +262,7 @@ class LeafAgent(StateMachineAgent):
 # ---------------------------------------------------------------------------
 
 
-def delegated_auth_factory(
-    config: ScenarioConfig, plugins: dict[str, Any]
-) -> dict[AgentId, Any]:
+def delegated_auth_factory(config: ScenarioConfig, plugins: dict[str, Any]) -> dict[AgentId, Any]:
     """Build the 16-agent delegation-tree fleet.
 
     Role layout from the YAML:
@@ -275,7 +279,7 @@ def delegated_auth_factory(
 
     auth_cls = plugins.get("auth")
     if auth_cls is not None and isinstance(auth_cls, type):
-        plugins["auth"] = auth_cls()
+        plugins["auth"] = auth_cls(clock=0.0)
 
     # Collect IDs by role
     coord_ids: list[AgentId] = []

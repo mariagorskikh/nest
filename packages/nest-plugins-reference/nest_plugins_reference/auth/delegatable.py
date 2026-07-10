@@ -2,15 +2,15 @@
 """Delegatable capability tokens with cascading revocation.
 
 **Persona**: `cybersec-whitehat`
-**Threat Model**: Nanda Town is a zero-trust environment where any sub-agent 
-may be compromised or malicious. A robust Auth layer must assume intermediaries 
+**Threat Model**: Nanda Town is a zero-trust environment where any sub-agent
+may be compromised or malicious. A robust Auth layer must assume intermediaries
 will attempt privilege escalation, replay attacks, and token exfiltration.
 
-This module implements macaroon-style HMAC-chained delegation to mathematically 
-guarantee the principle of least privilege. A root authority issues a root token; 
-any holder of a token can mint a child token whose scopes are a strict subset and 
-whose TTL is at most the parent's remaining TTL. Revoking any ancestor in the 
-chain automatically invalidates all its descendants — without contacting the 
+This module implements macaroon-style HMAC-chained delegation to mathematically
+guarantee the principle of least privilege. A root authority issues a root token;
+any holder of a token can mint a child token whose scopes are a strict subset and
+whose TTL is at most the parent's remaining TTL. Revoking any ancestor in the
+chain automatically invalidates all its descendants — without contacting the
 original issuer — because each child's HMAC is anchored to its parent's fingerprint.
 
 Three critical attack vectors are provably mitigated:
@@ -46,7 +46,6 @@ import json
 from typing import Any
 
 from nest_core.types import AgentId, AuthContext, Token
-
 
 # ---------------------------------------------------------------------------
 # Typed exceptions

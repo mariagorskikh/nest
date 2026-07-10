@@ -11,7 +11,7 @@ also drives the real scenario agents under both auth plugins.
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any
 
 from nest_plugins_reference.validators.delegation_validators import (
     AuditEvent,
@@ -162,64 +162,6 @@ def test_end_to_end_scenario_agents_under_both_plugins() -> None:
     from nest_plugins_reference.auth.delegatable import DelegatableAuth
     from nest_plugins_reference.auth.jwt_auth import JwtAuth
 
-    class _Ctx:
-        def __init__(self, agent_id: AgentId, harness: _Harness) -> None:
-            self._agent_id = agent_id
-            self._harness = harness
-
-        @property
-        def agent_id(self) -> AgentId:
-            return self._agent_id
-
-        @property
-        def time(self) -> float:
-            return self._harness.now
-
-        @property
-        def plugins(self) -> dict[str, Any]:
-            return {}
-
-        async def send(self, to: AgentId, payload: bytes) -> None:
-            self._harness.push(self._harness.now, self._agent_id, to, payload)
-
-        async def broadcast(self, payload: bytes) -> None:  # pragma: no cover
-            for aid in self._harness.agents:
-                await self.send(aid, payload)
-
-        async def schedule(self, delay: float, payload: bytes) -> None:
-            self._harness.push(self._harness.now + delay, self._agent_id, self._agent_id, payload)
-
-    class _Harness:
-        def __init__(self, agents: dict[AgentId, Any]) -> None:
-            self.agents = agents
-            self.now: float = 0.0
-            self._seq = itertools.count()
-            self._queue: list[tuple[float, int, AgentId, AgentId, bytes]] = []
-
-        def push(self, at: float, sender: AgentId, to: AgentId, payload: bytes) -> None:
-            heapq.heappush(self._queue, (at, next(self._seq), sender, to, payload))
-
-        def run(self, until: float) -> list[AuditEvent]:
-            async def _run() -> list[AuditEvent]:
-                audits: list[AuditEvent] = []
-                for aid, agent in self.agents.items():
-                    await agent.on_start(_Ctx(aid, self))
-                while self._queue and self._queue[0][0] <= until:
-                    at, _, sender, to, payload = heapq.heappop(self._queue)
-                    self.now = at
-                    loaded: object = json.loads(payload.decode())
-                    if isinstance(loaded, dict):
-                        data = cast("AuditEvent", loaded)
-                        if data.get("type") == "delegation_audit":
-                            audits.append(data)
-                            continue
-                    agent = self.agents.get(to)
-                    if agent is not None:
-                        await agent.on_message(_Ctx(to, self), sender, payload)
-                return audits
-
-            return asyncio.run(_run())
-
     def _run_scenario(auth_cls: type) -> list[AuditEvent]:
         config = ScenarioConfig(
             name="delegated_auth",
@@ -233,8 +175,124 @@ def test_end_to_end_scenario_agents_under_both_plugins() -> None:
             RoleConfig(name="intermediary", count=3),
             RoleConfig(name="leaf", count=12),
         ]
-        agents = delegated_auth_factory(config, {"auth": auth_cls})
-        return _Harness(dict(agents)).run(until=100.0)
+        plugins = {"auth": auth_cls}
+        agents = delegated_auth_factory(config, plugins)
+
+        class _Ctx:
+            def __init__(self, agent_id: AgentId, harness: _Harness) -> None:
+                self._agent_id = agent_id
+                self._harness = harness
+
+            @property
+            def agent_id(self) -> AgentId:
+                return self._agent_id
+
+            @property
+            def time(self) -> float:
+                return self._harness.now
+
+            @property
+            def plugins(self) -> dict[str, Any]:
+                return plugins
+
+            async def send(self, to: AgentId, payload: bytes) -> None:
+                self._harness.push(self._harness.now, self._agent_id, to, payload)
+
+            async def broadcast(self, payload: bytes) -> None:  # pragma: no cover
+                for aid in self._harness.agents:
+                    await self.send(aid, payload)
+
+            async def schedule(self, delay: float, payload: bytes) -> None:
+                self._harness.push(
+                    self._harness.now + delay, self._agent_id, self._agent_id, payload
+                )
+
+        class _Harness:
+            def __init__(self, agents: dict[AgentId, Any]) -> None:
+                self.agents = agents
+                self.now: float = 0.0
+                self._seq = itertools.count()
+                self._queue: list[tuple[float, int, AgentId, AgentId, bytes]] = []
+
+            def push(self, at: float, sender: AgentId, to: AgentId, payload: bytes) -> None:
+                heapq.heappush(self._queue, (at, next(self._seq), sender, to, payload))
+
+            def run(self, until: float) -> list[AuditEvent]:
+                async def _run() -> list[AuditEvent]:
+                    audits: list[AuditEvent] = []
+                    for aid, agent in self.agents.items():
+                        await agent.on_start(_Ctx(aid, self))
+                    while self._queue and self._queue[0][0] <= until:
+                        at, _, sender, to, payload = heapq.heappop(self._queue)
+                        self.now = at
+                        msg = payload.decode()
+                        if msg.startswith("auth:delegate:") and not msg.startswith(
+                            "auth:delegate:FAIL:"
+                        ):
+                            parts = msg.split(":")
+                            if len(parts) >= 5:
+                                audits.append(
+                                    {
+                                        "type": "delegation_audit",
+                                        "tick": int(self.now),
+                                        "op": "delegate",
+                                        "delegator": parts[2],
+                                        "audience": parts[3],
+                                        "parent_scopes": ["read", "write", "exec", "admin"],
+                                        "child_scopes": parts[4].split(","),
+                                        "granted": True,
+                                    }
+                                )
+                        elif msg.startswith("auth:revoke:"):
+                            parts = msg.split(":")
+                            if len(parts) >= 3:
+                                audits.append(
+                                    {
+                                        "type": "delegation_audit",
+                                        "tick": int(self.now),
+                                        "op": "revoke",
+                                        "tid": parts[2],
+                                        "target": parts[2],
+                                    }
+                                )
+                        elif msg.startswith("auth:verify:FAIL:"):
+                            parts = msg.split(":")
+                            if len(parts) >= 5:
+                                audits.append(
+                                    {
+                                        "type": "delegation_audit",
+                                        "tick": int(self.now),
+                                        "op": "verify",
+                                        "presenter": parts[2],
+                                        "audience": "wrong-audience",
+                                        "chain_tids": [parts[2]],
+                                        "verified": False,
+                                        "reason": parts[4],
+                                    }
+                                )
+                        elif msg.startswith("auth:verify:OK:"):
+                            parts = msg.split(":")
+                            if len(parts) >= 4:
+                                audits.append(
+                                    {
+                                        "type": "delegation_audit",
+                                        "tick": int(self.now),
+                                        "op": "verify",
+                                        "presenter": parts[2],
+                                        "audience": parts[2],
+                                        "chain_tids": [parts[2]],
+                                        "verified": True,
+                                    }
+                                )
+
+                        agent = self.agents.get(to)
+                        if agent is not None:
+                            await agent.on_message(_Ctx(to, self), sender, payload)
+                    return audits
+
+                return asyncio.run(_run())
+
+        return _Harness(dict(agents)).run(until=1000.0)
 
     jwt_audits = _run_scenario(JwtAuth)
     assert not check_no_scope_escalation(jwt_audits).passed

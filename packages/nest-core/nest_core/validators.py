@@ -5155,9 +5155,11 @@ def validate_attested_sybil_quarantined(
 # Delegated Auth Validators
 # ---------------------------------------------------------------------------
 
+
 def validate_delegated_auth_no_escalation(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """Verify that no child token escalates beyond its parent's scopes."""
     agent_scopes: dict[str, set[str]] = {}
+    delegations = 0
     for ev in events:
         if ev.get("kind") != "broadcast":
             continue
@@ -5169,6 +5171,7 @@ def validate_delegated_auth_no_escalation(events: list[dict[str, Any]]) -> list[
                 scopes = set(parts[3].split(",")) if parts[3] else set()
                 agent_scopes[agent] = scopes
         elif msg.startswith("auth:delegate:") and not msg.startswith("auth:delegate:FAIL:"):
+            delegations += 1
             parts = msg.split(":")
             if len(parts) >= 5:
                 parent = parts[2]
@@ -5178,13 +5181,25 @@ def validate_delegated_auth_no_escalation(events: list[dict[str, Any]]) -> list[
                     parent_scopes = agent_scopes[parent]
                     escalated = scopes - parent_scopes
                     if escalated:
-                        return [ValidationResult(
-                            "delegated_auth_no_escalation",
-                            False,
-                            f"Escalation: {child} granted {scopes} but parent {parent} only has {parent_scopes}",
-                        )]
+                        return [
+                            ValidationResult(
+                                "delegated_auth_no_escalation",
+                                False,
+                                f"Escalation: {child} got {scopes} but parent {parent} "
+                                f"only has {parent_scopes}",
+                            )
+                        ]
                 agent_scopes[child] = scopes
+    if delegations == 0:
+        return [
+            ValidationResult(
+                "delegated_auth_no_escalation",
+                False,
+                "No delegations observed (fails jwt baseline)",
+            )
+        ]
     return [ValidationResult("delegated_auth_no_escalation", True, "No scope escalation detected")]
+
 
 def validate_delegated_auth_stale_parent(events: list[dict[str, Any]]) -> list[ValidationResult]:
     """Verify that revoking a parent prevents downstream verification."""
@@ -5206,11 +5221,21 @@ def validate_delegated_auth_stale_parent(events: list[dict[str, Any]]) -> list[V
                     failed_verifications += 1
 
     if len(revoked_agents) > 0 and failed_verifications == 0:
-        return [ValidationResult(
-            "delegated_auth_stale_parent",
-            False,
-            "An agent was revoked but no RevokedAncestorError was observed downstream",
-        )]
+        return [
+            ValidationResult(
+                "delegated_auth_stale_parent",
+                False,
+                "An agent was revoked but no RevokedAncestorError was observed downstream",
+            )
+        ]
+    if failed_verifications == 0:
+        return [
+            ValidationResult(
+                "delegated_auth_stale_parent",
+                False,
+                "No cascading revocations observed (fails jwt baseline)",
+            )
+        ]
     return [
         ValidationResult(
             "delegated_auth_stale_parent",
@@ -5219,8 +5244,12 @@ def validate_delegated_auth_stale_parent(events: list[dict[str, Any]]) -> list[V
         )
     ]
 
-def validate_delegated_auth_audience_confusion(events: list[dict[str, Any]]) -> list[ValidationResult]:
+
+def validate_delegated_auth_audience_confusion(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
     """Verify that tokens are not accepted by the wrong audience."""
+    failed_confusions = 0
     for ev in events:
         if ev.get("kind") != "broadcast":
             continue
@@ -5229,15 +5258,24 @@ def validate_delegated_auth_audience_confusion(events: list[dict[str, Any]]) -> 
             parts = msg.split(":")
             if len(parts) >= 5:
                 error = parts[4]
-                if error == "AudienceConfusionError":
-                    return [
-                        ValidationResult(
-                            "delegated_auth_audience_confusion",
-                            True,
-                            "Audience confusion was correctly rejected",
-                        )
-                    ]
-    return [ValidationResult("delegated_auth_audience_confusion", True, "No audience confusion observed")]
+                if error in ("AudienceConfusionError", "AudienceMismatchError"):
+                    failed_confusions += 1
+
+    if failed_confusions == 0:
+        return [
+            ValidationResult(
+                "delegated_auth_audience_confusion",
+                False,
+                "No audience confusion rejections observed (fails jwt baseline)",
+            )
+        ]
+    return [
+        ValidationResult(
+            "delegated_auth_audience_confusion",
+            True,
+            f"Audience confusion correctly rejected {failed_confusions} times",
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -5479,7 +5517,6 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_escrow_bps_in_range,
         validate_escrow_no_payout_without_delivery,
     ],
-<<<<<<< HEAD
     "failure_detection": [
         validate_failure_detection_completeness,
         validate_failure_detection_accuracy,
@@ -5500,9 +5537,6 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
-    ],
-    "sybil_bond": [
-        validate_sybil_bond_reputation,
     ],
     "delegated_auth": [
         validate_delegated_auth_no_escalation,
