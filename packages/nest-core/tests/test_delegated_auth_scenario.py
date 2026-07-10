@@ -123,6 +123,4 @@ class TestDeterminism:
         await ScenarioRunner(_config(t2, seed=42)).run()
         h1 = hashlib.sha256(t1.read_bytes()).hexdigest()
         h2 = hashlib.sha256(t2.read_bytes()).hexdigest()
-        print(f"Run 1 sha256: {h1}")
-        print(f"Run 2 sha256: {h2}")
         assert h1 == h2, "traces differ — token IDs or timestamps are non-deterministic"
