@@ -965,16 +965,6 @@ class AttestedPeeringTrust:
         return agent in self._attested
 
     @property
-    def attested_peers(self) -> frozenset[AgentId]:
-        """Peers whose handshake verdict was ALLOW.
-
-        Example::
-
-            assert AgentId("a1") in trust.attested_peers
-        """
-        return frozenset(self._attested)
-
-    @property
     def quarantined_count(self) -> int:
         """How many evidence reports were rejected as coming from unattested peers.
 

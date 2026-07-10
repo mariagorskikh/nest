@@ -245,6 +245,78 @@ Spend *real* bond, gain real influence — intended ("most at stake, most say"),
 [`sybil_bond.yaml`](../../scenarios/sybil_bond.yaml) · `sybil_bond_*` in
 [`validators.py`](../../packages/nest-core/nest_core/validators.py)
 
+## `attested_peering` — verify a peer *before* its evidence counts
+
+Every other plugin in this layer scores what an agent **did**. `attested_peering`
+asks the prior question — *is the reporter who it claims to be, and should its
+evidence count at all?* — and answers it with a mutual, replay-proof handshake
+before any `report()` is admitted. Under `score_average` a freshly minted Sybil
+can file unlimited reports and poison a victim's reputation; here an unattested
+reporter's evidence is quarantined, never scored. This is a **composition of the
+Identity and Trust layers**: the handshake is a port of LibreSynergy's production
+mesh-federation gate.
+
+**The three-question handshake** (`hail` → `vouch` → `seal`), each question a
+distinct attestation:
+
+1. **Friend or foe?** — the peer proves possession of the private key for the
+   identity it presents by signing *this session's transcript* (both nonces +
+   both passport hashes), and its `AgentFactsCard` must be authentic (self
+   signature + operator delegation). Signing the transcript rather than a bare
+   nonce closes the splice/cross-session-replay window: a stolen passport with
+   the wrong key, and a genuine seal replayed into another session, both fail.
+2. **Can I trust you with my data?** — an optional, nonce-bound signed boot quote
+   over the peer's measured configuration (a deterministic stand-in for a TPM
+   measured-boot quote), checked against the verifier's known-good allow-list.
+3. **Who do you work for?** — a named operator must have delegated authority to
+   the agent via a signed delegation in its passport, and that operator must be
+   on the verifier's trusted-operator roster.
+
+Only an `ALLOW` verdict admits a peer to the attested set; `report()` from anyone
+else is quarantined and surfaced in the trace. Untrusted wire decoding is total —
+a malformed frame yields `DENY`, never an unhandled exception in the verifier.
+
+**Determinism.** Ed25519 is deterministic by construction (RFC 8032); seeds are
+`sha256(seed || agent_id)`, nonces come from a per-instance seeded `random.Random`,
+and the module reads no clock — so a Tier-1 run is byte-identical under a fixed
+seed. No `os.urandom` / `time.time` / `subprocess`.
+
+**Quickstart.**
+
+```python
+from nest_plugins_reference.trust.attested_peering import AttestedPeeringTrust
+from nest_core.types import AgentId
+
+verifier = AttestedPeeringTrust(agent_id=AgentId("observer"), seed=b"s")
+peer = AttestedPeeringTrust(agent_id=AgentId("a1"), seed=b"s", operator_seed=b"op")
+verifier.trust_operator(peer.operator_id, peer.operator_public_key)
+
+hail = peer.make_hail(report_kind="positive")
+vouch = verifier.make_vouch(hail, session_key=AgentId("a1"))
+seal = peer.make_seal(vouch)
+assert verifier.evaluate_seal(AgentId("a1"), seal).decision == "ALLOW"
+```
+
+Or in a scenario: `trust: attested_peering`.
+
+**The `attested_peering` scenario.** A Sybil and an honest, delegated peer both
+try to file reports against a victim. Swap `trust:` and the validator flips:
+
+```
+score_average → Sybil evidence admitted → FAIL
+attested_peering → Sybil quarantined, only attested evidence scores → PASS
+```
+
+The adversarial validator `attested_sybil_quarantined` FAILS under the baseline
+and PASSES under `attested_peering` (seeds 42/7/1337), counting DENY verdicts and
+admitted non-attested reporters straight from the trace.
+
+**Source:**
+[`trust/attested_peering.py`](../../packages/nest-plugins-reference/nest_plugins_reference/trust/attested_peering.py) ·
+[`attested_peering.yaml`](../../scenarios/attested_peering.yaml) ·
+`attested_sybil_quarantined` in
+[`validators.py`](../../packages/nest-core/nest_core/validators.py).
+
 ## Writing your own
 
 See [`writing-a-plugin.md`](../writing-a-plugin.md). Register under entry point group `nest.plugins.trust`.
