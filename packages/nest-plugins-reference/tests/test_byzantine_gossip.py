@@ -45,7 +45,7 @@ def test_resolves_and_conforms() -> None:
     cls = PluginRegistry().resolve("registry", "byzantine_gossip")
     assert cls is ByzantineGossipRegistry
     net = GossipNetwork(agent_ids=[AgentId("a"), AgentId("b")])
-    plugin_cls = cast(type[ByzantineGossipRegistry], cls)
+    plugin_cls = cast("type[ByzantineGossipRegistry]", cls)
     reg = plugin_cls(AgentId("a"), net, DidKeyIdentity(AgentId("a"), seed=b"s"))
     assert isinstance(reg, Registry)
 
