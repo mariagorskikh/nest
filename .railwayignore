@@ -6,3 +6,11 @@ node_modules
 /traces
 __pycache__
 *.pyc
+/packages
+/scripts
+/docs
+/scenarios
+/templates
+/examples
+/NandaTown.png
+/uv.lock
