@@ -13,7 +13,7 @@ Example::
         provider=AgentId("provider"),
         price=Money(amount=50),
     )
-    await payments.pay(AgentId("provider"), Money(amount=50), PaymentRef("p1"))
+    await payments.open_pull_escrow(AgentId("provider"), Money(amount=50), PaymentRef("p1"))
     await payments.fulfill(PaymentRef("p1"))
 """
 
@@ -132,7 +132,9 @@ class EMPICPaymentRecord:
 class EMPICEscrowPayments:
     """Deterministic EMPIC-shaped payment adapter for Nanda Town.
 
-    Pull payments escrow funds until a consumer accepts provider data and calls
+    Plain ``pay`` follows the generic Nanda Town ``Payments`` contract and
+    confirms immediately. EMPIC pull escrows use ``open_pull_escrow`` and
+    release funds only after a consumer accepts provider data and calls
     ``fulfill``. Pubsub streams pre-fund a maximum amount, release one tick of
     payment for each accepted delivery, and refund unused escrow on close.
 
@@ -141,7 +143,7 @@ class EMPICEscrowPayments:
         pay = EMPICEscrowPayments(AgentId("buyer"), initial_balance=1000)
         receipt = await pay.pay(AgentId("seller"), Money(amount=25), PaymentRef("p1"))
         assert receipt.amount.amount == 25
-        assert await pay.verify_payment(PaymentRef("p1")) is PaymentStatus.PENDING
+        assert await pay.verify_payment(PaymentRef("p1")) is PaymentStatus.CONFIRMED
     """
 
     def __init__(
@@ -247,14 +249,56 @@ class EMPICEscrowPayments:
         *,
         service_id: ServiceRef | None = None,
     ) -> Receipt:
-        """Create a pull escrow payment to a provider.
+        """Execute a generic immediate payment.
+
+        When ``service_id`` is provided, this delegates to ``open_pull_escrow``
+        for backwards-compatible EMPIC scenario support. Generic callers that
+        use only the ``Payments`` protocol receive immediate settlement.
+
+        Example::
+
+            await payments.pay(
+                AgentId("provider"),
+                Money(amount=50),
+                PaymentRef("pull-1"),
+            )
+        """
+        if service_id is not None:
+            return await self.open_pull_escrow(to, amount, ref, service_id=service_id)
+
+        self._validate_new_payment(to, amount.amount, ref)
+        self._move(self._agent_id, to, amount.amount)
+        record = EMPICPaymentRecord(
+            ref=ref,
+            payer=self._agent_id,
+            payee=to,
+            amount=amount,
+            mode="pull",
+            status=PaymentStatus.CONFIRMED,
+            escrow_id=f"generic:{ref}",
+            max_total=amount.amount,
+            released=amount.amount,
+            metadata={"settlement": "immediate"},
+        )
+        self._payments[ref] = record
+        return Receipt(ref=ref, payer=self._agent_id, payee=to, amount=amount)
+
+    async def open_pull_escrow(
+        self,
+        to: AgentId,
+        amount: Money,
+        ref: PaymentRef,
+        *,
+        service_id: ServiceRef | None = None,
+    ) -> Receipt:
+        """Create an EMPIC pull escrow payment to a provider.
 
         The payer's balance moves into the escrow account. Provider credit only
         happens after ``fulfill``.
 
         Example::
 
-            await payments.pay(
+            await payments.open_pull_escrow(
                 AgentId("provider"),
                 Money(amount=50),
                 PaymentRef("pull-1"),
