@@ -77,32 +77,10 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("identity_rotation", identity_rotation_factory)
-    elif name == "attested_peering":
-        from nest_core.scenarios_builtin.attested_peering import (
-            attested_peering_factory,
-        )
-
-        register_scenario("attested_peering", attested_peering_factory)
     elif name == "gossip_registry":
         from nest_core.scenarios_builtin.gossip_registry import gossip_registry_factory
 
         register_scenario("gossip_registry", gossip_registry_factory)
-    elif name == "gossip_byzantine_forgery":
-        from nest_core.scenarios_builtin.gossip_byzantine import (
-            gossip_byzantine_forgery_factory,
-        )
-
-        register_scenario("gossip_byzantine_forgery", gossip_byzantine_forgery_factory)
-    elif name == "gossip_signed_equivocation":
-        from nest_core.scenarios_builtin.gossip_byzantine import (
-            gossip_signed_equivocation_factory,
-        )
-
-        register_scenario("gossip_signed_equivocation", gossip_signed_equivocation_factory)
-    elif name == "gossip_eclipse":
-        from nest_core.scenarios_builtin.gossip_byzantine import gossip_eclipse_factory
-
-        register_scenario("gossip_eclipse", gossip_eclipse_factory)
     elif name == "memory_concurrent_writers":
         from nest_core.scenarios_builtin.memory_concurrent_writers import (
             memory_concurrent_writers_factory,

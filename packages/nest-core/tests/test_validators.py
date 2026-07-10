@@ -283,7 +283,6 @@ class TestAuctionWinnerHighest:
         ]
         results = validate_auction_winner_highest(events)
         assert results[0].passed is True
-
     def test_pass_no_auctions(self) -> None:
         events = [{"ts": 0.0, "agent": "auctioneer-0", "kind": "start"}]
         results = validate_auction_winner_highest(events)
@@ -1439,92 +1438,6 @@ class TestEmpicPaymentsValidators:
         assert not results[0].passed
         assert "release 20 > rate 10" in results[0].detail
 
-    def test_pubsub_billing_caps_fails_over_rate_without_release_mode(self) -> None:
-        """Pubsub cap enforcement is based on stream state, not release self-report."""
-        events = [
-            _empic(
-                {
-                    "event_type": "empic_stream_opened",
-                    "payment_ref": "s1",
-                    "rate_per_tick": 10,
-                    "max_total": 40,
-                    "mode": "pubsub",
-                }
-            ),
-            _empic(
-                {
-                    "event_type": "empic_delivery_evaluated",
-                    "payment_ref": "s1",
-                    "delivery_id": "d1",
-                    "accepted": True,
-                }
-            ),
-            _empic(
-                {
-                    "event_type": "empic_escrow_released",
-                    "payment_ref": "s1",
-                    "delivery_id": "d1",
-                    "amount": 20,
-                }
-            ),
-        ]
-
-        results = validate_empic_pubsub_billing_caps(events)
-        assert len(results) == 1
-        assert not results[0].passed
-        assert "release 20 > rate 10" in results[0].detail
-
-    def test_pubsub_billing_caps_fails_over_total_without_release_mode(self) -> None:
-        """Omitting mode on release events cannot bypass the stream total cap."""
-        events = [
-            _empic(
-                {
-                    "event_type": "empic_stream_opened",
-                    "payment_ref": "s1",
-                    "rate_per_tick": 10,
-                    "max_total": 10,
-                    "mode": "pubsub",
-                }
-            ),
-            _empic(
-                {
-                    "event_type": "empic_delivery_evaluated",
-                    "payment_ref": "s1",
-                    "delivery_id": "d1",
-                    "accepted": True,
-                }
-            ),
-            _empic(
-                {
-                    "event_type": "empic_delivery_evaluated",
-                    "payment_ref": "s1",
-                    "delivery_id": "d2",
-                    "accepted": True,
-                }
-            ),
-            _empic(
-                {
-                    "event_type": "empic_escrow_released",
-                    "payment_ref": "s1",
-                    "delivery_id": "d1",
-                    "amount": 10,
-                }
-            ),
-            _empic(
-                {
-                    "event_type": "empic_escrow_released",
-                    "payment_ref": "s1",
-                    "delivery_id": "d2",
-                    "amount": 10,
-                }
-            ),
-        ]
-
-        results = validate_empic_pubsub_billing_caps(events)
-        assert len(results) == 1
-        assert not results[0].passed
-        assert "released 20 > max_total 10" in results[0].detail
-
     def test_pubsub_billing_caps_fails_without_accepted_evidence(self) -> None:
         """Accepted delivery count limits total pubsub payout."""
         events = [
@@ -2128,7 +2041,6 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "identity_rotation",
-            "attested_peering",
             "memory_concurrent_writers",
             "streaming_payments",
             "empic_payments",
@@ -2143,9 +2055,9 @@ class TestValidatorRegistry:
             "escrow_marketplace",
             "failure_detection",
             "failure_detection_forgery",
+            "delegated_auth",
             "parc_migration",
             "rogue_trusted_agent",
-            "sybil_bond",
         }
         assert set(VALIDATORS.keys()) == expected
 

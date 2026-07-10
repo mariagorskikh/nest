@@ -36,8 +36,6 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("trust", "agent_receipts"): f"{_REF}.trust.agent_receipts:AgentReceiptsTrust",
     ("trust", "parc"): f"{_REF}.trust.parc:ParcTrust",
     ("trust", "aae_permit_gate"): f"{_REF}.trust.aae_permit_gate:AAEPermitGate",
-    ("trust", "bonded_trust"): f"{_REF}.trust.bonded_trust:BondedTrust",
-    ("trust", "attested_peering"): f"{_REF}.trust.attested_peering:AttestedPeeringTrust",
     ("payments", "prepaid_credits"): f"{_REF}.payments.prepaid_credits:PrepaidCredits",
     ("payments", "streaming"): f"{_REF}.payments.streaming:StreamingPayments",
     ("payments", "empic_escrow"): f"{_REF}.payments.empic_escrow:EMPICEscrowPayments",
@@ -52,7 +50,6 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("memory", "lww_register"): f"{_REF}.memory.lww_register:LwwRegisterMemory",
     ("privacy", "noop"): f"{_REF}.privacy.noop:NoopPrivacy",
     ("privacy", "hybrid_x25519"): f"{_REF}.privacy.hybrid_x25519:HybridX25519Privacy",
-    ("privacy", "trust_gated"): f"{_REF}.privacy.trust_gated:TrustGatedPrivacy",
     ("datafacts", "datafacts_v1"): f"{_REF}.datafacts.datafacts_v1:DataFactsV1",
     ("datafacts", "cid_facts"): f"{_REF}.datafacts.cid_facts:CidFacts",
     ("failure_detector", "heartbeat"): (

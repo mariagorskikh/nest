@@ -99,7 +99,9 @@ async def _delegate(
     delegate = getattr(auth, "delegate", None)
     if callable(delegate):
         try:
-            pending = cast("Awaitable[Token]", delegate(parent_token, audience, scopes, ttl))
+            pending = cast(
+                "Awaitable[Token]", delegate(parent_token, str(audience), frozenset(scopes), ttl)
+            )
             return await pending
         except ValueError:
             return None
@@ -113,11 +115,10 @@ async def _verify(auth: Any, token: Token, presenter: AgentId) -> bool:
 
         ok = await _verify(auth, token, AgentId("leaf-0"))
     """
-    verify_presented = getattr(auth, "verify_presented", None)
     try:
-        if callable(verify_presented):
-            await cast("Awaitable[object]", verify_presented(token, presenter))
-        else:
+        try:
+            await auth.verify(token, caller=presenter)
+        except TypeError:
             await auth.verify(token)
     except ValueError:
         return False

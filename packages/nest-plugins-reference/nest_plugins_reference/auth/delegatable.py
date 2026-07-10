@@ -1,318 +1,313 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Delegatable capability tokens with cascading revocation (macaroon-style).
+"""Delegatable capability tokens with cascading revocation.
 
-A holder of a token can mint a narrower child token for another agent
-*without* contacting the issuer, by HMAC-chaining the child segment to the
-parent signature (Birgisson et al., 2014).  Revoking any segment invalidates
-every descendant at the next ``verify`` — no per-child revocation lists.
+The default :class:`~nest_plugins_reference.auth.jwt_auth.JwtAuth` stores
+revocation as a flat set of token strings with no parent-child relationship.
+That means revoking a root token does **not** automatically invalidate tokens
+the root-holder delegated to sub-agents — each must be revoked individually.
+This plugin closes the gap.
 
-Attenuation invariants enforced at mint *and* re-checked at verify:
+Design: HMAC-chained token tree
+--------------------------------
+Every token is a JSON payload signed with HMAC-SHA256.  A *root* token is
+signed directly by the plugin secret; a *delegated* child token carries a
+``parent_sig`` field pointing to its parent's signature.  Revoking a token
+adds its ``sig`` to the revoked set; :meth:`verify` walks the chain upward
+and fails if any ancestor's ``sig`` is in the revoked set.
 
-- child ``scopes`` must be a strict-or-equal subset of the parent's;
-- child ``exp`` must not exceed the parent's;
-- a child is bound to a single ``audience`` and only that agent may
-  present it (checked via :meth:`DelegatableAuth.verify_presented`).
+Three attack classes are thwarted (see adversarial validators):
+
+* **Scope escalation** — ``delegate`` refuses to issue a child whose scopes
+  are not a strict subset of the parent's.
+* **Stale parent** — ``verify`` checks the full ancestor chain; a revoked or
+  expired ancestor renders the child invalid even if the child token itself
+  was not explicitly revoked.
+* **Audience confusion** — the ``audience`` field is embedded in the signed
+  payload; :meth:`verify` checks it against the caller's declared identity
+  when the ``caller`` parameter is supplied.
 
 Example::
 
-    auth = DelegatableAuth(secret=b"secret", clock=0.0)
-    root = await auth.issue(AgentId("coordinator"), ["read", "write"])
-    child = await auth.delegate(root, AgentId("worker"), ["read"], ttl=60.0)
-    ctx = await auth.verify_presented(child, AgentId("worker"))
-    await auth.revoke(root)          # cascades:
-    await auth.verify(child)         # raises RevokedAncestorError
+    auth = DelegatableAuth(secret=b"sim-secret")
+    root = await auth.issue(AgentId("coord"), ["read", "write"])
+    child = await auth.delegate(root, audience=AgentId("worker"), scopes=["read"], ttl=60)
+    ctx = await auth.verify(child, caller=AgentId("worker"))
+    assert "read" in ctx.scopes
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
-from typing import Any, cast
+import time
+from typing import Any
 
 from nest_core.types import AgentId, AuthContext, Token
 
-_DEFAULT_TTL: float = 3600.0
 
+class RevokedAncestorError(ValueError):
+    """Raised when a token or one of its ancestors has been revoked.
 
-class DelegationError(ValueError):
-    """Base class for delegation failures.
-
-    Subclasses ``ValueError`` so callers written against the reference
-    ``jwt`` plugin (which raises bare ``ValueError``) keep working.
+    Carries the ``revoked_sig`` of the first revoked ancestor found so
+    callers can log or branch on it without string-matching the message.
 
     Example::
 
         try:
-            await auth.verify(token)
-        except DelegationError as err:
-            print(f"rejected: {err}")
+            ctx = await auth.verify(child)
+        except RevokedAncestorError as exc:
+            print(exc.revoked_sig)
     """
 
+    def __init__(self, revoked_sig: str) -> None:
+        self.revoked_sig = revoked_sig
+        super().__init__(f"token chain contains revoked ancestor (sig={revoked_sig!r})")
 
-class ScopeEscalationError(DelegationError):
-    """A child requested scopes its parent does not hold.
+
+class ScopeEscalationError(ValueError):
+    """Raised when a delegation requests scopes the parent does not hold.
 
     Example::
 
-        raise ScopeEscalationError("scope 'admin' not held by parent")
+        try:
+            child = await auth.delegate(root, audience=AgentId("a"), scopes=["admin"])
+        except ScopeEscalationError as exc:
+            print(exc.disallowed)
     """
 
+    def __init__(self, disallowed: list[str]) -> None:
+        self.disallowed = disallowed
+        super().__init__(f"scope escalation: {disallowed} not in parent token")
 
-class RevokedAncestorError(DelegationError):
-    """A token in the ancestry chain has been revoked.
+
+class AudienceError(ValueError):
+    """Raised when a token is presented by an agent other than its audience.
 
     Example::
 
-        raise RevokedAncestorError("ancestor tid=ab12 revoked")
+        try:
+            ctx = await auth.verify(child, caller=AgentId("impersonator"))
+        except AudienceError as exc:
+            print(exc.expected, exc.got)
     """
 
+    def __init__(self, expected: str, got: str) -> None:
+        self.expected = expected
+        self.got = got
+        super().__init__(f"audience mismatch: token is for {expected!r}, presented by {got!r}")
 
-class ExpiredAncestorError(DelegationError):
-    """A token in the ancestry chain has expired.
+
+def _canonical(payload: dict[str, Any]) -> str:
+    """Stable JSON serialisation for signing — sort_keys guarantees ordering.
 
     Example::
 
-        raise ExpiredAncestorError("ancestor tid=ab12 expired")
+        assert _canonical({"b": 1, "a": 2}) == _canonical({"a": 2, "b": 1})
     """
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-class AudienceMismatchError(DelegationError):
-    """A token was presented by an agent other than its audience.
-
-    Example::
-
-        raise AudienceMismatchError("presented by a2, bound to a1")
-    """
+def _b64_encode(data: str) -> str:
+    return base64.urlsafe_b64encode(data.encode()).decode().rstrip("=")
 
 
-def _canonical(segment: dict[str, Any]) -> bytes:
-    """Serialize a segment deterministically for signing.
-
-    Example::
-
-        digest_input = _canonical({"tid": "ab", "aud": "a1"})
-    """
-    return json.dumps(segment, sort_keys=True, separators=(",", ":")).encode()
-
-
-def _segment_tid(
-    audience: str,
-    scopes: list[str],
-    issued_at: float,
-    expires_at: float,
-    parent_tid: str | None,
-) -> str:
-    """Derive a deterministic segment id from segment content.
-
-    Example::
-
-        tid = _segment_tid("a1", ["read"], 0.0, 60.0, None)
-    """
-    preimage = json.dumps(
-        {
-            "aud": audience,
-            "scopes": sorted(scopes),
-            "iat": issued_at,
-            "exp": expires_at,
-            "parent": parent_tid,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(preimage).hexdigest()[:16]
+def _b64_decode(data: str) -> str:
+    padding = "=" * (4 - (len(data) % 4))
+    return base64.urlsafe_b64decode(data + padding).decode()
 
 
 class DelegatableAuth:
-    """Macaroon-style delegatable auth with cascading revocation.
+    """Auth plugin supporting delegatable capability tokens with cascading revocation.
 
-    Satisfies the base ``Auth`` protocol (``issue`` / ``verify`` /
-    ``revoke``) and adds ``delegate`` and ``verify_presented``.
+    A drop-in replacement for :class:`~nest_plugins_reference.auth.jwt_auth.JwtAuth`
+    that adds :meth:`delegate` and multi-level ancestry checks in :meth:`verify`.
 
-    Example::
+    Architecture: True Macaroon Cryptographic Chaining
+    --------------------------------------------------
+    Unlike standard JWTs, this plugin implements a True Macaroon token structure.
+    The cryptographic lineage (parent tokens and their attenuating caveats) travels
+    inside the token itself, enabling **stateless, offline verification**.
 
-        auth = DelegatableAuth(secret=b"secret", clock=0.0)
-        root = await auth.issue(AgentId("a1"), ["read", "write"])
-        child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
+    Token Wire Format:
+        `Base64(RootPayload) | Base64(Caveat_1) | ... | Base64(Caveat_N) | Signature`
+
+    Signature Chaining (HMAC-SHA256):
+        * ``Sig_0 = HMAC(Secret, RootPayload)``
+        * ``Sig_1 = HMAC(Sig_0, Caveat_1)``
+        * ``Sig_N = HMAC(Sig_{N-1}, Caveat_N)``
+
+    Because each signature serves as the symmetric key for the next level's HMAC,
+    any alteration to an ancestor payload invalidates all subsequent descendants.
+    Revocation is performed by adding any ``Sig_i`` to the `_revoked` set, instantly
+    poisoning the chain for all downstream tokens without needing to index them.
     """
 
-    def __init__(self, secret: bytes = b"nest-default-secret", clock: float | None = None) -> None:
+    def __init__(
+        self,
+        secret: bytes = b"nest-delegatable-secret",
+        clock: float | None = None,
+    ) -> None:
         self._secret = secret
         self._clock = clock
         self._revoked: set[str] = set()
 
-    def set_clock(self, now: float) -> None:
-        """Pin the plugin's logical clock (deterministic scenarios).
-
-        Example::
-
-            auth.set_clock(ctx.time)
-        """
-        self._clock = now
+    # ------------------------------------------------------------------
+    # Auth protocol (issue / verify / revoke)
+    # ------------------------------------------------------------------
 
     def _now(self) -> float:
         if self._clock is not None:
             return self._clock
-        import time
-
         return time.time()
 
-    def _chain_signature(self, chain: list[dict[str, Any]]) -> str:
-        key = self._secret
-        for segment in chain:
-            key = hmac.new(key, _canonical(segment), hashlib.sha256).digest()
-        return key.hex()
+    def _sign(self, payload_str: str, key: bytes) -> str:
+        """HMAC-SHA256 over the canonical payload string."""
+        return hmac.new(key, payload_str.encode(), hashlib.sha256).hexdigest()
 
-    def _encode(self, chain: list[dict[str, Any]]) -> Token:
-        envelope = {"chain": chain, "sig": self._chain_signature(chain)}
-        return Token(json.dumps(envelope, sort_keys=True, separators=(",", ":")))
+    def _verify_chain(self, raw_token: str) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+        """Walks the macaroon caveat chain dynamically enforcing all boundaries.
 
-    def _decode(self, token: Token) -> list[dict[str, Any]]:
-        try:
-            data: object = json.loads(str(token))
-        except json.JSONDecodeError as err:
-            msg = "Invalid token format"
-            raise DelegationError(msg) from err
-        if not isinstance(data, dict):
-            msg = "Invalid token format"
-            raise DelegationError(msg)
-        envelope = cast("dict[str, Any]", data)
-        chain_obj: object = envelope.get("chain")
-        sig_obj: object = envelope.get("sig")
-        if not isinstance(chain_obj, list) or not chain_obj or not isinstance(sig_obj, str):
-            msg = "Invalid token format"
-            raise DelegationError(msg)
-        chain = cast("list[dict[str, Any]]", chain_obj)
-        expected = self._chain_signature(chain)
-        if not hmac.compare_digest(sig_obj, expected):
-            msg = "Invalid token signature"
-            raise DelegationError(msg)
-        return chain
+        Returns:
+            (payloads, final_sig, effective_payload)
+        """
+        parts = raw_token.split("|")
+        if len(parts) < 2:  # noqa: PLR2004
+            msg = "invalid token format"
+            raise ValueError(msg)
 
-    def _check_chain(self, chain: list[dict[str, Any]], now: float) -> None:
-        parent_scopes: set[str] | None = None
-        parent_exp: float | None = None
-        for segment in chain:
-            tid = str(segment.get("tid", ""))
-            scopes = {str(s) for s in cast("list[Any]", segment.get("scopes", []))}
-            exp = float(cast("float", segment.get("exp", 0.0)))
-            if tid in self._revoked:
-                msg = f"ancestor tid={tid} revoked"
-                raise RevokedAncestorError(msg)
-            if exp < now:
-                msg = f"ancestor tid={tid} expired"
-                raise ExpiredAncestorError(msg)
-            if parent_scopes is not None and not scopes.issubset(parent_scopes):
-                escalated = sorted(scopes - parent_scopes)
-                msg = f"scopes {escalated} not held by parent"
-                raise ScopeEscalationError(msg)
-            if parent_exp is not None and exp > parent_exp:
-                msg = f"child exp {exp} exceeds parent exp {parent_exp}"
-                raise ExpiredAncestorError(msg)
-            parent_scopes = scopes
-            parent_exp = exp
+        sig = parts[-1]
+        payloads_b64 = parts[:-1]
+
+        payloads: list[dict[str, Any]] = []
+        for p in payloads_b64:
+            try:
+                payloads.append(json.loads(_b64_decode(p)))
+            except Exception as e:
+                msg = "invalid token payload encoding"
+                raise ValueError(msg) from e
+
+        # 1. Root verification
+        root_payload = payloads[0]
+        current_sig = self._sign(_canonical(root_payload), key=self._secret)
+        if current_sig in self._revoked:
+            raise RevokedAncestorError(current_sig)
+
+        parent_scopes = set(root_payload.get("scopes", []))
+        parent_exp = root_payload.get("exp")
+
+        # 2. Caveat chain verification (enforces offline subsetting)
+        for child_payload in payloads[1:]:
+            child_scopes = set(child_payload.get("scopes", []))
+            disallowed = sorted(child_scopes - parent_scopes)
+            if disallowed:
+                raise ScopeEscalationError(disallowed)
+            parent_scopes = child_scopes
+
+            child_exp = child_payload.get("exp")
+            if parent_exp is not None and (child_exp is None or child_exp > parent_exp):
+                msg = "child token expiration exceeds parent"
+                raise ValueError(msg)
+            parent_exp = child_exp
+
+            # Next signature in the chain is keyed by the previous signature
+            current_sig = self._sign(_canonical(child_payload), key=current_sig.encode())
+            if current_sig in self._revoked:
+                raise RevokedAncestorError(current_sig)
+
+        if not hmac.compare_digest(current_sig, sig):
+            msg = "invalid token signature"
+            raise ValueError(msg)
+
+        # 3. Check final temporal expiry
+        now = self._now()
+        final_payload = payloads[-1]
+        exp = final_payload.get("exp")
+        if exp is not None and exp < now:
+            msg = "token or ancestor has expired"
+            raise ValueError(msg)
+
+        return payloads, current_sig, final_payload
 
     async def issue(self, subject: AgentId, scopes: list[str]) -> Token:
-        """Issue a root token for a subject with given scopes.
-
-        Example::
-
-            root = await auth.issue(AgentId("a1"), ["read", "write"])
-        """
         now = self._now()
-        exp = now + _DEFAULT_TTL
-        segment: dict[str, Any] = {
-            "tid": _segment_tid(str(subject), scopes, now, exp, None),
-            "aud": str(subject),
+        payload: dict[str, Any] = {
+            "sub": str(subject),
             "scopes": sorted(scopes),
             "iat": now,
-            "exp": exp,
-            "parent": None,
+            "exp": now + 3600,
         }
-        return self._encode([segment])
+        payload_str = _canonical(payload)
+        sig = self._sign(payload_str, key=self._secret)
+        return Token(f"{_b64_encode(payload_str)}|{sig}")
+
+    async def verify(self, token: Token, caller: AgentId | None = None) -> AuthContext:
+        _payloads, _sig, final_payload = self._verify_chain(str(token))
+
+        # Audience check
+        audience = final_payload.get("audience")
+        if caller is not None and audience is not None and str(caller) != audience:
+            raise AudienceError(expected=audience, got=str(caller))
+
+        return AuthContext(
+            subject=AgentId(final_payload["sub"]),
+            scopes=final_payload["scopes"],
+            issued_at=final_payload.get("iat"),
+            expires_at=final_payload.get("exp"),
+        )
+
+    async def revoke(self, token: Token) -> None:
+        _payloads, sig, _final_payload = self._verify_chain(str(token))
+        self._revoked.add(sig)
+
+    # ------------------------------------------------------------------
+    # Delegation extension
+    # ------------------------------------------------------------------
 
     async def delegate(
         self,
-        parent_token: Token,
+        parent: Token,
         audience: AgentId,
-        scopes_subset: list[str],
-        ttl: float,
+        scopes: list[str],
+        ttl: float = 300.0,
     ) -> Token:
-        """Mint a child token from a parent, without contacting the issuer.
+        # 1. Parse and verify parent token exactly as it is (including chain)
+        raw_parent = str(parent)
+        parts = raw_parent.rsplit("|", 1)
+        if len(parts) != 2:  # noqa: PLR2004
+            msg = "invalid token format"
+            raise ValueError(msg)
+        chain_str, parent_sig = parts
 
-        The child's scopes must be a subset of the parent's, and its
-        expiry is clamped to the parent's.  Raises
-        :class:`ScopeEscalationError` on a broader request and any
-        chain error (revoked / expired ancestor) eagerly.
+        _payloads, _computed_sig, parent_payload = self._verify_chain(raw_parent)
 
-        Example::
+        # 2. Scope subset enforcement
+        parent_scopes = set(parent_payload.get("scopes", []))
+        requested = set(scopes)
+        disallowed = sorted(requested - parent_scopes)
+        if disallowed:
+            raise ScopeEscalationError(disallowed)
 
-            child = await auth.delegate(root, AgentId("a2"), ["read"], ttl=60.0)
-        """
+        # 3. TTL bounding
         now = self._now()
-        chain = self._decode(parent_token)
-        self._check_chain(chain, now)
-        parent = chain[-1]
-        parent_scopes = {str(s) for s in cast("list[Any]", parent.get("scopes", []))}
-        requested = {str(s) for s in scopes_subset}
-        if not requested.issubset(parent_scopes):
-            escalated = sorted(requested - parent_scopes)
-            msg = f"scopes {escalated} not held by parent"
-            raise ScopeEscalationError(msg)
-        parent_exp = float(cast("float", parent.get("exp", now)))
-        exp = min(now + ttl, parent_exp)
-        parent_tid = str(parent.get("tid", ""))
-        segment: dict[str, Any] = {
-            "tid": _segment_tid(str(audience), sorted(requested), now, exp, parent_tid),
-            "aud": str(audience),
-            "scopes": sorted(requested),
+        parent_exp = parent_payload.get("exp")
+        effective_exp = now + ttl
+        if parent_exp is not None:
+            effective_exp = min(effective_exp, parent_exp)
+
+        # 4. Construct child caveat payload
+        child_payload: dict[str, Any] = {
+            "sub": parent_payload["sub"],  # carry originator subject
+            "audience": str(audience),
+            "scopes": sorted(scopes),
             "iat": now,
-            "exp": exp,
-            "parent": parent_tid,
+            "exp": effective_exp,
         }
-        return self._encode([*chain, segment])
 
-    async def verify(self, token: Token) -> AuthContext:
-        """Verify a token, walking the full ancestry chain.
+        # 5. Cryptographic chaining: sign the child payload using parent signature as key
+        child_str = _canonical(child_payload)
+        child_sig = self._sign(child_str, key=parent_sig.encode())
 
-        Checks signature, per-segment revocation (cascading), expiry of
-        every ancestor, and monotonic scope / expiry attenuation.
-
-        Example::
-
-            ctx = await auth.verify(child)
-        """
-        now = self._now()
-        chain = self._decode(token)
-        self._check_chain(chain, now)
-        leaf = chain[-1]
-        return AuthContext(
-            subject=AgentId(str(leaf.get("aud", ""))),
-            scopes=[str(s) for s in cast("list[Any]", leaf.get("scopes", []))],
-            issued_at=float(cast("float", leaf.get("iat", now))),
-            expires_at=float(cast("float", leaf.get("exp", now))),
-        )
-
-    async def verify_presented(self, token: Token, presenter: AgentId) -> AuthContext:
-        """Verify a token *and* that the presenter is its bound audience.
-
-        Example::
-
-            ctx = await auth.verify_presented(child, AgentId("a2"))
-        """
-        ctx = await self.verify(token)
-        if ctx.subject != presenter:
-            msg = f"presented by {presenter}, bound to {ctx.subject}"
-            raise AudienceMismatchError(msg)
-        return ctx
-
-    async def revoke(self, token: Token) -> None:
-        """Revoke a token; every descendant fails verify from now on.
-
-        Example::
-
-            await auth.revoke(root)
-        """
-        chain = self._decode(token)
-        leaf = chain[-1]
-        self._revoked.add(str(leaf.get("tid", "")))
+        # 6. Append caveat to token string
+        return Token(f"{chain_str}|{_b64_encode(child_str)}|{child_sig}")
