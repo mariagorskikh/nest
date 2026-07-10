@@ -103,6 +103,12 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.gossip_byzantine import gossip_eclipse_factory
 
         register_scenario("gossip_eclipse", gossip_eclipse_factory)
+    elif name == "chained_capability_delegation":
+        from nest_core.scenarios_builtin.chained_capability_delegation import (
+            chained_capability_delegation_factory,
+        )
+
+        register_scenario("chained_capability_delegation", chained_capability_delegation_factory)
     elif name == "memory_concurrent_writers":
         from nest_core.scenarios_builtin.memory_concurrent_writers import (
             memory_concurrent_writers_factory,

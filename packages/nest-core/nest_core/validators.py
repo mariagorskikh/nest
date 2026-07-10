@@ -5150,6 +5150,139 @@ def validate_attested_sybil_quarantined(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Chained-capability-delegation validators
+# ---------------------------------------------------------------------------
+
+
+def _extract_delegation_audits(events: list[dict[str, Any]]) -> dict[str, bool]:
+    """Pull the adversarial-probe ``delegation_audit`` events out of a raw
+    trace, keyed by attack name -> whether it was blocked.
+
+    Example::
+
+        audits = _extract_delegation_audits(events)
+        assert audits["scope_escalation"] is True
+    """
+    audits: dict[str, bool] = {}
+    for ev in events:
+        if ev.get("kind") != "broadcast":
+            continue
+        try:
+            msg = json.loads(_message_body(ev))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(msg, dict) and msg.get("kind") == "delegation_audit":
+            audits[str(msg["attack"])] = bool(msg["blocked"])
+    return audits
+
+
+def validate_chained_capability_scope_escalation_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The adversarial probe's scope-escalation attempt must be rejected.
+
+    Reads the ``delegation_audit`` event the scenario's coordinator emits
+    after trying to delegate a scope its own root token never held.
+    Against ``chained_capability`` this is blocked at ``delegate()`` time
+    by construction; against ``jwt`` (no parent/child relationship at
+    all) there is nothing to check against, so nothing is ever rejected.
+
+    Example::
+
+        results = validate_chained_capability_scope_escalation_blocked(events)
+    """
+    audits = _extract_delegation_audits(events)
+    if "scope_escalation" not in audits:
+        return [
+            ValidationResult(
+                "chained_capability_scope_escalation_blocked",
+                False,
+                "no scope_escalation probe found in trace -- scenario did not run the attack",
+            )
+        ]
+    blocked = audits["scope_escalation"]
+    return [
+        ValidationResult(
+            "chained_capability_scope_escalation_blocked",
+            blocked,
+            "scope escalation was rejected" if blocked else "scope escalation was NOT rejected",
+        )
+    ]
+
+
+def validate_chained_capability_stale_ancestor_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The adversarial probe's stale-ancestor attempt must be rejected.
+
+    Reads the ``delegation_audit`` event recorded after verifying a child
+    token whose parent was already revoked. ``chained_capability``
+    re-derives the whole chain on every ``verify`` so a revoked ancestor
+    is caught every time; ``jwt`` has no ancestry at all, so revoking one
+    token never affects any other.
+
+    Example::
+
+        results = validate_chained_capability_stale_ancestor_blocked(events)
+    """
+    audits = _extract_delegation_audits(events)
+    if "stale_ancestor" not in audits:
+        return [
+            ValidationResult(
+                "chained_capability_stale_ancestor_blocked",
+                False,
+                "no stale_ancestor probe found in trace -- scenario did not run the attack",
+            )
+        ]
+    blocked = audits["stale_ancestor"]
+    return [
+        ValidationResult(
+            "chained_capability_stale_ancestor_blocked",
+            blocked,
+            "stale ancestor use was rejected"
+            if blocked
+            else "stale ancestor use was NOT rejected",
+        )
+    ]
+
+
+def validate_chained_capability_audience_confusion_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The adversarial probe's audience-confusion attempt must be rejected.
+
+    Reads the ``delegation_audit`` event recorded after presenting a
+    legitimately delegated token as an agent other than the one it was
+    delegated to. ``chained_capability`` makes this check mandatory for
+    every delegated token, not an optional parameter a caller can forget
+    to pass; ``jwt`` has no audience-binding concept at all.
+
+    Example::
+
+        results = validate_chained_capability_audience_confusion_blocked(events)
+    """
+    audits = _extract_delegation_audits(events)
+    if "audience_confusion" not in audits:
+        return [
+            ValidationResult(
+                "chained_capability_audience_confusion_blocked",
+                False,
+                "no audience_confusion probe found in trace -- scenario did not run the attack",
+            )
+        ]
+    blocked = audits["audience_confusion"]
+    return [
+        ValidationResult(
+            "chained_capability_audience_confusion_blocked",
+            blocked,
+            "audience confusion was rejected"
+            if blocked
+            else "audience confusion was NOT rejected",
+        )
+    ]
+
+
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -5409,5 +5542,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "rogue_trusted_agent": [
         validate_rogue_trusted_agent_blocked,
         validate_rogue_trusted_agent_reputation,
+    ],
+    "chained_capability_delegation": [
+        validate_chained_capability_scope_escalation_blocked,
+        validate_chained_capability_stale_ancestor_blocked,
+        validate_chained_capability_audience_confusion_blocked,
     ],
 }

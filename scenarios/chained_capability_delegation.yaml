@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# Chained-capability-delegation scenario.
+#
+# 16 agents, tree depth 2:
+#   coordinator (1) --delegates--> intermediary-0..2 (3)
+#   each intermediary --delegates--> leaf-<i>-0..3 (4 each, 12 total)
+#
+# t=0    coordinator issues a root token, delegates a scoped/time-boxed
+#        token to each intermediary; each intermediary in turn delegates
+#        a further-scoped token to its 4 leaves; coordinator then runs an
+#        adversarial probe (scope escalation, stale ancestor, audience
+#        confusion) and broadcasts a `delegation_audit` event per attack.
+# t=200  coordinator revokes ONLY intermediary-1's token -- its subtree
+#        (intermediary-1 + its 4 leaves) goes dark on the next re-check;
+#        intermediary-0/2 and their leaves are unaffected.
+# t=500  coordinator revokes the root -- every remaining agent's chain
+#        re-derives back to the revoked root jti, so the whole rest of
+#        the tree goes dark on its next re-check.
+#
+# Deterministic under any seed: the chained_capability auth plugin never
+# reads wall-clock time, only `ctx.time` via `set_clock`.
+name: chained_capability_delegation
+description: "16-agent capability-delegation tree with scoped + full-tree revocation, plus an adversarial probe."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 16
+  brain: state-machine
+  roles:
+    - name: coordinator
+      count: 1
+    - name: intermediary
+      count: 3
+    - name: leaf
+      count: 12
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: chained_capability
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: chained_capability_delegation
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/chained_capability_delegation.jsonl
