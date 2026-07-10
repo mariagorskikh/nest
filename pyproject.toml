@@ -103,10 +103,6 @@ pythonVersion = "3.12"
 typeCheckingMode = "strict"
 venvPath = "."
 venv = ".venv"
-# streampay is a standalone deployable service (its own requirements.txt and
-# venv, deployed separately to Render) and is intentionally not part of the
-# main uv workspace, so its dependencies aren't installed here.
-exclude = ["streampay"]
 extraPaths = [
     "packages/nest-core",
     "packages/nest-sdk",
