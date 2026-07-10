@@ -15,6 +15,8 @@ Three layers of coverage:
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
 from nest_plugins_reference.datafacts.cid_facts import CidFacts
@@ -259,7 +261,9 @@ async def test_content_less_fallback_is_byte_sensitive() -> None:
 
 from hypothesis import given, settings  # noqa: E402
 from hypothesis import strategies as st  # noqa: E402
-from nest_plugins_reference.datafacts.sic_facts import _canon  # noqa: E402
+from nest_plugins_reference.datafacts.sic_facts import (  # noqa: E402
+    _canon,  # pyright: ignore[reportPrivateUsage] -- injectivity property needs the encoder
+)
 
 # ASCII-only keys: canonically-equivalent unicode keys (NFC vs NFD of the same
 # text) inside ONE dict would merge under re-encoding and fail spuriously.
@@ -291,9 +295,10 @@ def _reencode(value: object) -> object:
     if isinstance(value, str):
         return unicodedata.normalize("NFD", value)
     if isinstance(value, list):
-        return [_reencode(v) for v in value]
+        return [_reencode(v) for v in cast("list[object]", value)]
     if isinstance(value, dict):
-        return {k: _reencode(v) for k, v in reversed(list(value.items()))}
+        items = list(cast("dict[str, object]", value).items())
+        return {k: _reencode(v) for k, v in reversed(items)}
     return value
 
 
@@ -303,13 +308,15 @@ _SENTINEL = "\x00mutated\x00"
 def _mutate(value: object) -> object:
     """Change exactly one leaf to a canonically-distinct value."""
     if isinstance(value, dict):
-        if value:
-            k = next(iter(value))
-            return {**value, k: _mutate(value[k])}
+        typed = cast("dict[str, object]", value)
+        if typed:
+            k = next(iter(typed))
+            return {**typed, k: _mutate(typed[k])}
         return {_SENTINEL: 1}
     if isinstance(value, list):
-        if value:
-            return [_mutate(value[0]), *value[1:]]
+        typed_list = cast("list[object]", value)
+        if typed_list:
+            return [_mutate(typed_list[0]), *typed_list[1:]]
         return [_SENTINEL]
     return _SENTINEL if value != _SENTINEL else _SENTINEL + "x"
 
