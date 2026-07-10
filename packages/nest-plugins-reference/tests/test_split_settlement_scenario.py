@@ -30,7 +30,11 @@ from nest_core.scenarios_builtin.split_settlement import split_settlement_factor
 from nest_core.sim.simulator import Simulator
 from nest_core.types import AgentId, Money, PaymentRef, Receipt
 from nest_core.validators import ValidationResult, validate_events, validate_trace
-from nest_plugins_reference.payments.split_settlement import SplitError, SplitSettlement
+from nest_plugins_reference.payments.split_settlement import (
+    SplitError,
+    SplitSettlement,
+    allocate_by_weight,
+)
 
 SCENARIO_PATH = Path(__file__).resolve().parents[3] / "scenarios" / "split_settlement.yaml"
 
@@ -86,6 +90,46 @@ class _WeightTamperingSplitter(SplitSettlement):
         contract.state = "SETTLED"
         contract.settled_amount = amount.amount
         contract.allocations = tuple(allocations)
+        return [
+            Receipt(ref=ref, payer=contract.payer, payee=payee, amount=Money(amount=credit))
+            for payee, credit in allocations
+        ]
+
+
+class _LedgerSkimmingSplitter(SplitSettlement):
+    """Returns canonical receipts but credits the shared ledger one unit short.
+
+    The nastier attack the receipt-auditing validators cannot see: it computes
+    the *correct* largest-remainder allocation and returns it verbatim as the
+    receipts the buyer broadcasts -- so ``split_conservation`` (credits sum to the
+    amount) and ``split_weight_fidelity`` (credits match the canonical split) both
+    pass.  But on the real shared ledger it credits the first payee one unit less
+    than the receipt claims and pockets that unit back to itself (the payer).  The
+    ledger still balances internally, and no receipt lies about the total -- yet
+    the first payee's *observed* balance moves by one less than reported every
+    settlement, which only ``split_ledger_attestation`` (payee-observed truth)
+    catches.
+    """
+
+    async def settle_split(self, ref: PaymentRef, amount: Money) -> list[Receipt]:
+        contract = self.contract(ref)
+        if contract is None:
+            msg = f"no split for reference: {ref}"
+            raise SplitError(msg)
+        allocations = allocate_by_weight(amount.amount, contract.payees)
+        # Debit the payer the full amount, exactly as an honest settlement would.
+        self._balances[self._agent_id] = self._balances.get(self._agent_id, 0) - amount.amount
+        skimmed = 0
+        for index, (payee, credit) in enumerate(allocations):
+            take = 1 if index == 0 and credit > 0 else 0
+            self._balances[payee] = self._balances.get(payee, 0) + credit - take
+            skimmed += take
+        # Pocket the skim back to the payer: the ledger balances, the theft hides.
+        self._balances[self._agent_id] = self._balances.get(self._agent_id, 0) + skimmed
+        contract.state = "SETTLED"
+        contract.settled_amount = amount.amount
+        contract.allocations = tuple(allocations)
+        # Return the CANONICAL receipts -- the lie the attestation validator exposes.
         return [
             Receipt(ref=ref, payer=contract.payer, payee=payee, amount=Money(amount=credit))
             for payee, credit in allocations
@@ -168,6 +212,23 @@ def test_weight_tampering_passes_conservation_but_fails_fidelity() -> None:
     assert not results["split_weight_fidelity"].passed
 
 
+@pytest.mark.skipif(not SCENARIO_PATH.exists(), reason=f"scenario not at {SCENARIO_PATH}")
+def test_ledger_skimming_passes_receipts_but_fails_attestation() -> None:
+    """The point of the third validator: honest-looking receipts can still short the ledger.
+
+    ``_LedgerSkimmingSplitter`` returns the canonical allocation as its receipts
+    (so both receipt-auditing validators pass) while crediting the shared ledger
+    one unit short on the first payee (so the payees' observed balance deltas
+    fall short of the reported credits). Only ledger attestation catches it --
+    proving the third validator is not redundant with the first two.
+    """
+    results = _by_name(validate_trace(_run_injected(_LedgerSkimmingSplitter), "split_settlement"))
+    assert results["split_conservation"].passed
+    assert results["split_weight_fidelity"].passed
+    assert not results["split_ledger_attestation"].passed
+    assert "observed ledger delta" in results["split_ledger_attestation"].detail
+
+
 # --------------------------------------------------------------------------
 # Determinism
 # --------------------------------------------------------------------------
@@ -247,3 +308,87 @@ def test_validator_reports_no_lifecycle_on_empty_trace() -> None:
     assert not results["split_conservation"].passed
     assert "no split" in results["split_conservation"].detail
     assert not results["split_weight_fidelity"].passed
+    assert not results["split_ledger_attestation"].passed
+    assert "no split" in results["split_ledger_attestation"].detail
+
+
+# --------------------------------------------------------------------------
+# ASK 4: fidelity is order-insensitive (payee->credit map, not position)
+# --------------------------------------------------------------------------
+
+
+def test_fidelity_accepts_reordered_but_correct_allocation() -> None:
+    """Credits listed in a different order than the declared weights still pass.
+
+    The canonical split of 1001 over a~40;b~40;c~20 is a~401;b~400;c~200. Here the
+    settled event lists the same payees and credits in reverse -- correct amounts,
+    different order -- which the order-insensitive map compare accepts.
+    """
+    events = [
+        _broadcast("buyer-0", "split:opened:ref=r0:payer=buyer-0:weights=a~40;b~40;c~20"),
+        _broadcast("buyer-0", "split:settled:ref=r0:amount=1001:alloc=c~200;b~400;a~401"),
+    ]
+    results = _by_name(validate_events(events, "split_settlement"))
+    assert results["split_weight_fidelity"].passed
+    assert results["split_conservation"].passed
+
+
+def test_fidelity_rejects_duplicate_payee_in_allocation() -> None:
+    """A payee that repeats in the reported allocation is a violation, not merged."""
+    events = [
+        _broadcast("buyer-0", "split:opened:ref=r0:payer=buyer-0:weights=a~1;b~1"),
+        # 'a' repeated: it sums to 100 but names a duplicate payee -- must fail.
+        _broadcast("buyer-0", "split:settled:ref=r0:amount=100:alloc=a~50;a~50"),
+    ]
+    results = _by_name(validate_events(events, "split_settlement"))
+    assert not results["split_weight_fidelity"].passed
+    assert "duplicate payee" in results["split_weight_fidelity"].detail
+
+
+# --------------------------------------------------------------------------
+# ASK 3: ledger-attestation validator (synthetic traces)
+# --------------------------------------------------------------------------
+
+
+def _attested_events() -> list[dict[str, Any]]:
+    """Two settlements with payee attestations whose deltas match the credits."""
+    return [
+        _broadcast("buyer-0", "split:opened:ref=r0:payer=buyer-0:weights=a~40;b~40;c~20"),
+        _broadcast("buyer-0", "split:settled:ref=r0:amount=1000:alloc=a~400;b~400;c~200"),
+        _broadcast("a", "split:observed:ref=r0:payee=a:balance=400"),
+        _broadcast("b", "split:observed:ref=r0:payee=b:balance=400"),
+        _broadcast("c", "split:observed:ref=r0:payee=c:balance=200"),
+        _broadcast("buyer-1", "split:opened:ref=r1:payer=buyer-1:weights=a~1;c~1"),
+        _broadcast("buyer-1", "split:settled:ref=r1:amount=100:alloc=a~50;c~50"),
+        # a and c are credited again; the delta from the prior attestation is 50.
+        _broadcast("a", "split:observed:ref=r1:payee=a:balance=450"),
+        _broadcast("c", "split:observed:ref=r1:payee=c:balance=250"),
+    ]
+
+
+def test_attestation_accepts_matching_ledger_deltas() -> None:
+    results = _by_name(validate_events(_attested_events(), "split_settlement"))
+    assert results["split_ledger_attestation"].passed
+
+
+def test_attestation_flags_shorted_ledger_delta() -> None:
+    """A payee whose observed balance moves less than reported is caught."""
+    events = _attested_events()
+    # a's first attestation is one unit short of the reported 400 credit; keep the
+    # later balance consistent with the shorted start so only r0/a is flagged.
+    events[2] = _broadcast("a", "split:observed:ref=r0:payee=a:balance=399")
+    events[7] = _broadcast("a", "split:observed:ref=r1:payee=a:balance=449")
+    results = _by_name(validate_events(events, "split_settlement"))
+    assert not results["split_ledger_attestation"].passed
+    assert "observed ledger delta" in results["split_ledger_attestation"].detail
+
+
+def test_attestation_flags_settlement_without_attestation() -> None:
+    """A settlement with no covering payee attestation fails, like the other two."""
+    events = [
+        _broadcast("buyer-0", "split:opened:ref=r0:payer=buyer-0:weights=a~1;b~1"),
+        _broadcast("buyer-0", "split:settled:ref=r0:amount=100:alloc=a~50;b~50"),
+    ]
+    results = _by_name(validate_events(events, "split_settlement"))
+    assert not results["split_ledger_attestation"].passed
+    assert "no covering attestation" in results["split_ledger_attestation"].detail
