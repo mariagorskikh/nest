@@ -7,6 +7,8 @@ Covers:
 - Happy-path: register intent -> publish -> fetch -> verify
 - IntentError on publish without intent
 - IntentError on expired intent
+- IntentError on owner-spoof (publishing a dataset owned by another agent)
+- Owner resolution without private identity attributes (public agent_id / owner=)
 - One-time-use: second publish on same name requires new intent
 - Provenance chains still enforce parent validation (inherited from CidFacts)
 - Freshness signing still works (inherited from CidFacts)
@@ -21,7 +23,7 @@ import contextlib
 import pytest
 from nest_core.layers.datafacts import DataFacts
 from nest_core.plugins import PluginRegistry
-from nest_core.types import AgentId, DatasetMetadata
+from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
 from nest_plugins_reference.datafacts.cid_facts import SharedClock
 from nest_plugins_reference.datafacts.intent_facts import (
     IntentError,
@@ -29,6 +31,7 @@ from nest_plugins_reference.datafacts.intent_facts import (
     IntentRecord,
 )
 from nest_plugins_reference.identity.did_key import DidKeyIdentity
+from nest_plugins_reference.identity.ed25519_rotating import Ed25519RotatingIdentity
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -59,6 +62,26 @@ class TestProtocolConformance:
 
     def test_listed_in_datafacts_layer(self) -> None:
         assert ("datafacts", "intent_facts") in PluginRegistry().list_plugins("datafacts")
+
+
+# ---------------------------------------------------------------------------
+# Owner resolution (no reliance on private identity attributes)
+# ---------------------------------------------------------------------------
+
+
+class TestOwnerResolution:
+    def test_public_agent_id_property_is_used(self) -> None:
+        """Identities exposing a public ``agent_id`` (Ed25519RotatingIdentity) work."""
+        ident = Ed25519RotatingIdentity(AgentId("r1"), seed=b"seed-r")
+        facts = IntentGatedFacts(ident)
+        facts.register_publish_intent("prices")
+        assert ("r1", "prices") in facts.pending_intents()
+
+    def test_explicit_owner_argument_wins(self) -> None:
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"seed-a")
+        facts = IntentGatedFacts(ident, owner=AgentId("a1"))
+        facts.register_publish_intent("prices")
+        assert ("a1", "prices") in facts.pending_intents()
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +251,47 @@ class TestIntentHijackAttack:
         # A tries to publish — no intent registered on A's instance
         with pytest.raises(IntentError, match="no registered intent"):
             await facts_a.publish(DatasetMetadata(name="weather", owner=AgentId("a1")))
+
+    @pytest.mark.asyncio
+    async def test_agent_b_cannot_spoof_agent_a_ownership(self) -> None:
+        """Agent B declares its own intent, then publishes a dataset claiming A owns it.
+
+        Without an ownership check the gate would pass (B *did* declare an
+        intent for 'weather') and the spoofed dataset would land in the shared
+        store. publish() must reject the owner mismatch at publish time.
+        """
+        clock = SharedClock()
+        ident_b = DidKeyIdentity(AgentId("b1"), seed=b"seed-b")
+        shared: dict[DataFactsUrl, DatasetMetadata] = {}
+        facts_b = IntentGatedFacts(ident_b, clock=clock, datasets=shared)
+
+        facts_b.register_publish_intent("weather")
+
+        with pytest.raises(IntentError, match="intent-hijack blocked"):
+            await facts_b.publish(DatasetMetadata(name="weather", owner=AgentId("a1")))
+
+        # The spoofed dataset never reached the shared store.
+        assert not shared
+
+    @pytest.mark.asyncio
+    async def test_spoofed_publish_does_not_consume_live_intent(self) -> None:
+        """A blocked owner-spoof must not burn the attacker's live intent.
+
+        The ownership check runs before intent consumption, so after the
+        rejected spoof B can still publish its *own* dataset under the same
+        intent.
+        """
+        clock = SharedClock()
+        ident_b = DidKeyIdentity(AgentId("b1"), seed=b"seed-b")
+        facts_b = IntentGatedFacts(ident_b, clock=clock)
+
+        facts_b.register_publish_intent("weather")
+        with contextlib.suppress(IntentError):
+            await facts_b.publish(DatasetMetadata(name="weather", owner=AgentId("a1")))
+
+        assert facts_b.has_live_intent("weather")
+        url = await facts_b.publish(DatasetMetadata(name="weather", owner=AgentId("b1")))
+        assert url
 
 
 # ---------------------------------------------------------------------------

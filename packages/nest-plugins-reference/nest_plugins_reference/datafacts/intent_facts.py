@@ -29,11 +29,13 @@ Expired-intent replay attack
     Intents are consumed on first use and expire if unused, so replaying a
     stale intent is impossible.
 
-Intent-hijack attack
-    Agent *B* tries to publish on behalf of agent *A* by sharing *A*'s
-    CidFacts instance state.  Because each ``IntentGatedFacts`` instance is
-    bound to a single ``Identity``, the intent is checked against the
-    *instance* owner, not the ``DatasetMetadata.owner`` field alone.
+Intent-hijack (owner-spoof) attack
+    Agent *B* declares an intent on its own instance, then publishes a
+    dataset whose ``owner`` field claims agent *A*.  ``publish()`` compares
+    ``dataset.owner`` against the instance owner *before* consuming the
+    intent, so the spoofed publish is rejected at publish time and never
+    reaches the shared store (and *B*'s live intent is not burned by the
+    failed attempt).
 
 Example::
 
@@ -55,7 +57,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from nest_core.types import DataFactsUrl, DatasetMetadata
+from nest_core.types import AgentId, DataFactsUrl, DatasetMetadata
 
 from nest_plugins_reference.datafacts.cid_facts import CidFacts, FreshnessProof, SharedClock
 
@@ -65,6 +67,33 @@ if TYPE_CHECKING:
 
 class IntentError(ValueError):
     """Raised when a publish is attempted without a valid pre-registered intent."""
+
+
+def _resolve_owner(identity: Identity, owner: AgentId | None) -> AgentId:
+    """Return the owning ``AgentId`` for *identity*, preferring an explicit *owner*.
+
+    The Identity Protocol declares no agent-id accessor, so when *owner* is not
+    given we fall back to the ``agent_id`` property that concrete identities
+    such as ``Ed25519RotatingIdentity`` expose publicly.
+
+    Raises:
+        TypeError: if *owner* is ``None`` and *identity* exposes no
+            ``agent_id`` attribute.
+
+    Example::
+
+        owner = _resolve_owner(ident, None)
+    """
+    if owner is not None:
+        return owner
+    resolved = getattr(identity, "agent_id", None) or getattr(identity, "_agent_id", None)
+    if resolved is None:
+        msg = (
+            f"{type(identity).__name__} exposes no agent_id; "
+            "pass owner= explicitly to IntentGatedFacts"
+        )
+        raise TypeError(msg)
+    return AgentId(str(resolved))
 
 
 @dataclass
@@ -103,6 +132,7 @@ class IntentGatedFacts(CidFacts):
         self,
         identity: Identity,
         *,
+        owner: AgentId | None = None,
         intent_ttl: float = 10.0,
         datasets: dict[DataFactsUrl, DatasetMetadata] | None = None,
         proofs: dict[DataFactsUrl, FreshnessProof] | None = None,
@@ -117,8 +147,7 @@ class IntentGatedFacts(CidFacts):
             freshness_window=freshness_window,
         )
         self._intent_ttl = intent_ttl
-        # Cache agent_id string — DidKeyIdentity stores it as _agent_id.
-        self._owner_str: str = str(identity._agent_id)  # type: ignore[attr-defined]
+        self._owner_str: str = str(_resolve_owner(identity, owner))
         # (agent_id_str, dataset_name) -> expiry tick
         self._pending_intents: dict[tuple[str, str], float] = {}
         self._intent_log: list[IntentRecord] = []
@@ -210,7 +239,10 @@ class IntentGatedFacts(CidFacts):
         freshness-proof generation once the intent check passes.
 
         Raises:
-            IntentError: if no live intent exists for ``dataset.name``.
+            IntentError: if no live intent exists for ``dataset.name``, or if
+                ``dataset.owner`` is not this instance's owner (owner-spoof /
+                intent-hijack attempt). The ownership check runs first, so a
+                spoofed publish never consumes a live intent.
             ProvenanceError: if declared parents are unknown (inherited from
                 CidFacts).
 
@@ -221,6 +253,12 @@ class IntentGatedFacts(CidFacts):
                 DatasetMetadata(name="prices", owner=AgentId("a1"))
             )
         """
+        if str(dataset.owner) != self._owner_str:
+            raise IntentError(
+                f"Agent {self._owner_str!r} cannot publish dataset "
+                f"{dataset.name!r} owned by {str(dataset.owner)!r}: "
+                "intent-hijack blocked at publish time."
+            )
         self._consume_intent(dataset.name)
         return await super().publish(dataset)
 
