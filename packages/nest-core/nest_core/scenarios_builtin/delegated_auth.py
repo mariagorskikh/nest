@@ -167,6 +167,13 @@ def delegated_auth_factory(
 
         agents = delegated_auth_factory(config, plugins)
     """
+    # runner.py._resolve_plugins() returns classes, not instances — instantiate
+    # auth here with a fixed clock (0.0) so token iat/exp are deterministic and
+    # traces are byte-identical across runs with the same seed (Tier 1 requirement).
+    auth_cls = plugins.get("auth")
+    if auth_cls is not None and isinstance(auth_cls, type):
+        plugins["auth"] = auth_cls(clock=0.0)
+
     agents: dict[AgentId, StateMachineAgent] = {}
 
     agents[_COORD] = CoordinatorAgent(_COORD)
