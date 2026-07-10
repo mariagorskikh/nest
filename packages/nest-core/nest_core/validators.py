@@ -1286,6 +1286,31 @@ def validate_memory_convergence(
 # ---------------------------------------------------------------------------
 
 
+def _streaming_audit_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Unwrap ``streaming_audit`` payloads from raw ``send`` trace events.
+
+    Real trace events wrap a self-sent audit payload as
+    ``{"kind": "send", "msg": "<json>"}``; the actual
+    ``payment_debited``/``payment_credited``/``event_type`` fields the
+    streaming validators need live inside the JSON ``msg`` body, not at the
+    top level. Mirrors ``_empic_audit_events`` above.
+    """
+    parsed: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(msg)
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            if body.get("type") == "streaming_audit":
+                body.setdefault("tick", _event_tick(ev))
+                parsed.append(body)
+    return parsed
+
+
 def validate_streaming_conservation(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -1294,10 +1319,11 @@ def validate_streaming_conservation(
     Scans the trace for payment events and verifies that cumulative funds
     debited from payers equals cumulative funds credited to payees.
     """
+    audit = _streaming_audit_events(events)
     cumulative_debited: dict[str, int] = defaultdict(int)
     cumulative_credited: dict[str, int] = defaultdict(int)
 
-    for ev in events:
+    for ev in audit:
         if ev.get("kind") not in ("payment_debited", "payment_credited"):
             continue
 
@@ -1337,11 +1363,12 @@ def validate_streaming_no_drain_after_close(
     Tracks open_stream -> close_stream for each ref, verifies no
     payment_debited events occur after close for that stream ref.
     """
+    audit = _streaming_audit_events(events)
     open_times: dict[str, int] = {}  # PaymentRef -> tick
     close_times: dict[str, int] = {}  # PaymentRef -> tick
     stream_debits: dict[str, list[int]] = defaultdict(lambda: [])  # PaymentRef -> [ticks]
 
-    for ev in events:
+    for ev in audit:
         tick = ev.get("tick", 0)
 
         if ev.get("event_type") == "stream_opened":
@@ -1392,15 +1419,19 @@ def validate_streaming_no_overbill_on_partition(
     for ``dropped`` events between those pairs.  Any debit that lands at or
     after a drop-tick between the same payer and payee is a violation.
     """
+    # ``stream_opened``/``payment_debited`` audit fields live inside wrapped
+    # ``send`` payloads, but ``dropped`` is a simulator-native top-level
+    # trace kind, never wrapped — so this validator reads two sources
+    # (mirrors ``validate_empic_no_overbill_on_partition``).
+    audit = _streaming_audit_events(events)
+
     # stream_ref -> (payer, payee)
     stream_parties: dict[str, tuple[str, str]] = {}
     # (payer, payee) -> first tick where drop was observed
     partition_start: dict[tuple[str, str], int] = {}
     violations: list[str] = []
 
-    for ev in events:
-        tick = ev.get("tick", 0)
-
+    for ev in audit:
         if ev.get("event_type") == "stream_opened":
             ref = ev.get("stream_ref", "")
             payer = ev.get("agent", "")
@@ -1408,30 +1439,38 @@ def validate_streaming_no_overbill_on_partition(
             if ref and payer and payee:
                 stream_parties[ref] = (payer, payee)
 
-        elif ev.get("kind") == "dropped":
-            sender = ev.get("from", "")
-            receiver = ev.get("agent", "")
-            # Record the earliest tick a partition was observed either way
-            if sender and receiver:
-                key = (sender, receiver)
-                if key not in partition_start or tick < partition_start[key]:
-                    partition_start[key] = tick
-                # Reverse direction too — partition is bidirectional
-                rev_key = (receiver, sender)
-                if rev_key not in partition_start or tick < partition_start[rev_key]:
-                    partition_start[rev_key] = tick
+    for ev in events:
+        if ev.get("kind") != "dropped":
+            continue
+        # ``dropped`` trace events carry "ts", not "tick" -- _event_tick
+        # handles that fallback.
+        tick = _event_tick(ev)
+        sender = ev.get("from", "")
+        receiver = ev.get("agent", "")
+        # Record the earliest tick a partition was observed either way
+        if sender and receiver:
+            key = (sender, receiver)
+            if key not in partition_start or tick < partition_start[key]:
+                partition_start[key] = tick
+            # Reverse direction too — partition is bidirectional
+            rev_key = (receiver, sender)
+            if rev_key not in partition_start or tick < partition_start[rev_key]:
+                partition_start[rev_key] = tick
 
-        elif ev.get("kind") == "payment_debited":
-            ref = ev.get("stream_ref", "")
-            if ref not in stream_parties:
-                continue
-            payer, payee = stream_parties[ref]
-            drop_tick = partition_start.get((payer, payee))
-            if drop_tick is not None and tick >= drop_tick:
-                violations.append(
-                    f"stream {ref}: payer={payer} debited at tick {tick} "
-                    f"but partitioned from payee={payee} since tick {drop_tick}"
-                )
+    for ev in audit:
+        if ev.get("kind") != "payment_debited":
+            continue
+        tick = ev.get("tick", 0)
+        ref = ev.get("stream_ref", "")
+        if ref not in stream_parties:
+            continue
+        payer, payee = stream_parties[ref]
+        drop_tick = partition_start.get((payer, payee))
+        if drop_tick is not None and tick >= drop_tick:
+            violations.append(
+                f"stream {ref}: payer={payer} debited at tick {tick} "
+                f"but partitioned from payee={payee} since tick {drop_tick}"
+            )
 
     if violations:
         return [
@@ -1470,10 +1509,11 @@ def validate_streaming_rate_enforcement(
 
         results = validate_streaming_rate_enforcement(events)
     """
+    audit = _streaming_audit_events(events)
     stream_rates: dict[str, int] = {}
     violations: list[str] = []
 
-    for ev in events:
+    for ev in audit:
         if ev.get("event_type") == "stream_opened":
             ref = ev.get("stream_ref", "")
             rate = ev.get("rate_per_tick", 0)
@@ -1482,7 +1522,7 @@ def validate_streaming_rate_enforcement(
 
     # Group debits by (stream_ref, tick) and check each group's total
     grouped: dict[tuple[str, int], list[int]] = {}
-    for ev in events:
+    for ev in audit:
         if ev.get("kind") != "payment_debited":
             continue
         ref = ev.get("stream_ref", "")
@@ -1532,10 +1572,11 @@ def validate_streaming_no_double_open(
 
         results = validate_streaming_no_double_open(events)
     """
+    audit = _streaming_audit_events(events)
     seen: set[str] = set()
     duplicates: list[tuple[str, int, int]] = []
 
-    for ev in events:
+    for ev in audit:
         if ev.get("event_type") != "stream_opened":
             continue
         ref = ev.get("stream_ref", "")
@@ -1581,8 +1622,9 @@ def validate_streaming_conservation_per_tick(
 
         results = validate_streaming_conservation_per_tick(events)
     """
+    audit = _streaming_audit_events(events)
     events_by_tick: dict[int, list[dict[str, Any]]] = {}
-    for ev in events:
+    for ev in audit:
         tick = ev.get("tick", 0)
         if tick not in events_by_tick:
             events_by_tick[tick] = []
@@ -1638,9 +1680,10 @@ def validate_streaming_audit_trail_complete(
 
         results = validate_streaming_audit_trail_complete(events)
     """
+    audit = _streaming_audit_events(events)
     opened: set[str] = set()
     closed: set[str] = set()
-    for ev in events:
+    for ev in audit:
         if ev.get("event_type") == "stream_opened":
             ref = ev.get("stream_ref", "")
             if ref:

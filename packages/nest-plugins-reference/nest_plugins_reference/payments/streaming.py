@@ -26,8 +26,10 @@ Design principles:
 checks under concurrent stream pressure because it has no stream semantics.*
 *This plugin passes them because it models streams as first-class contracts.*
 
-Satisfies the ``Payments`` protocol: one-shot ``pay()`` delegates to
-``open_stream`` + instant ``close_stream`` so existing callers continue to work.
+Satisfies the ``Payments`` protocol: one-shot ``pay()`` is a direct,
+idempotency-keyed balance transfer producing the same balance deltas and
+``Receipt`` shape a zero-duration stream would, without constructing an
+actual ``StreamHandle`` — so existing callers continue to work.
 
 Example::
 
@@ -516,9 +518,11 @@ class StreamingPayments:
     async def pay(self, to: AgentId, amount: Money, ref: PaymentRef) -> Receipt:
         """Execute a one-shot payment.
 
-        Implemented as open-then-immediate-close of a stream with ``max_total``
-        equal to the amount. Satisfies the ``Payments`` protocol for callers
-        that do not speak streaming.
+        Implemented as a direct balance transfer (not a stream open/close):
+        validates the amount, checks payer balance, moves funds, and records
+        a ``Receipt`` keyed by ``ref``. Produces the same balance deltas and
+        receipt shape a zero-duration stream would, satisfying the
+        ``Payments`` protocol for callers that do not speak streaming.
 
         Idempotent: if ``ref`` already identifies a completed payment, returns
         the existing receipt.

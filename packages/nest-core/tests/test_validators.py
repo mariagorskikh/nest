@@ -765,18 +765,29 @@ class TestValidationResult:
         assert "FAIL" in repr(r)
 
 
+def _wrap(body: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a streaming-audit body as a real trace 'send' event would carry it.
+
+    Real trace events wrap a self-sent audit payload as
+    ``{"kind": "send", "msg": "<json>"}``; the streaming validators unwrap
+    this via ``_streaming_audit_events``. ``dropped`` events are NOT audit
+    payloads and must be passed through unwrapped.
+    """
+    return {"kind": "send", "msg": json.dumps({"type": "streaming_audit", **body})}
+
+
 class TestStreamingValidators:
-    """Tests for the three streaming payment validators."""
+    """Tests for the seven streaming payment validators."""
 
     def test_conservation_passes(self) -> None:
         """Conservation passes when debited == credited."""
         from nest_core.validators import validate_streaming_conservation
 
         events = [
-            {"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0},
-            {"kind": "payment_credited", "agent": "payee", "amount": 100, "tick": 0},
-            {"kind": "payment_debited", "agent": "payer", "amount": 50, "tick": 1},
-            {"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 1},
+            _wrap({"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0}),
+            _wrap({"kind": "payment_credited", "agent": "payee", "amount": 100, "tick": 0}),
+            _wrap({"kind": "payment_debited", "agent": "payer", "amount": 50, "tick": 1}),
+            _wrap({"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 1}),
         ]
         results = validate_streaming_conservation(events)
         assert len(results) == 1
@@ -787,8 +798,8 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_conservation
 
         events = [
-            {"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0},
-            {"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 0},
+            _wrap({"kind": "payment_debited", "agent": "payer", "amount": 100, "tick": 0}),
+            _wrap({"kind": "payment_credited", "agent": "payee", "amount": 50, "tick": 0}),
         ]
         results = validate_streaming_conservation(events)
         assert len(results) == 1
@@ -800,10 +811,10 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_no_drain_after_close
 
         events = [
-            {"event_type": "stream_opened", "stream_ref": "s1", "tick": 0},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 2},
-            {"event_type": "stream_closed", "stream_ref": "s1", "tick": 3},
+            _wrap({"event_type": "stream_opened", "stream_ref": "s1", "tick": 0}),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 1}),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 2}),
+            _wrap({"event_type": "stream_closed", "stream_ref": "s1", "tick": 3}),
         ]
         results = validate_streaming_no_drain_after_close(events)
         assert len(results) == 1
@@ -814,10 +825,10 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_no_drain_after_close
 
         events = [
-            {"event_type": "stream_opened", "stream_ref": "s1", "tick": 0},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
-            {"event_type": "stream_closed", "stream_ref": "s1", "tick": 2},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},  # AFTER close!
+            _wrap({"event_type": "stream_opened", "stream_ref": "s1", "tick": 0}),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 1}),
+            _wrap({"event_type": "stream_closed", "stream_ref": "s1", "tick": 2}),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 5}),  # AFTER close!
         ]
         results = validate_streaming_no_drain_after_close(events)
         assert len(results) == 1
@@ -829,14 +840,16 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_no_overbill_on_partition
 
         events = [
-            {
-                "event_type": "stream_opened",
-                "stream_ref": "s1",
-                "agent": "payer",
-                "to": "payee",
-                "tick": 0,
-            },
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
+            _wrap(
+                {
+                    "event_type": "stream_opened",
+                    "stream_ref": "s1",
+                    "agent": "payer",
+                    "to": "payee",
+                    "tick": 0,
+                }
+            ),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 1}),
             {"kind": "dropped", "from": "payer", "agent": "payee", "tick": 2},
             # No payment_debited after the partition
         ]
@@ -849,16 +862,18 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_no_overbill_on_partition
 
         events = [
-            {
-                "event_type": "stream_opened",
-                "stream_ref": "s1",
-                "agent": "payer",
-                "to": "payee",
-                "tick": 0,
-            },
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 1},
+            _wrap(
+                {
+                    "event_type": "stream_opened",
+                    "stream_ref": "s1",
+                    "agent": "payer",
+                    "to": "payee",
+                    "tick": 0,
+                }
+            ),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 1}),
             {"kind": "dropped", "from": "payer", "agent": "payee", "tick": 3},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},  # OVER-BILL
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 5}),  # OVER-BILL
         ]
         results = validate_streaming_no_overbill_on_partition(events)
         assert len(results) == 1
@@ -870,19 +885,133 @@ class TestStreamingValidators:
         from nest_core.validators import validate_streaming_no_overbill_on_partition
 
         events = [
-            {
-                "event_type": "stream_opened",
-                "stream_ref": "s1",
-                "agent": "payer",
-                "to": "payee",
-                "tick": 0,
-            },
+            _wrap(
+                {
+                    "event_type": "stream_opened",
+                    "stream_ref": "s1",
+                    "agent": "payer",
+                    "to": "payee",
+                    "tick": 0,
+                }
+            ),
             {"kind": "dropped", "from": "other-a", "agent": "other-b", "tick": 2},
-            {"kind": "payment_debited", "stream_ref": "s1", "tick": 5},
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 5}),
         ]
         results = validate_streaming_no_overbill_on_partition(events)
         assert len(results) == 1
         assert results[0].passed  # unrelated drop, not a violation
+
+    def test_rate_enforcement_passes(self) -> None:
+        """Rate enforcement passes when every tick's debit is within rate."""
+        from nest_core.validators import validate_streaming_rate_enforcement
+
+        events = [
+            _wrap(
+                {
+                    "event_type": "stream_opened",
+                    "stream_ref": "s1",
+                    "rate_per_tick": 50,
+                    "tick": 0,
+                }
+            ),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 1, "amount": 50}),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 2, "amount": 30}),
+        ]
+        results = validate_streaming_rate_enforcement(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_rate_enforcement_fails_on_overdraw(self) -> None:
+        """Fails when a tick drains more than the declared rate."""
+        from nest_core.validators import validate_streaming_rate_enforcement
+
+        events = [
+            _wrap(
+                {
+                    "event_type": "stream_opened",
+                    "stream_ref": "s1",
+                    "rate_per_tick": 50,
+                    "tick": 0,
+                }
+            ),
+            _wrap({"kind": "payment_debited", "stream_ref": "s1", "tick": 1, "amount": 200}),
+        ]
+        results = validate_streaming_rate_enforcement(events)
+        assert len(results) == 1
+        assert not results[0].passed
+
+    def test_no_double_open_passes(self) -> None:
+        """Passes when every stream ref is opened exactly once."""
+        from nest_core.validators import validate_streaming_no_double_open
+
+        events = [
+            _wrap({"event_type": "stream_opened", "stream_ref": "s1", "tick": 0}),
+            _wrap({"event_type": "stream_opened", "stream_ref": "s2", "tick": 0}),
+        ]
+        results = validate_streaming_no_double_open(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_no_double_open_fails_on_reopen(self) -> None:
+        """Fails when the same stream ref is opened twice."""
+        from nest_core.validators import validate_streaming_no_double_open
+
+        events = [
+            _wrap({"event_type": "stream_opened", "stream_ref": "s1", "tick": 0}),
+            _wrap({"event_type": "stream_opened", "stream_ref": "s1", "tick": 5}),
+        ]
+        results = validate_streaming_no_double_open(events)
+        assert len(results) == 1
+        assert not results[0].passed
+
+    def test_conservation_per_tick_passes(self) -> None:
+        """Passes when debited == credited at every tick boundary."""
+        from nest_core.validators import validate_streaming_conservation_per_tick
+
+        events = [
+            _wrap({"kind": "payment_debited", "tick": 0, "amount": 50}),
+            _wrap({"kind": "payment_credited", "tick": 0, "amount": 50}),
+            _wrap({"kind": "payment_debited", "tick": 1, "amount": 30}),
+            _wrap({"kind": "payment_credited", "tick": 1, "amount": 30}),
+        ]
+        results = validate_streaming_conservation_per_tick(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_conservation_per_tick_fails_mid_flight(self) -> None:
+        """Fails when a tick shows a debit with no matching credit yet."""
+        from nest_core.validators import validate_streaming_conservation_per_tick
+
+        events = [
+            _wrap({"kind": "payment_debited", "tick": 0, "amount": 50}),
+            # no matching credit at tick 0
+        ]
+        results = validate_streaming_conservation_per_tick(events)
+        assert len(results) == 1
+        assert not results[0].passed
+
+    def test_audit_trail_complete_passes(self) -> None:
+        """Passes when every opened stream is also closed."""
+        from nest_core.validators import validate_streaming_audit_trail_complete
+
+        events = [
+            _wrap({"event_type": "stream_opened", "stream_ref": "s1", "tick": 0}),
+            _wrap({"event_type": "stream_closed", "stream_ref": "s1", "tick": 10}),
+        ]
+        results = validate_streaming_audit_trail_complete(events)
+        assert len(results) == 1
+        assert results[0].passed
+
+    def test_audit_trail_complete_fails_on_unclosed(self) -> None:
+        """Fails when a stream is opened but never closed."""
+        from nest_core.validators import validate_streaming_audit_trail_complete
+
+        events = [
+            _wrap({"event_type": "stream_opened", "stream_ref": "s1", "tick": 0}),
+        ]
+        results = validate_streaming_audit_trail_complete(events)
+        assert len(results) == 1
+        assert not results[0].passed
 
 
 class TestEscrowValidators:
