@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# Stale-report trust scenario: a "reformed" attacker behaves well early,
+# accumulates positive reports, then turns malicious for the rest of the run.
+#
+# Under `trust: weighted` the stale early positives decay, so the attacker's
+# recent negatives dominate and the stale_report validators PASS.
+# Swap to `trust: score_average` and the old positives mask the new negatives
+# — the attacker's cheating is hidden.  The validators still pass (the trace
+# contains the same events) but the scenario test in
+# test_stale_report_scenario.py proves the weighted plugin produces a LOWER
+# score than score_average for the same evidence, demonstrating the
+# non-vacuous discriminator.
+name: stale_report
+description: "8 honest traders, 1 reformed attacker (good then malicious), 1 observer."
+
+tier: 1
+seed: 42
+
+agents:
+  # 8 honest + 1 attacker + 1 observer = 10
+  count: 10
+  brain: state-machine
+  roles:
+    - name: honest
+      count: 8
+    - name: attacker
+      count: 1
+    - name: observer
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  # Weighted decays the stale positives.  Swap to score_average to see the
+  # old positives mask the recent negatives.
+  trust: weighted
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: stale_report
+  config:
+    rounds: 10
+    good_rounds: 6
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/stale_report.jsonl

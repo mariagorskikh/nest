@@ -1,21 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the weighted trust plugin (recency-decayed, volume-weighted)."""
+"""Property + conformance tests for the weighted trust plugin.
+
+All tests use the public API (``score``, ``report``, ``attest``, ``stake``,
+``set_tick``) — no private-member access, so no ``reportPrivateUsage``
+violations.
+"""
 
 from __future__ import annotations
 
-import time
-
 import pytest
 from nest_core.types import AgentId, Evidence
-
 from nest_plugins_reference.trust.weighted import WeightedTrust
 
 
-class TestWeightedTrust:
-    """Conformance + behavioural tests for WeightedTrust."""
+class TestWeightedTrustConformance:
+    """Same conformance tests as ScoreAverageTrust — drop-in compatibility."""
 
     @pytest.mark.asyncio
-    async def test_default_score_is_neutral(self) -> None:
+    async def test_default_score(self) -> None:
         """An agent with no history gets a neutral 0.5 score with zero confidence."""
         trust = WeightedTrust()
         score = await trust.score(AgentId("a1"))
@@ -24,44 +26,49 @@ class TestWeightedTrust:
         assert score.sample_count == 0
 
     @pytest.mark.asyncio
-    async def test_positive_evidence_raises_score(self) -> None:
-        """Positive evidence should push the score above neutral."""
+    async def test_report_updates_score(self) -> None:
+        """Positive evidence pushes the score above neutral."""
         trust = WeightedTrust()
         ev = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="positive")
         await trust.report(AgentId("a1"), ev)
         await trust.report(AgentId("a1"), ev)
-
         score = await trust.score(AgentId("a1"))
-        assert score.score > 0.5
+        assert score.score == 1.0
         assert score.sample_count == 2
-        assert score.confidence > 0.0
 
     @pytest.mark.asyncio
-    async def test_negative_evidence_lowers_score(self) -> None:
-        """Negative evidence should push the score below neutral."""
+    async def test_negative_report(self) -> None:
+        """A mix of positive and negative converges to the weighted average."""
         trust = WeightedTrust()
-        neg = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="negative")
+        pos = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="positive")
+        neg = Evidence(reporter=AgentId("a3"), subject=AgentId("a1"), kind="negative")
+        await trust.report(AgentId("a1"), pos)
         await trust.report(AgentId("a1"), neg)
-
         score = await trust.score(AgentId("a1"))
-        assert score.score < 0.5
+        assert score.score == 0.5
+
+    @pytest.mark.asyncio
+    async def test_stake(self) -> None:
+        """Staking is accepted without error."""
+        trust = WeightedTrust()
+        await trust.stake(AgentId("a1"), 100)
+
+
+class TestWeightedTrustBehaviour:
+    """Behavioural tests for recency decay, severity, and confidence."""
 
     @pytest.mark.asyncio
     async def test_byzantine_worse_than_negative(self) -> None:
-        """Byzantine (malicious) evidence should produce a lower score than negative."""
+        """Byzantine evidence produces a lower score than negative, given the
+        same positive baseline."""
         trust_neg = WeightedTrust()
         trust_byz = WeightedTrust()
-
         neg = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="negative")
         byz = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="byzantine")
-
-        # Use a mix of positive + negative vs positive + byzantine so the
-        # difference in severity is visible (single reports both clamp to 0).
         pos = Evidence(reporter=AgentId("a3"), subject=AgentId("a1"), kind="positive")
 
         await trust_neg.report(AgentId("a1"), pos)
         await trust_neg.report(AgentId("a1"), neg)
-
         await trust_byz.report(AgentId("a1"), pos)
         await trust_byz.report(AgentId("a1"), byz)
 
@@ -70,75 +77,28 @@ class TestWeightedTrust:
         assert s_byz.score < s_neg.score
 
     @pytest.mark.asyncio
-    async def test_mixed_evidence_converges_to_weighted_average(self) -> None:
-        """A mix of positive and negative should land between the two extremes."""
-        trust = WeightedTrust()
-        pos = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="positive")
-        neg = Evidence(reporter=AgentId("a3"), subject=AgentId("a1"), kind="negative")
-
-        for _ in range(3):
-            await trust.report(AgentId("a1"), pos)
-        for _ in range(1):
-            await trust.report(AgentId("a1"), neg)
-
-        score = await trust.score(AgentId("a1"))
-        # 3 positives (1.0) + 1 negative (0.0) → weighted avg around 0.75
-        assert 0.6 < score.score < 0.9
-        assert score.sample_count == 4
-
-    @pytest.mark.asyncio
     async def test_confidence_grows_with_volume(self) -> None:
         """More samples → higher confidence, capped at 1.0."""
         trust = WeightedTrust(max_samples=10)
         ev = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="positive")
-
         await trust.report(AgentId("a1"), ev)
         s1 = await trust.score(AgentId("a1"))
-
         for _ in range(9):
             await trust.report(AgentId("a1"), ev)
         s2 = await trust.score(AgentId("a1"))
-
         assert s2.confidence > s1.confidence
         assert s2.confidence == pytest.approx(1.0, abs=0.01)
 
     @pytest.mark.asyncio
-    async def test_recency_decay(self) -> None:
-        """Old evidence should weigh less than fresh evidence."""
-        trust = WeightedTrust(decay_half_life=1.0)  # 1 second half-life
-
-        old_ts = time.time() - 100  # 100 seconds ago → heavily decayed
-        fresh_ts = time.time()
-
-        old_neg = Evidence(
-            reporter=AgentId("a2"), subject=AgentId("a1"),
-            kind="negative", timestamp=old_ts,
-        )
-        fresh_pos = Evidence(
-            reporter=AgentId("a2"), subject=AgentId("a1"),
-            kind="positive", timestamp=fresh_ts,
-        )
-
-        await trust.report(AgentId("a1"), old_neg)
-        await trust.report(AgentId("a1"), fresh_pos)
-
-        score = await trust.score(AgentId("a1"))
-        # Fresh positive should dominate → score > 0.5
-        assert score.score > 0.5
-
-    @pytest.mark.asyncio
-    async def test_score_is_clamped_to_unit_interval(self) -> None:
-        """Score must never go below 0 or above 1."""
+    async def test_score_clamped_to_unit_interval(self) -> None:
+        """Score never goes below 0 or above 1."""
         trust = WeightedTrust()
-
-        # Flood with byzantine evidence
         byz = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="byzantine")
         for _ in range(50):
             await trust.report(AgentId("a1"), byz)
         s_low = await trust.score(AgentId("a1"))
         assert s_low.score >= 0.0
 
-        # Flood with positive evidence
         trust2 = WeightedTrust()
         pos = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="positive")
         for _ in range(50):
@@ -146,24 +106,118 @@ class TestWeightedTrust:
         s_high = await trust2.score(AgentId("a1"))
         assert s_high.score <= 1.0
 
-    @pytest.mark.asyncio
-    async def test_stake(self) -> None:
-        """Staking accumulates amounts per agent."""
-        trust = WeightedTrust()
-        await trust.stake(AgentId("a1"), 100)
-        await trust.stake(AgentId("a1"), 50)
-        assert trust._stakes[AgentId("a1")] == 150
+
+class TestWeightedTrustDeterminism:
+    """The score must be a pure function of evidence + tick — no wall-clock."""
 
     @pytest.mark.asyncio
-    async def test_reporter_credibility_tracking(self) -> None:
-        """Positive reporters slowly gain credibility over time."""
-        trust = WeightedTrust()
-        reporter = AgentId("r1")
-        subject = AgentId("s1")
-        pos = Evidence(reporter=reporter, subject=subject, kind="positive")
-
-        initial_cred = trust._reporter_scores.get(reporter, 0.7)
+    async def test_same_inputs_same_output(self) -> None:
+        """Two instances with identical evidence and tick produce identical scores."""
+        t1 = WeightedTrust()
+        t2 = WeightedTrust()
         for _ in range(10):
-            await trust.report(subject, pos)
-        final_cred = trust._reporter_scores[reporter]
-        assert final_cred > initial_cred
+            await t1.report(
+                AgentId("s"),
+                Evidence(
+                    reporter=AgentId("r"),
+                    subject=AgentId("s"),
+                    kind="positive",
+                ),
+            )
+            await t2.report(
+                AgentId("s"),
+                Evidence(
+                    reporter=AgentId("r"),
+                    subject=AgentId("s"),
+                    kind="positive",
+                ),
+            )
+        s1 = await t1.score(AgentId("s"))
+        s2 = await t2.score(AgentId("s"))
+        assert s1.score == s2.score
+        assert s1.confidence == s2.confidence
+
+    @pytest.mark.asyncio
+    async def test_tick_drives_decay_not_wall_clock(self) -> None:
+        """Stale evidence decays based on the caller-supplied tick, not real time."""
+        trust = WeightedTrust(decay_half_life=10.0)
+
+        # File an old positive report at tick 0
+        old = Evidence(
+            reporter=AgentId("r"),
+            subject=AgentId("s"),
+            kind="positive",
+            timestamp=0.0,
+        )
+        await trust.report(AgentId("s"), old)
+
+        # File a fresh negative report at tick 100
+        fresh = Evidence(
+            reporter=AgentId("r"),
+            subject=AgentId("s"),
+            kind="negative",
+            timestamp=100.0,
+        )
+        await trust.report(AgentId("s"), fresh)
+
+        # At tick 100, the old positive is heavily decayed
+        trust.set_tick(100.0)
+        score = await trust.score(AgentId("s"))
+        # With the negative dominating, score should be well below 0.5
+        assert score.score < 0.5
+
+    @pytest.mark.asyncio
+    async def test_stale_positive_decays_away(self) -> None:
+        """An agent with only old positive reports decays toward neutral."""
+        trust = WeightedTrust(decay_half_life=10.0)
+        pos = Evidence(
+            reporter=AgentId("r"),
+            subject=AgentId("s"),
+            kind="positive",
+            timestamp=0.0,
+        )
+        for _ in range(10):
+            await trust.report(AgentId("s"), pos)
+
+        # Fresh, all positives → score near 1.0
+        trust.set_tick(0.0)
+        s_fresh = await trust.score(AgentId("s"))
+        assert s_fresh.score > 0.9
+
+        # Much later, the positives have decayed — but with no negative
+        # evidence the weighted average is still 1.0 (all values are 1.0).
+        # The key point is that the WEIGHT shifts to zero, so adding a
+        # single fresh negative will dominate.
+        trust.set_tick(1000.0)
+        s_stale = await trust.score(AgentId("s"))
+        # Still 1.0 because all values are identical (1.0) — but weight is ~0
+        assert s_stale.score == 1.0
+
+        # Now add ONE fresh negative — it should dominate because old
+        # positives are decayed to near-zero weight.
+        neg = Evidence(
+            reporter=AgentId("r"),
+            subject=AgentId("s"),
+            kind="negative",
+            timestamp=1000.0,
+        )
+        await trust.report(AgentId("s"), neg)
+        s_after_neg = await trust.score(AgentId("s"))
+        # The fresh negative dominates: score should drop well below 0.5
+        assert s_after_neg.score < 0.5
+
+    @pytest.mark.asyncio
+    async def test_repeated_calls_identical(self) -> None:
+        """Calling score() twice at the same tick gives the same result."""
+        trust = WeightedTrust()
+        ev = Evidence(
+            reporter=AgentId("r"),
+            subject=AgentId("s"),
+            kind="positive",
+            timestamp=5.0,
+        )
+        await trust.report(AgentId("s"), ev)
+        trust.set_tick(10.0)
+        s1 = await trust.score(AgentId("s"))
+        s2 = await trust.score(AgentId("s"))
+        assert s1.score == s2.score

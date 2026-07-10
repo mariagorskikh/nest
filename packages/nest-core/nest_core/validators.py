@@ -5172,3 +5172,136 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_rogue_trusted_agent_reputation,
     ],
 }
+
+
+# ---------------------------------------------------------------------------
+# Stale-report trust validators
+# ---------------------------------------------------------------------------
+
+
+def validate_stale_report_attacker_cheated(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The reformed attacker must have both early positives and late negatives.
+
+    This verifies the scenario ran correctly: the attacker was good early,
+    then turned malicious. Without both halves the discriminator is vacuous.
+    """
+    attacker_positives = 0
+    attacker_negatives = 0
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("filed:"):
+            parts = msg.split(":")
+            if len(parts) >= 4:
+                agent_str = parts[2]
+                outcome = parts[3]
+                if agent_str == "attacker-0":
+                    if outcome == "good":
+                        attacker_positives += 1
+                    elif outcome == "bad":
+                        attacker_negatives += 1
+
+    if attacker_positives == 0:
+        return [
+            ValidationResult(
+                "stale_report_attacker_cheated",
+                False,
+                "attacker has no early positive reports — scenario did not run",
+            )
+        ]
+    if attacker_negatives == 0:
+        return [
+            ValidationResult(
+                "stale_report_attacker_cheated",
+                False,
+                "attacker has no late negative reports — never turned malicious",
+            )
+        ]
+    return [
+        ValidationResult(
+            "stale_report_attacker_cheated",
+            True,
+            f"attacker: {attacker_positives} early positives, {attacker_negatives} late negatives",
+        )
+    ]
+
+
+def validate_stale_report_temporal_split(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Attacker's late negatives must arrive at HIGHER ticks than early positives.
+
+    Under ``score_average`` all reports count equally regardless of when they
+    arrived, so the old positives mask the new negatives.  Under
+    ``WeightedTrust`` the early positives decay and the late negatives dominate.
+
+    This validator verifies the *temporal ordering* exists in the trace so the
+    weighted plugin's decay has something to work on.  The actual scoring
+    difference is verified in the scenario test (``test_stale_report_scenario``)
+    which swaps the trust layer and proves ``weighted`` produces a lower score.
+    """
+    attacker_ticks_pos: list[float] = []
+    attacker_ticks_neg: list[float] = []
+
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("filed:"):
+            parts = msg.split(":")
+            if len(parts) >= 5:
+                agent_str = parts[2]
+                outcome = parts[3]
+                tick_str = parts[4]
+                if agent_str == "attacker-0":
+                    try:
+                        tick = float(tick_str)
+                    except ValueError:
+                        continue
+                    if outcome == "good":
+                        attacker_ticks_pos.append(tick)
+                    elif outcome == "bad":
+                        attacker_ticks_neg.append(tick)
+
+    if not attacker_ticks_pos or not attacker_ticks_neg:
+        return [
+            ValidationResult(
+                "stale_report_temporal_split",
+                False,
+                "need both positive and negative reports for the attacker",
+            )
+        ]
+
+    max_pos_tick = max(attacker_ticks_pos)
+    min_neg_tick = min(attacker_ticks_neg)
+
+    if min_neg_tick <= max_pos_tick:
+        return [
+            ValidationResult(
+                "stale_report_temporal_split",
+                False,
+                f"negative reports (tick {min_neg_tick}) do not postdate "
+                f"positives (tick {max_pos_tick}) — no temporal gap to decay",
+            )
+        ]
+
+    gap = min_neg_tick - max_pos_tick
+    return [
+        ValidationResult(
+            "stale_report_temporal_split",
+            True,
+            f"positives end at tick {max_pos_tick}, negatives start at "
+            f"tick {min_neg_tick} (gap: {gap:.1f} ticks — decay-relevant)",
+        )
+    ]
+
+
+# Register stale-report validators (after function definitions).
+VALIDATORS["stale_report"] = [
+    validate_stale_report_attacker_cheated,
+    validate_stale_report_temporal_split,
+]

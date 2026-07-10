@@ -1,31 +1,34 @@
 # SPDX-License-Identifier: Apache-2.0
 """Weighted trust plugin — recency-decayed, volume-weighted reputation.
 
-A richer alternative to ScoreAverageTrust that considers:
+A drop-in alternative to ``ScoreAverageTrust`` that is:
 
-  * **Recency** — newer evidence counts more than stale evidence via an
-    exponential decay factor.
-  * **Evidence severity** — ``positive`` adds weight, ``negative`` subtracts
-    moderately, ``byzantine`` (fault/malicious) subtracts heavily.
-  * **Volume confidence** — more data points → higher confidence score,
-    capped at ``max_samples``.
-  * **Reporter weighting** — reporters with a good track record are trusted
-    more than unknown/new reporters.
+* **Recency-aware** — evidence decays exponentially from its own timestamp,
+  not wall-clock time.  The score is a pure function of the evidence list
+  and the caller-supplied ``now`` tick, so traces are byte-reproducible.
+* **Severity-weighted** — ``positive``, ``neutral``, ``negative``, and
+  ``byzantine`` contribute differently, instead of the flat 1.0 / 0.0
+  binary used by ``ScoreAverageTrust``.
+* **Volume-confident** — ``confidence`` rises with sample count, capped at
+  ``max_samples``.
 
-The result is a score in ``[0, 1]`` that is more responsive to recent
-behaviour and more robust to a few noisy reports than a flat average.
+The key discriminator vs. ``ScoreAverageTrust`` is **staleness decay**:
+stale positive reports that should no longer carry weight are correctly
+discounted, so an agent that *used to be good* but recently turned
+malicious sees its score drop, while ``ScoreAverageTrust`` is memoryless
+to ordering and treats all reports equally regardless of when they
+arrived.
 
 Example::
 
     trust = WeightedTrust()
     await trust.report(AgentId("a1"), evidence)
-    score = await trust.score(AgentId("a1"))  # → ReputationScore
+    score = await trust.score(AgentId("a1"))
 """
 
 from __future__ import annotations
 
 import math
-import time
 from typing import Any
 
 from nest_core.types import (
@@ -42,19 +45,21 @@ _SEVERITY: dict[str, float] = {
     "positive": 1.0,
     "neutral": 0.5,
     "negative": 0.0,
-    "byzantine": -0.5,   # worst — explicit malice
+    "byzantine": -0.5,  # worst — explicit malice
 }
+
+# Default "now" tick when no clock is available.  Deterministic.
+_DEFAULT_NOW: float = 0.0
 
 
 class _Report:
     """Internal record of a single piece of evidence."""
 
-    __slots__ = ("value", "weight", "ts")
+    __slots__ = ("value", "tick")
 
-    def __init__(self, value: float, weight: float, ts: float) -> None:
+    def __init__(self, value: float, tick: float) -> None:
         self.value = value
-        self.weight = weight
-        self.ts = ts
+        self.tick = tick
 
 
 class WeightedTrust:
@@ -65,24 +70,44 @@ class WeightedTrust:
     identity:
         Optional identity provider for signing attestations.
     decay_half_life:
-        Evidence older than this many seconds has half the weight of
-        fresh evidence (exponential decay).  Default 7 days.
+        Evidence older than this many ticks has half the weight of fresh
+        evidence (exponential decay).  Default 100 ticks (arbitrary
+        simulation units, NOT wall-clock seconds).
     max_samples:
-        Number of samples at which confidence reaches 1.0.  Default 50.
+        Number of samples at which confidence reaches 1.0.
     """
 
     def __init__(
         self,
         identity: Any = None,
-        decay_half_life: float = 7 * 24 * 3600,
+        decay_half_life: float = 100.0,
         max_samples: int = 50,
     ) -> None:
         self._identity = identity
         self._decay_half_life = decay_half_life
         self._max_samples = max_samples
         self._reports: dict[AgentId, list[_Report]] = {}
-        self._reporter_scores: dict[AgentId, float] = {}
         self._stakes: dict[AgentId, int] = {}
+        # Caller-supplied "current tick".  Set via :meth:`set_tick` or
+        # left at 0.0 — the score is always a pure function of this value
+        # and the stored evidence, never of wall-clock time.
+        self._now: float = _DEFAULT_NOW
+
+    # ------------------------------------------------------------------ #
+    #  Clock — caller-supplied, never wall-clock
+    # ------------------------------------------------------------------ #
+
+    def set_tick(self, t: float) -> None:
+        """Advance the plugin's internal clock to simulation tick *t*.
+
+        This replaces wall-clock ``time.time()``.  The scenario runner
+        or test calls this to advance time deterministically.
+
+        Example::
+
+            trust.set_tick(42.0)
+        """
+        self._now = t
 
     # ------------------------------------------------------------------ #
     #  Public API (same interface as ScoreAverageTrust)
@@ -101,23 +126,24 @@ class WeightedTrust:
         n = len(reports)
         if n == 0:
             return ReputationScore(
-                agent_id=agent, score=0.5, confidence=0.0, sample_count=0,
+                agent_id=agent,
+                score=0.5,
+                confidence=0.0,
+                sample_count=0,
             )
 
-        now = time.time()
-        decay_lambda = math.log(2) / self._decay_half_life if self._decay_half_life else 0.0
+        now = self._now
+        decay_lambda = math.log(2) / self._decay_half_life if self._decay_half_life > 0 else 0.0
 
         weighted_sum = 0.0
         total_weight = 0.0
         for r in reports:
-            age = max(0.0, now - r.ts)
+            age = max(0.0, now - r.tick)
             recency = math.exp(-decay_lambda * age)
-            w = r.weight * recency
-            weighted_sum += r.value * w
-            total_weight += w
+            weighted_sum += r.value * recency
+            total_weight += recency
 
         raw = weighted_sum / total_weight if total_weight else 0.5
-        # Clamp to [0, 1]
         score = max(0.0, min(1.0, raw))
         confidence = min(1.0, n / self._max_samples)
 
@@ -144,26 +170,17 @@ class WeightedTrust:
         * ``neutral``  → value 0.5 (neither good nor bad)
         * ``negative`` → value 0.0 (poor performance)
         * ``byzantine`` → value -0.5 (active malice — penalised hardest)
+
+        The evidence timestamp (``evidence.timestamp``) is used as the
+        report tick.  If it is ``None``, the plugin's current internal
+        tick (``self._now``) is used — both are deterministic.
         """
-        ts = evidence.timestamp if evidence.timestamp is not None else time.time()
+        tick = evidence.timestamp if evidence.timestamp is not None else self._now
         value = _SEVERITY.get(evidence.kind, 0.5)
 
-        # Reporter weight: known-good reporters carry more weight.
-        # New reporters default to 0.7 (slightly above neutral).
-        reporter_score = self._reporter_scores.get(evidence.reporter, 0.7)
-        weight = max(0.1, reporter_score)  # floor so even bad reporters count a little
-
         self._reports.setdefault(agent, []).append(
-            _Report(value=value, weight=weight, ts=ts),
+            _Report(value=value, tick=tick),
         )
-
-        # Update the reporter's own score: if their report aligns with
-        # the subject's average, they become more credible next time.
-        # (Simplified: positive reporters slowly gain credibility.)
-        if evidence.kind == "positive":
-            self._reporter_scores[evidence.reporter] = min(1.0, reporter_score + 0.02)
-        elif evidence.kind in ("negative", "byzantine"):
-            self._reporter_scores[evidence.reporter] = max(0.1, reporter_score - 0.01)
 
     async def stake(self, agent: AgentId, amount: int) -> None:
         """Stake reputation on *agent*."""
