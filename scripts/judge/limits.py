@@ -41,16 +41,21 @@ class JudgeBudget:
     tokens_used: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def before_call(self) -> None:
-        max_calls = judge_max_calls()
-        with self._lock:
-            if max_calls is not None and self.calls >= max_calls:
-                raise JudgeLimitError(
-                    f"judge call limit reached ({self.calls}/{max_calls}); "
-                    "raise NEST_JUDGE_MAX_CALLS or unset to disable"
-                )
-            self.calls += 1
-
+def before_call(self) -> None:
+    max_calls = judge_max_calls()
+    token_budget = judge_token_budget()
+    with self._lock:
+        if token_budget is not None and self.tokens_used >= token_budget:
+            raise JudgeLimitError(
+                f"judge token budget reached ({self.tokens_used}/{token_budget}); "
+                "raise NEST_JUDGE_TOKEN_BUDGET or unset to disable"
+            )
+        if max_calls is not None and self.calls >= max_calls:
+            raise JudgeLimitError(
+                f"judge call limit reached ({self.calls}/{max_calls}); "
+                "raise NEST_JUDGE_MAX_CALLS or unset to disable"
+            )
+        self.calls += 1
     def complete_call(
         self,
         *,
