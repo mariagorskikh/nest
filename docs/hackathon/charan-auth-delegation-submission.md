@@ -304,8 +304,7 @@ FAIL manifest_delegated_auth_no_stale_parent stale_parent attack accepted
 FAIL manifest_delegated_auth_audience_binding audience_confusion attack accepted
 ```
 
-Full pytest result from this checkout, using the same `.venv` interpreter with
-the local `readline` startup workaround described below:
+Full pytest result from this checkout through canonical `make ci-local`:
 
 ```text
 1253 passed, 1 skipped, 1 deselected, 1 warning
@@ -327,14 +326,11 @@ uv run pyright
 uv run pytest -v
 ```
 
-Local runner note: in this macOS checkout, `make ci-local` completed
-`uv sync`, `uv run ruff check .`, `uv run ruff format --check .`, and
-`uv run pyright`, then `uv run pytest -v` exited 139 before collection
-because pytest's startup imported the local `readline` extension and the
-extension segfaulted. The full suite above was therefore run through the
-same `.venv` interpreter with `readline` pre-seeded as an empty module before
-calling `pytest.main(["-q"])`. That workaround changes only pytest startup,
-not the project code or tests.
+Latest local result: `make ci-local` passed all five checks on this branch.
+This checkout's original Anaconda-backed `.venv` had a broken native
+`readline` extension that crashed on import before pytest collection. Rebuilding
+the local `.venv` with Homebrew CPython 3.12.9 fixed the environment issue;
+the canonical command then completed normally with no pytest workaround.
 
 ## Charter Alignment
 
