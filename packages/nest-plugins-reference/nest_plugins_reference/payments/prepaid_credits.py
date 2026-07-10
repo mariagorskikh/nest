@@ -35,11 +35,15 @@ class PrepaidCredits:
         initial_balance: int = 1000,
         balances: dict[AgentId, int] | None = None,
         payments: dict[PaymentRef, Receipt] | None = None,
+        refunds: set[PaymentRef] | None = None,
     ) -> None:
         self._agent_id = agent_id
         self._balances = balances if balances is not None else {}
         self._balances.setdefault(agent_id, initial_balance)
         self._payments = payments if payments is not None else {}
+        # Pass the same set to every instance sharing a ledger (like
+        # ``balances``/``payments``) so refund status is visible to all parties.
+        self._refunds: set[PaymentRef] = refunds if refunds is not None else set()
 
     def balance(self, agent: AgentId) -> int:
         """Check an agent's balance.
@@ -92,6 +96,8 @@ class PrepaidCredits:
 
             status = await pay.verify_payment(PaymentRef("p1"))
         """
+        if ref in self._refunds:
+            return PaymentStatus.REFUNDED
         if ref in self._payments:
             return PaymentStatus.CONFIRMED
         return PaymentStatus.FAILED
@@ -107,6 +113,9 @@ class PrepaidCredits:
         if receipt is None:
             msg = f"Payment not found: {ref}"
             raise ValueError(msg)
+        if ref in self._refunds:
+            msg = f"Payment already refunded: {ref}"
+            raise ValueError(msg)
 
         payee_balance = self._balances.get(receipt.payee, 0)
         if payee_balance < receipt.amount.amount:
@@ -118,4 +127,7 @@ class PrepaidCredits:
 
         self._balances[receipt.payee] = payee_balance - receipt.amount.amount
         self._balances[receipt.payer] = self._balances.get(receipt.payer, 0) + receipt.amount.amount
-        del self._payments[ref]
+        # Keep the receipt: the ref stays burned (no silent reuse) and
+        # verify_payment reports REFUNDED instead of FAILED, matching the
+        # escrow plugin's terminal-state behavior.
+        self._refunds.add(ref)

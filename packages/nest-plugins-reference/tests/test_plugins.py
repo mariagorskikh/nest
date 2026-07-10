@@ -313,6 +313,61 @@ class TestPrepaidCredits:
         assert pay.balance(AgentId("a2")) == 0
 
     @pytest.mark.asyncio
+    async def test_verify_refunded_payment_reports_refunded(self) -> None:
+        from nest_plugins_reference.payments.prepaid_credits import PrepaidCredits
+
+        pay = PrepaidCredits(AgentId("a1"), initial_balance=1000)
+        await pay.pay(AgentId("a2"), Money(amount=100), PaymentRef("p1"))
+        await pay.refund(PaymentRef("p1"))
+
+        # A refunded payment is not the same as one that never happened.
+        assert await pay.verify_payment(PaymentRef("p1")) == PaymentStatus.REFUNDED
+
+    @pytest.mark.asyncio
+    async def test_refunded_ref_cannot_be_reused(self) -> None:
+        from nest_plugins_reference.payments.prepaid_credits import PrepaidCredits
+
+        pay = PrepaidCredits(AgentId("a1"), initial_balance=1000)
+        await pay.pay(AgentId("a2"), Money(amount=100), PaymentRef("p1"))
+        await pay.refund(PaymentRef("p1"))
+
+        # The ref stays burned after refund; replaying it must fail.
+        with pytest.raises(ValueError, match="Duplicate"):
+            await pay.pay(AgentId("a2"), Money(amount=100), PaymentRef("p1"))
+
+    @pytest.mark.asyncio
+    async def test_double_refund_rejected(self) -> None:
+        from nest_plugins_reference.payments.prepaid_credits import PrepaidCredits
+
+        pay = PrepaidCredits(AgentId("a1"), initial_balance=1000)
+        await pay.pay(AgentId("a2"), Money(amount=100), PaymentRef("p1"))
+        await pay.refund(PaymentRef("p1"))
+
+        with pytest.raises(ValueError, match="already refunded"):
+            await pay.refund(PaymentRef("p1"))
+
+    @pytest.mark.asyncio
+    async def test_shared_ledger_refund_visible_to_all_parties(self) -> None:
+        from nest_plugins_reference.payments.prepaid_credits import PrepaidCredits
+
+        balances = {AgentId("buyer"): 100, AgentId("seller"): 0}
+        payments: dict[PaymentRef, Receipt] = {}
+        refunds: set[PaymentRef] = set()
+        buyer = PrepaidCredits(
+            AgentId("buyer"), balances=balances, payments=payments, refunds=refunds
+        )
+        seller = PrepaidCredits(
+            AgentId("seller"), balances=balances, payments=payments, refunds=refunds
+        )
+
+        await buyer.pay(AgentId("seller"), Money(amount=40), PaymentRef("p1"))
+        await buyer.refund(PaymentRef("p1"))
+
+        assert buyer.balance(AgentId("buyer")) == 100
+        assert seller.balance(AgentId("seller")) == 0
+        assert await seller.verify_payment(PaymentRef("p1")) == PaymentStatus.REFUNDED
+
+    @pytest.mark.asyncio
     async def test_quote(self) -> None:
         from nest_plugins_reference.payments.prepaid_credits import PrepaidCredits
 
