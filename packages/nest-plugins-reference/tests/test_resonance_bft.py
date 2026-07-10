@@ -3891,12 +3891,15 @@ class TestNoRosterRelational:
 
 
 class TestDivergentQuorumViews:
-    """Safety under DIVERGENT (overlapping) quorum views — the case a plain resolver-
-    independence test (identical views) does not cover. ResonanceBFT gives EXACT agreement
-    for identical certified views and APPROXIMATE agreement across different overlapping
-    quorums (bounded belief divergence; cf. Cambus 2025). The safety invariant is: no honest
-    agent visible to both views is committed in one yet rejected in the other (no fork on the
-    shared core) — the per-view winner is a representative, not a globally-canonical value."""
+    """``resolve()``-layer geometric consistency under DIVERGENT (overlapping) quorum views.
+
+    ``resolve()`` is a pure function: two honest replicas that see different ``n−f`` subsets of
+    one round classify every agent visible to BOTH views the same way (no fork on the shared
+    core), and their pentadic alignment barely moves.  This geometric consistency is what makes
+    the two-phase vote safe — but the *committed* winner is decided by that vote (a ``2f+1``
+    signed-vote quorum under the strict lock), which is globally canonical: no two committed
+    outcomes for one round name different winners.  So ``validate_bft_no_conflicting_commits``
+    holds strictly here (both views resolve the same winner)."""
 
     @pytest.mark.asyncio
     async def test_divergent_quorum_views_do_not_fork_shared_core(self) -> None:
@@ -3936,13 +3939,13 @@ class TestDivergentQuorumViews:
         # views (it differs only through the centroid's dependence on the non-shared members).
         pa, pb = o_a.metadata["per_axis"], o_b.metadata["per_axis"]
         assert max(abs(pa[a]["pentadic"] - pb[a]["pentadic"]) for a in shared) < 0.05
-        # The forensic validator must AGREE these two divergent-view commits are not a fork:
-        # they classify the shared core consistently. (This exact case is what the earlier
-        # whole-certificate fingerprint wrongly reported as a safety violation.)
+        # The strict validator PASSES: the two divergent views classify the shared core
+        # consistently AND resolve the same winner, so there is no fork.
         from nest_plugins_reference.validators.bft_validators import (
             validate_bft_no_conflicting_commits,
         )
 
+        assert str(o_a.winner) == str(o_b.winner)  # divergent views, same committed winner
         assert validate_bft_no_conflicting_commits([o_a, o_b]).passed
 
 

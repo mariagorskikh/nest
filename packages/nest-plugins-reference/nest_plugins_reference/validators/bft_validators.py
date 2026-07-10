@@ -288,23 +288,21 @@ def collect_equivocation_certificates(rounds: list[Round]) -> tuple[dict[str, An
 def validate_bft_no_conflicting_commits(
     outcomes: list[Outcome],
 ) -> BftValidationResult:
-    """No two committed outcomes for one round may fork the SHARED CORE.
+    """No two committed outcomes for one round commit different winners (Problem #10 safety).
 
-    The BFT safety property honest agents actually guarantee here is *approximate agreement
-    on a shared core*, not a byte-identical certificate.  Two honest resolvers that see
-    different ``n−f`` subsets of the same round legitimately form **different (overlapping)
-    quorums** — and, because the winner is only a per-view representative, may even name
-    different winners — without any safety violation, *provided every agent visible to BOTH
-    of them is classified the same way* (in-quorum in both, or excluded in both).  That is
-    exactly what ``test_divergent_quorum_views_do_not_fork_shared_core`` exercises.
+    With the two-phase prepare/commit vote (a value commits only on a ``2f+1`` signed-vote
+    quorum under the strict lock rule), "no two honest agents commit conflicting values for the
+    same round" is a **literal** invariant: any two committed outcomes for one round MUST name the
+    same winner.  This validator enforces exactly that — a same-round pair with different winners
+    is a fork, whether or not their quorum sets happen to differ.  (``resolve()`` alone is a pure
+    function that could pick different per-view representatives for different ``n−f`` subsets, but
+    those never both *commit*; the vote layer selects one.  So the earlier "different representative
+    winners across divergent views are not a fork" tolerance is obsolete and has been removed.)
 
-    A real fork is therefore either (a) an agent PRESENT in both commits (in its quorum,
-    outlier, or tampered set) that one commit puts in the quorum and the other excludes, or
-    (b) an IDENTICAL quorum that commits two different winners (same evidence → same decision
-    must hold).  Merely-different overlapping quorum sets or representative winners are NOT a
-    fork.  (An earlier version fingerprinted the whole ``(winner, quorum set, quorum_needed)``
-    certificate and wrongly flagged the legitimate divergent-view case above.)  ``contract_net``
-    produces outcomes without a ``status`` key, so the metadata-absent path returns a failure.
+    It also flags the stronger shared-core split — an agent PRESENT in both commits (quorum,
+    outlier, or tampered) that one commit puts in the quorum and the other excludes.  Fail-closed:
+    an empty input (nothing scorable) is a failure, which is also why ``contract_net`` outcomes
+    (no ``status`` key) fail the metadata-absent path.
 
     Example::
 
@@ -312,6 +310,9 @@ def validate_bft_no_conflicting_commits(
         assert result.passed
     """
     name = "bft_no_conflicting_commits"
+
+    if not outcomes:
+        return BftValidationResult(name, False, "no outcomes to validate (fail-closed)")
 
     non_bft = [o for o in outcomes if not _is_bft_outcome(o)]
     if non_bft:
@@ -340,6 +341,11 @@ def validate_bft_no_conflicting_commits(
 
     conflicts: list[str] = []
     for rid, outs in by_round.items():
+        # LITERAL no-conflicting-commits: every committed outcome for the round names one winner.
+        winners = sorted({str(o.winner) for o in outs})
+        if len(winners) > 1:
+            conflicts.append(f"round {rid}: committed different winners {winners} (fork)")
+        # Stronger shared-core check: an agent present in both commits classified inconsistently.
         for i in range(len(outs)):
             for j in range(i + 1, len(outs)):
                 oa, ob = outs[i], outs[j]
@@ -349,11 +355,6 @@ def validate_bft_no_conflicting_commits(
                     conflicts.append(
                         f"round {rid}: agents {split} are present in both commits but "
                         f"classified inconsistently (fork on the shared core)"
-                    )
-                elif qa == qb and str(oa.winner) != str(ob.winner):
-                    conflicts.append(
-                        f"round {rid}: an identical quorum {sorted(qa)} committed different "
-                        f"winners ({oa.winner!s} vs {ob.winner!s})"
                     )
 
     if conflicts:
@@ -385,6 +386,9 @@ def validate_bft_no_equivocation(
         assert result.passed
     """
     name = "bft_no_equivocation"
+
+    if not rounds:
+        return BftValidationResult(name, False, "no rounds to validate (fail-closed)")
 
     non_bft = [r for r in rounds if not _is_bft_round(r)]
     if non_bft:
@@ -460,6 +464,9 @@ def validate_bft_no_forged_quorum(
         assert result.passed
     """
     name = "bft_no_forged_quorum"
+
+    if not outcomes:
+        return BftValidationResult(name, False, "no outcomes to validate (fail-closed)")
 
     non_bft = [o for o in outcomes if not _is_bft_outcome(o)]
     if non_bft:
@@ -559,6 +566,9 @@ def validate_bft_liveness_view_progress(
         assert result.passed
     """
     name = "bft_liveness_view_progress"
+
+    if not outcomes:
+        return BftValidationResult(name, False, "no outcomes to validate (fail-closed)")
 
     non_bft = [o for o in outcomes if not _is_bft_outcome(o)]
     if non_bft:

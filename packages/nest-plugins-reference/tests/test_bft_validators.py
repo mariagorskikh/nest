@@ -175,9 +175,10 @@ class TestNoConflictingCommits:
         result = validate_bft_no_conflicting_commits(outcomes)
         assert result.passed, result.detail
 
-    def test_passes_on_empty_list(self) -> None:
+    def test_fails_closed_on_empty_list(self) -> None:
+        # Fail-closed: no committed outcomes means nothing was scorable (repo convention).
         result = validate_bft_no_conflicting_commits([])
-        assert result.passed
+        assert not result.passed
 
     def test_passes_on_aborted_outcomes(self) -> None:
         outcomes = [_bft_outcome("r1", None, status="aborted", quorum_size=2)]
@@ -240,9 +241,10 @@ class TestNoEquivocation:
         result = validate_bft_no_equivocation(rounds)
         assert result.passed, result.detail
 
-    def test_passes_on_empty_list(self) -> None:
+    def test_fails_closed_on_empty_list(self) -> None:
+        # Fail-closed: no rounds means nothing was scorable (repo convention).
         result = validate_bft_no_equivocation([])
-        assert result.passed
+        assert not result.passed
 
     def test_fails_when_commitment_tampered(self) -> None:
         rounds = [_bft_round("r1", self._AGENTS, tamper="follower-0")]
@@ -411,9 +413,10 @@ class TestLivenessViewProgress:
         assert not result.passed
         assert "protocol mismatch" in result.detail
 
-    def test_passes_on_empty_list(self) -> None:
+    def test_fails_closed_on_empty_list(self) -> None:
+        # Fail-closed: no outcomes means nothing was scorable (repo convention).
         result = validate_bft_liveness_view_progress([])
-        assert result.passed
+        assert not result.passed
 
     def test_abort_then_commit_resets_counter(self) -> None:
         outcomes = [
