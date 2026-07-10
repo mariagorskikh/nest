@@ -31,7 +31,7 @@ layers:
   datafacts: datafacts_v1
 
 task:
-  type: memory_code_saturation_calculator
+  type: memory_basis_fusion_calculator
   config:
     required_basis: [add, subtract, multiply, divide]
     threshold: 4

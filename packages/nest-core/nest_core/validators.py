@@ -1351,24 +1351,44 @@ def validate_basis_fusion_calculator_action(
     """Validate basis-restricted calculator fusion and resulting action.
 
     Reports should fuse only through declared calculator basis dimensions. The
-    copypasta/no-overlap report may saturate context, but it must remain ignored
-    and must not prevent the coordinator from shipping after the required basis
-    has fused.
+    coordinator emits ``basis_decl|calculator|...|threshold=N`` so the validator
+    checks the scenario's configured basis instead of a hardcoded calculator
+    basis. Saturation/no-overlap reports may flood context, but they must remain
+    ignored and must not prevent shipping after the required basis has fused.
 
     Example::
 
         results = validate_basis_fusion_calculator_action(events)
     """
-    required = {"add", "subtract", "multiply", "divide"}
+    required: set[str] | None = None
+    threshold: int | None = None
     accepted: set[str] = set()
     ignored_reasons: set[str] = set()
     decisions: list[str] = []
+    basis_declared = False
 
     for ev in events:
         if ev.get("kind") not in ("send", "broadcast"):
             continue
         msg = str(ev.get("msg", ""))
-        if msg.startswith("fusion_accept|"):
+        if msg.startswith("basis_decl|calculator|"):
+            parts = msg.split("|")
+            if len(parts) >= 3:
+                basis_declared = True
+                basis_parts: list[str] = []
+                for part in parts[2:]:
+                    if not part:
+                        continue
+                    if part.startswith("threshold="):
+                        with contextlib.suppress(ValueError):
+                            threshold = int(part.removeprefix("threshold="))
+                    else:
+                        basis_parts.append(part)
+                required = set(basis_parts)
+                if threshold is None and parts[-1].startswith("threshold="):
+                    with contextlib.suppress(ValueError):
+                        threshold = int(parts[-1].removeprefix("threshold="))
+        elif msg.startswith("fusion_accept|"):
             parts = msg.split("|")
             if len(parts) >= 3 and parts[1] == "calculator":
                 accepted.add(parts[2])
@@ -1380,23 +1400,40 @@ def validate_basis_fusion_calculator_action(
             decisions.append(msg)
 
     results: list[ValidationResult] = []
-    missing = required - accepted
-    if missing:
+    if not basis_declared or required is None:
         results.append(
             ValidationResult(
                 "basis_fusion_required_basis",
                 False,
-                f"calculator basis did not fully fuse; missing {sorted(missing)}",
+                "missing basis declaration from coordinator trace",
             )
         )
-    else:
+    elif not required:
         results.append(
             ValidationResult(
                 "basis_fusion_required_basis",
-                True,
-                f"calculator fused required basis {sorted(required)}",
+                False,
+                "basis declaration was empty",
             )
         )
+    else:
+        missing = required - accepted
+        if missing:
+            results.append(
+                ValidationResult(
+                    "basis_fusion_required_basis",
+                    False,
+                    f"calculator basis did not fully fuse; missing {sorted(missing)}",
+                )
+            )
+        else:
+            results.append(
+                ValidationResult(
+                    "basis_fusion_required_basis",
+                    True,
+                    f"calculator fused required basis {sorted(required)}",
+                )
+            )
 
     saturation_reasons = {"no-overlap", "not-json", "not-object"}
     if ignored_reasons & saturation_reasons and "outside-basis" in ignored_reasons:
@@ -1424,7 +1461,14 @@ def validate_basis_fusion_calculator_action(
             if field.startswith("ignored="):
                 with contextlib.suppress(ValueError):
                     ignored_counts.append(int(field.removeprefix("ignored=")))
-    if len(ship_decisions) == 1 and ignored_counts and ignored_counts[0] >= 2:
+    score_counts: list[int] = []
+    for decision in ship_decisions:
+        for field in decision.split("|"):
+            if field.startswith("score="):
+                with contextlib.suppress(ValueError):
+                    score_counts.append(int(field.removeprefix("score=")))
+    threshold_ok = threshold is None or bool(score_counts and score_counts[0] >= threshold)
+    if len(ship_decisions) == 1 and ignored_counts and ignored_counts[0] >= 2 and threshold_ok:
         results.append(
             ValidationResult(
                 "basis_fusion_action",
@@ -1438,7 +1482,7 @@ def validate_basis_fusion_calculator_action(
                 "basis_fusion_action",
                 False,
                 "expected exactly one ship decision after ignoring saturation/off-basis "
-                f"reports, saw {ship_decisions}",
+                f"reports and meeting threshold {threshold}, saw {ship_decisions}",
             )
         )
     return results
@@ -4299,10 +4343,6 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_memory_liveness,
     ],
     "memory_basis_fusion_calculator": [
-        validate_basis_fusion_calculator_action,
-        validate_pn_counter_delta_preservation,
-    ],
-    "memory_code_saturation_calculator": [
         validate_basis_fusion_calculator_action,
         validate_pn_counter_delta_preservation,
     ],

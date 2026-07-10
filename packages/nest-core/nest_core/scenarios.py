@@ -99,15 +99,6 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("memory_basis_fusion_calculator", memory_basis_fusion_calculator_factory)
-    elif name == "memory_code_saturation_calculator":
-        from nest_core.scenarios_builtin.memory_basis_fusion_calculator import (
-            memory_basis_fusion_calculator_factory,
-        )
-
-        register_scenario(
-            "memory_code_saturation_calculator",
-            memory_basis_fusion_calculator_factory,
-        )
     elif name == "comms_versioning":
         from nest_core.scenarios_builtin.comms_versioning import comms_versioning_factory
 

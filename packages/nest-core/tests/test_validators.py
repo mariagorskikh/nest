@@ -13,6 +13,7 @@ from nest_core.validators import (
     validate_auction_all_notified,
     validate_auction_single_winner,
     validate_auction_winner_highest,
+    validate_basis_fusion_calculator_action,
     validate_consensus_agreement,
     validate_consensus_no_conflict,
     validate_consensus_validity,
@@ -1804,6 +1805,41 @@ class TestEmpicPaymentsValidators:
         assert not results[0].passed
 
 
+class TestBasisFusionValidator:
+    def test_reads_declared_basis_from_trace(self) -> None:
+        events = [
+            _broadcast("coordinator-0", "basis_decl|calculator|square|root|threshold=2"),
+            _broadcast("coordinator-0", "fusion_accept|calculator|square|impl-square"),
+            _broadcast("coordinator-0", "fusion_accept|calculator|root|impl-root"),
+            _broadcast("coordinator-0", "fusion_ignore|context-saturation|no-overlap"),
+            _broadcast("coordinator-0", "fusion_ignore|off-basis|outside-basis"),
+            _broadcast("coordinator-0", "decision|calculator|ship|score=2|ignored=2"),
+        ]
+
+        results = validate_basis_fusion_calculator_action(events)
+
+        assert results
+        assert all(result.passed for result in results), [result.detail for result in results]
+        assert "square" in results[0].detail
+        assert "root" in results[0].detail
+
+    def test_fails_when_declared_basis_dimension_missing(self) -> None:
+        events = [
+            _broadcast("coordinator-0", "basis_decl|calculator|square|root|threshold=2"),
+            _broadcast("coordinator-0", "fusion_accept|calculator|square|impl-square"),
+            _broadcast("coordinator-0", "fusion_ignore|context-saturation|no-overlap"),
+            _broadcast("coordinator-0", "fusion_ignore|off-basis|outside-basis"),
+        ]
+
+        results = validate_basis_fusion_calculator_action(events)
+
+        required_result = next(
+            result for result in results if result.name == "basis_fusion_required_basis"
+        )
+        assert required_result.passed is False
+        assert "root" in required_result.detail
+
+
 class TestValidatorRegistry:
     def test_all_scenario_types_registered(self) -> None:
         expected = {
@@ -1816,7 +1852,6 @@ class TestValidatorRegistry:
             "identity_rotation",
             "memory_concurrent_writers",
             "memory_basis_fusion_calculator",
-            "memory_code_saturation_calculator",
             "memory_pn_counter_reports",
             "streaming_payments",
             "empic_payments",

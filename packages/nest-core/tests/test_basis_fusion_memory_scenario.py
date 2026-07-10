@@ -24,7 +24,7 @@ class TestBasisFusionMemoryScenario:
             ),
             (
                 "scenarios/memory_code_saturation_calculator.yaml",
-                "memory_code_saturation_calculator",
+                "memory_basis_fusion_calculator",
                 "amdgpu_bo_placement_from_domain",
             ),
         ],

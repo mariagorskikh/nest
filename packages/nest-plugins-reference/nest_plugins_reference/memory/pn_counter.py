@@ -15,6 +15,13 @@ maps. That join is commutative, associative, and idempotent, so replicas that
 have seen the same deltas converge to the same total regardless of delivery
 order, duplication, or reordering.
 
+Trust model: this reference plugin assumes mutually trusted replicas and an
+adversary in the delivery layer: messages may be dropped, duplicated, delayed,
+or reordered, but peers do not forge another replica's coordinates. Serialized
+state is shape-validated, but there is no signature/authorship proof in the
+counter payload itself; Byzantine peer defense belongs in an authenticated
+wrapper or transport layer.
+
 Example::
 
     a = PnCounterMemory("a")

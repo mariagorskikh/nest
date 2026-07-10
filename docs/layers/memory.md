@@ -110,6 +110,12 @@ The merge is commutative, associative, and idempotent. In the language of
 structured memory, convergence is not enough: the invariant is that every
 signed evidence contribution survives gossip exactly once.
 
+Trust model: `pn_counter` is a delivery-chaos CRDT, not a Byzantine-authorship
+protocol. It assumes replicas are mutually trusted and tests drops,
+duplication, reordering, and merge idempotence. Serialized state is
+shape-validated, but a malicious peer that can forge another node's coordinate
+must be blocked by an authenticated wrapper or transport layer.
+
 ```python
 a = PnCounterMemory("builder")
 b = PnCounterMemory("tester")
@@ -138,7 +144,9 @@ for r in validate_trace(Path('traces/memory_pn_counter_reports.jsonl'), 'memory_
 ```
 
 `scenarios/memory_basis_fusion_calculator.yaml` -- a coordinator acts like a
-small typed memory brain. Reports can fuse into the `calculator` node only if
+small typed memory brain. This is scenario-level policy layered on top of the
+PN-Counter: `pn_counter` preserves signed deltas, while the coordinator decides
+which reports may become deltas. Reports can fuse into the `calculator` node only if
 they restrict onto one of its declared basis dimensions: `add`, `subtract`,
 `multiply`, or `divide`. A frozen Project Gutenberg excerpt is used as a
 public-domain context-saturation payload with no legal overlap, and an
@@ -162,14 +170,15 @@ rule, but the saturation payload is a code-shaped excerpt from the permissively
 licensed `drivers/gpu/drm/amd/amdgpu/amdgpu_object.c` file in
 `torvalds/linux`. This guards against a subtler failure mode: a payload can look
 plausibly technical while still having no legal node/basis overlap with the
-calculator task.
+calculator task. This YAML reuses `task.type: memory_basis_fusion_calculator`
+with a different fixture, so the validator and factory stay shared.
 
 ```bash
 nest run scenarios/memory_code_saturation_calculator.yaml
 python -c "
 from pathlib import Path
 from nest_core.validators import validate_trace
-for r in validate_trace(Path('traces/memory_code_saturation_calculator.jsonl'), 'memory_code_saturation_calculator'):
+for r in validate_trace(Path('traces/memory_code_saturation_calculator.jsonl'), 'memory_basis_fusion_calculator'):
     print(('PASS' if r.passed else 'FAIL'), r.name, '-', r.detail)
 "
 ```

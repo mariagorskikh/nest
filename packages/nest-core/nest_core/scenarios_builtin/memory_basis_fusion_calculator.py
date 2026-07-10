@@ -8,7 +8,9 @@ has no ``node`` and no valid ``basis`` field, so it cannot glue to the
 calculator node and cannot change the decision.
 
 The coordinator writes accepted evidence into ``pn_counter`` memory and ships
-the calculator only after all required basis dimensions have fused.
+the calculator only after all required basis dimensions have fused. The basis
+gate is scenario-level policy: ``pn_counter`` preserves signed deltas, while
+this coordinator decides which reports are allowed to become deltas.
 
 Example::
 
@@ -29,6 +31,7 @@ _CHECK = b"check"
 _REPORT_PREFIX = "fusion_report|"
 _ACCEPT_PREFIX = "fusion_accept|"
 _IGNORE_PREFIX = "fusion_ignore|"
+_BASIS_DECL_PREFIX = "basis_decl|"
 _DELTA_PREFIX = "pn_delta|"
 _DECISION_PREFIX = "decision|"
 _FINAL_PREFIX = "final:"
@@ -88,6 +91,10 @@ class FusionCoordinatorAgent(StateMachineAgent):
 
             await coordinator.on_start(ctx)
         """
+        declared = "|".join(sorted(self._required_basis))
+        await ctx.broadcast(
+            f"{_BASIS_DECL_PREFIX}calculator|{declared}|threshold={self._threshold}".encode()
+        )
         for tick in range(1, 12):
             await ctx.schedule(float(tick), _CHECK)
 
