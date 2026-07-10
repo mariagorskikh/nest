@@ -5,7 +5,7 @@ A ``coordinator`` mints a root capability and delegates narrowed sub-tokens
 to intermediaries, who in turn delegate leaf tokens to workers. Workers then
 *present* their tokens to a ``gatekeeper`` that verifies them with the
 configured ``auth`` plugin. Interleaved with the honest presentations, three
-adversaries attempt the attacks the delegatable plugin is built to defeat:
+adversaries attempt the attacks the macaroon plugin is built to defeat:
 
 * **escalate** — a worker forges a child claiming a scope its delegator never
   held;
@@ -16,20 +16,20 @@ adversaries attempt the attacks the delegatable plugin is built to defeat:
 The gatekeeper resolves the auth plugin from ``ctx.plugins["auth"]`` and emits
 one ``cap:<presenter>:<expected>:<outcome>`` line per presentation. All real
 checking is done by the plugin; the trace is the audit log that
-``validate_delegated_auth_trace`` replays offline.
+``validate_capability_delegation_trace`` replays offline.
 
 Capability-gating keeps the scenario runnable under *any* auth plugin: the
 delegation helpers are attempted via ``getattr``/``attenuate`` and, where the
 plugin has no real delegation (plain ``jwt``), the attacks are carried out via
 central re-issuance — which the trace then shows being *allowed*, the honest
-demonstration that ``jwt`` fails the validator while ``delegatable`` passes.
+demonstration that ``jwt`` fails the validator while ``macaroon`` passes.
 
 Determinism: every agent action is driven by the coordinator's logical-clock
 pulses; no wall-clock time, no unseeded RNG.
 
 Example::
 
-    agents = delegated_auth_factory(config, plugins)
+    agents = capability_delegation_factory(config, plugins)
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def _forge_broadened_child(
 ) -> Token | None:
     """Adversary tool: append a scope-*broadening* link with a valid HMAC chain.
 
-    Returns ``None`` when the token is not a delegatable chain (e.g. plain
+    Returns ``None`` when the token is not a macaroon chain (e.g. plain
     ``jwt``), signalling the caller to fall back to a re-issuance escalation.
     This deliberately produces a token whose chain signature verifies but whose
     final link violates the scope-subset invariant, so it exercises the
@@ -334,7 +334,7 @@ class Worker(StateMachineAgent):
         a perfectly valid chain signature. Security must come from the
         *verifier* rejecting a link whose scopes are not a subset of its
         parent's — which is exactly the defense-in-depth check in
-        ``DelegatableAuth.verify``. When the plugin has no such chain (plain
+        ``MacaroonAuth.verify``. When the plugin has no such chain (plain
         ``jwt``), the attacker escalates via central re-issuance instead, and
         the trace then shows the gatekeeper *allowing* it — the ``jwt`` failure.
 
@@ -364,7 +364,7 @@ class Gatekeeper(StateMachineAgent):
     For each ``present:<worker>:<expected>:<token>`` it runs the auth plugin's
     ``verify`` (presenter-aware when supported) and emits
     ``cap:<worker>:<expected>:<allow|deny>``. That single line protocol is what
-    ``validate_delegated_auth_trace`` consumes.
+    ``validate_capability_delegation_trace`` consumes.
 
     Example::
 
@@ -421,10 +421,10 @@ def _provision_auth(plugins: dict[str, Any], agent_ids: list[AgentId]) -> None:
     # byte-deterministic; the TypeError ladder keeps narrower constructors
     # runnable.
     try:
-        shared = auth_cls(secret=b"delegated-auth-scenario-root", clock=0.0)
+        shared = auth_cls(secret=b"capability-delegation-scenario-root", clock=0.0)
     except TypeError:
         try:
-            shared = auth_cls(secret=b"delegated-auth-scenario-root")
+            shared = auth_cls(secret=b"capability-delegation-scenario-root")
         except TypeError:
             shared = auth_cls()
     agent_plugins: dict[AgentId, dict[str, Any]] = plugins.setdefault("_agent_plugins", {})
@@ -433,7 +433,7 @@ def _provision_auth(plugins: dict[str, Any], agent_ids: list[AgentId]) -> None:
     plugins.pop("auth", None)
 
 
-def delegated_auth_factory(
+def capability_delegation_factory(
     config: ScenarioConfig,
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
@@ -446,7 +446,7 @@ def delegated_auth_factory(
 
     Example::
 
-        agents = delegated_auth_factory(config, plugins)
+        agents = capability_delegation_factory(config, plugins)
     """
     tcfg = config.task.config
     n_inter = int(tcfg.get("intermediaries", 3))

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Property-based tests for the delegatable auth plugin (Hypothesis).
+"""Property-based tests for the macaroon auth plugin (Hypothesis).
 
 Invariants asserted across randomly generated delegation chains and scope
 sets:
@@ -21,8 +21,8 @@ from typing import Any
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from nest_core.types import AgentId
-from nest_plugins_reference.auth.delegatable import (
-    DelegatableAuth,
+from nest_plugins_reference.auth.macaroon import (
+    MacaroonAuth,
     RevokedAncestorError,
     ScopeEscalationError,
 )
@@ -50,7 +50,7 @@ def test_subset_invariant_holds_down_the_chain(
     """Every verifiable link's scopes are a subset of its parent's."""
 
     async def scenario() -> None:
-        auth = DelegatableAuth(secret=b"prop", clock=0.0)
+        auth = MacaroonAuth(secret=b"prop", clock=0.0)
         token = await auth.issue(AgentId("root"), root_scopes)
         current = set(root_scopes)
         for i in range(depth):
@@ -79,7 +79,7 @@ def test_revocation_cascades_monotonically(scopes: list[str], revoke_at: int) ->
     """Revoking link *k* invalidates every link at depth >= k, none below."""
 
     async def scenario() -> None:
-        auth = DelegatableAuth(secret=b"prop", clock=0.0)
+        auth = MacaroonAuth(secret=b"prop", clock=0.0)
         tokens = [await auth.issue(AgentId("root"), scopes)]
         for i in range(3):
             tokens.append(await auth.delegate(tokens[-1], AgentId(f"a{i}"), scopes, ttl=100.0))
@@ -106,8 +106,8 @@ def test_token_construction_is_deterministic(scopes: list[str]) -> None:
     """Same inputs → byte-identical tokens (Tier-1 determinism requirement)."""
 
     async def scenario() -> None:
-        a1 = DelegatableAuth(secret=b"det", clock=0.0)
-        a2 = DelegatableAuth(secret=b"det", clock=0.0)
+        a1 = MacaroonAuth(secret=b"det", clock=0.0)
+        a2 = MacaroonAuth(secret=b"det", clock=0.0)
         r1 = await a1.issue(AgentId("root"), scopes)
         r2 = await a2.issue(AgentId("root"), scopes)
         assert str(r1) == str(r2)
@@ -129,7 +129,7 @@ def test_escalation_always_rejected(root_scopes: list[str], extra: str) -> None:
     async def scenario() -> None:
         if extra in root_scopes:
             return
-        auth = DelegatableAuth(secret=b"prop", clock=0.0)
+        auth = MacaroonAuth(secret=b"prop", clock=0.0)
         root = await auth.issue(AgentId("root"), root_scopes)
         try:
             await auth.delegate(root, AgentId("b"), [*root_scopes, extra], ttl=50.0)

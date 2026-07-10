@@ -77,12 +77,12 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("identity_rotation", identity_rotation_factory)
-    elif name == "delegated_auth":
-        from nest_core.scenarios_builtin.delegated_auth import (
-            delegated_auth_factory,
+    elif name == "capability_delegation":
+        from nest_core.scenarios_builtin.capability_delegation import (
+            capability_delegation_factory,
         )
 
-        register_scenario("delegated_auth", delegated_auth_factory)
+        register_scenario("capability_delegation", capability_delegation_factory)
     elif name == "gossip_registry":
         from nest_core.scenarios_builtin.gossip_registry import gossip_registry_factory
 

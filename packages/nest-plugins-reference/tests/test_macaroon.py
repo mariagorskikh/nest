@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Unit + adversarial tests for the delegatable capability-token auth plugin.
+"""Unit + adversarial tests for the macaroon capability-token auth plugin.
 
 Covers the happy path (issue → delegate → verify), each typed rejection, the
 cascading-revocation invariant, and — via the shared probes in
-``delegation_validators`` — the three attacks the plugin must defeat and the
+``capability_delegation_validators`` — the three attacks the plugin must defeat and the
 reference ``jwt`` plugin must fail. A cross-plugin parametrization asserts the
-"adversarial" property directly: every probe passes against ``delegatable`` and
+"adversarial" property directly: every probe passes against ``macaroon`` and
 at least one fails against ``jwt``.
 """
 
@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import pytest
 from nest_core.types import AgentId
-from nest_plugins_reference.auth.delegatable import (
+from nest_plugins_reference.auth.macaroon import (
     AudienceMismatchError,
-    DelegatableAuth,
+    MacaroonAuth,
     ExpiredTokenError,
     InvalidTokenError,
     RevokedAncestorError,
@@ -24,17 +24,17 @@ from nest_plugins_reference.auth.delegatable import (
     attenuate,
 )
 from nest_plugins_reference.auth.jwt_auth import JwtAuth
-from nest_plugins_reference.validators.delegation_validators import (
+from nest_plugins_reference.validators.capability_delegation_validators import (
     blind_verify,
-    delegatable_delegate,
+    macaroon_delegate,
     naive_jwt_delegate,
     presenter_verify,
     run_all_probes,
 )
 
 
-def _auth() -> DelegatableAuth:
-    return DelegatableAuth(secret=b"unit-test-secret", clock=0.0)
+def _auth() -> MacaroonAuth:
+    return MacaroonAuth(secret=b"unit-test-secret", clock=0.0)
 
 
 @pytest.mark.asyncio
@@ -140,7 +140,7 @@ async def test_ttl_nesting_enforced_at_mint() -> None:
 @pytest.mark.asyncio
 async def test_midlife_delegation_anchors_ttl_at_now() -> None:
     """Delegating mid-life anchors the child at the current clock, not the root's iat."""
-    auth = DelegatableAuth(secret=b"s", clock=0.0)
+    auth = MacaroonAuth(secret=b"s", clock=0.0)
     root = await auth.issue(AgentId("a"), ["read"])  # iat=0, exp=3600
     auth.set_clock(3000.0)
     child = await auth.delegate(root, AgentId("b"), ["read"], ttl=600.0)
@@ -154,7 +154,7 @@ async def test_midlife_delegation_anchors_ttl_at_now() -> None:
 @pytest.mark.asyncio
 async def test_midlife_delegation_that_would_outlive_parent_raises() -> None:
     """A ttl the parent cannot cover raises at mint — never a dead-on-arrival child."""
-    auth = DelegatableAuth(secret=b"s", clock=0.0)
+    auth = MacaroonAuth(secret=b"s", clock=0.0)
     root = await auth.issue(AgentId("a"), ["read"])  # exp=3600
     auth.set_clock(3000.0)
     with pytest.raises(TtlViolationError):
@@ -164,7 +164,7 @@ async def test_midlife_delegation_that_would_outlive_parent_raises() -> None:
 @pytest.mark.asyncio
 async def test_expiry_enforced_at_verify() -> None:
     """A token past its expiry fails verification against the logical clock."""
-    auth = DelegatableAuth(secret=b"s", clock=0.0)
+    auth = MacaroonAuth(secret=b"s", clock=0.0)
     root = await auth.issue(AgentId("a"), ["read"])
     child = await auth.delegate(root, AgentId("b"), ["read"], ttl=10.0)
     auth.set_clock(11.0)
@@ -193,10 +193,10 @@ async def test_attenuate_is_offline_and_matches_delegate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probes_pass_against_delegatable() -> None:
+async def test_probes_pass_against_macaroon() -> None:
     """All three adversarial probes pass against the real plugin."""
     auth = _auth()
-    reports = await run_all_probes(auth, delegatable_delegate, presenter_verify)
+    reports = await run_all_probes(auth, macaroon_delegate, presenter_verify)
     assert all(r.passed for r in reports), [r.detail for r in reports if not r.passed]
 
 

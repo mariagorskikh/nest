@@ -23,15 +23,15 @@ per-token-string set:
 Each probe is a pure async function over an ``Auth`` implementation plus two
 small adapter callables, so the *same* probe runs against both plugins:
 
-* against ``DelegatableAuth`` (adapters: real ``delegate`` /
+* against ``MacaroonAuth`` (adapters: real ``delegate`` /
   presenter-aware ``verify``) — all three probes **pass**;
 * against ``JwtAuth`` (adapters: :func:`naive_jwt_delegate` /
   presenter-blind verify) — all three probes **fail**, which is the
   charter's bar for "adversarial": the reference plugin literally cannot
   satisfy the validator.
 
-A fourth, trace-level validator (:func:`validate_delegated_auth_trace`)
-replays a ``delegated_auth`` scenario trace and asserts every attack
+A fourth, trace-level validator (:func:`validate_capability_delegation_trace`)
+replays a ``capability_delegation`` scenario trace and asserts every attack
 attempt was denied and every honest use (before its ancestor's revocation)
 was allowed.
 
@@ -94,7 +94,7 @@ async def naive_jwt_delegate(
     return await auth.issue(audience, scopes)
 
 
-async def delegatable_delegate(
+async def macaroon_delegate(
     auth: Any,
     parent_token: Token,
     audience: AgentId,
@@ -105,7 +105,7 @@ async def delegatable_delegate(
 
     Example::
 
-        child = await delegatable_delegate(auth, parent, AgentId("b"), ["read"], 600)
+        child = await macaroon_delegate(auth, parent, AgentId("b"), ["read"], 600)
     """
     return await auth.delegate(parent_token, audience, scopes, ttl)
 
@@ -144,7 +144,7 @@ async def probe_scope_escalation(
 
     Example::
 
-        report = await probe_scope_escalation(auth, delegatable_delegate, presenter_verify)
+        report = await probe_scope_escalation(auth, macaroon_delegate, presenter_verify)
         assert report.passed
     """
     parent = await auth.issue(AgentId("val-parent"), ["read"])
@@ -178,7 +178,7 @@ async def probe_stale_parent(
 
     Example::
 
-        report = await probe_stale_parent(auth, delegatable_delegate, presenter_verify)
+        report = await probe_stale_parent(auth, macaroon_delegate, presenter_verify)
         assert report.passed
     """
     parent = await auth.issue(AgentId("val-parent"), ["read", "write"])
@@ -205,7 +205,7 @@ async def probe_audience_confusion(
 
     Example::
 
-        report = await probe_audience_confusion(auth, delegatable_delegate, presenter_verify)
+        report = await probe_audience_confusion(auth, macaroon_delegate, presenter_verify)
         assert report.passed
     """
     parent = await auth.issue(AgentId("val-parent"), ["read"])
@@ -229,7 +229,7 @@ async def run_all_probes(
 
     Example::
 
-        reports = await run_all_probes(auth, delegatable_delegate, presenter_verify)
+        reports = await run_all_probes(auth, macaroon_delegate, presenter_verify)
         assert all(r.passed for r in reports)
     """
     return [
@@ -239,8 +239,8 @@ async def run_all_probes(
     ]
 
 
-def validate_delegated_auth_trace(trace_path: str | Path) -> list[ValidatorReport]:
-    """Replay a ``delegated_auth`` scenario trace and check its verdicts.
+def validate_capability_delegation_trace(trace_path: str | Path) -> list[ValidatorReport]:
+    """Replay a ``capability_delegation`` scenario trace and check its verdicts.
 
     The scenario's gatekeeper emits one line per capability presentation::
 
@@ -260,7 +260,7 @@ def validate_delegated_auth_trace(trace_path: str | Path) -> list[ValidatorRepor
 
     Example::
 
-        reports = validate_delegated_auth_trace("./traces/delegated_auth.jsonl")
+        reports = validate_capability_delegation_trace("./traces/capability_delegation.jsonl")
         assert all(r.passed for r in reports)
     """
     admitted: list[str] = []

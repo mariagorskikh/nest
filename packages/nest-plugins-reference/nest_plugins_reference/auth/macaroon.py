@@ -29,12 +29,12 @@ all. This plugin adds the missing capability-delegation shape:
   (:class:`TtlViolationError` at mint; :class:`ExpiredTokenError` at verify).
 
 Determinism: the plugin never reads wall-clock time. The logical clock is
-injected via the constructor or :meth:`DelegatableAuth.set_clock`, exactly
+injected via the constructor or :meth:`MacaroonAuth.set_clock`, exactly
 like the rotating-identity reference plugin.
 
 Example::
 
-    auth = DelegatableAuth(secret=b"root-secret")
+    auth = MacaroonAuth(secret=b"root-secret")
     root = await auth.issue(AgentId("orchestrator"), ["read", "invoke"])
     child = await auth.delegate(
         root, audience=AgentId("worker-1"), scopes=["read"], ttl=600
@@ -249,7 +249,7 @@ def attenuate(
     return Token(_canon({"chain": [*links, child_link], "sig": child_sig}))
 
 
-class DelegatableAuth:
+class MacaroonAuth:
     """Macaroon-style delegatable capability tokens with cascading revocation.
 
     Satisfies the ``Auth`` protocol (``issue`` / ``verify`` / ``revoke``) and
@@ -259,7 +259,7 @@ class DelegatableAuth:
 
     Example::
 
-        auth = DelegatableAuth(secret=b"root")
+        auth = MacaroonAuth(secret=b"root")
         root = await auth.issue(AgentId("coord"), ["read", "write"])
         child = await auth.delegate(root, AgentId("leaf"), ["read"], ttl=60)
         grandchild = attenuate(child, AgentId("leaf-2"), ["read"], ttl=30)
