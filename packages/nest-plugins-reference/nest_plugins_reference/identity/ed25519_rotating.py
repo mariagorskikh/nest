@@ -219,6 +219,11 @@ class Ed25519RotatingIdentity:
         self._seed = seed
         self._rotation_index = 0
         self._clock = 0.0
+        # The last tick at which this agent signed with its own key. Used by
+        # rotate_key to avoid stranding a co-tick signature at the rotation
+        # boundary (see the "Known limitation — same-tick rotation" note on
+        # verify). ``-inf`` means "never signed".
+        self._last_sign_tick = float("-inf")
         private = Ed25519PrivateKey.from_private_bytes(_derive_seed(seed, agent_id, 0))
         pub = _public_bytes(private.public_key())
         record = KeyRecord(
@@ -284,6 +289,16 @@ class Ed25519RotatingIdentity:
         keep working. The peer's window opens at the registrant's current clock
         and stays open until a later :meth:`apply_rotation`.
 
+        **Non-destructive on re-announce.** Registry announcements are
+        idempotent and duplicated in practice. Re-registering a peer's *current*
+        key is a no-op — it must never truncate rotation history the verifier
+        already learned via :meth:`apply_rotation`, because doing so would
+        silently re-open a retired key's window (stale-key acceptance). A key
+        *change* for a known agent must go through the continuity-checked
+        :meth:`apply_rotation`, never through ``register_peer``; presenting a
+        different key here for an agent whose current key is already known is
+        rejected.
+
         Example::
 
             ident.register_peer(AgentId("a2"), peer_pk)
@@ -291,8 +306,23 @@ class Ed25519RotatingIdentity:
         if private_key is not None:
             msg = "register_peer accepts public keys only"
             raise ValueError(msg)
+        key_id = _key_id_for(public_key)
+        existing = self._records.get(agent_id)
+        if existing:
+            tip = existing[-1]
+            if tip.key_id == key_id:
+                # Duplicate announcement of the already-current key: no-op.
+                # Preserve all learned history/windows.
+                return
+            # A different key for a known agent must arrive via a
+            # continuity-checked rotation, not a bare re-registration.
+            msg = (
+                "register_peer cannot change a known peer's key; "
+                "use apply_rotation with continuity evidence"
+            )
+            raise ValueError(msg)
         record = KeyRecord(
-            key_id=_key_id_for(public_key),
+            key_id=key_id,
             public_key=public_key,
             issued_at=self._clock,
         )
@@ -301,14 +331,28 @@ class Ed25519RotatingIdentity:
     def rotate_key(self, new_seed: bytes) -> RotationRecord:
         """Rotate this agent's signing key, returning published continuity evidence.
 
-        Closes the current key's window at the current clock and opens a new
-        key's window at the same tick. The new key is signed by the *old* key
-        (continuity of identity). After this call, signing uses the new key;
-        the old key can still verify signatures made *during its window* but any
-        signature observed at/after ``rotated_out`` fails an as-of check.
+        Closes the current key's window and opens a new key's window. The new
+        key is signed by the *old* key (continuity of identity). After this
+        call, signing uses the new key; the old key can still verify signatures
+        made *during its window* but any signature observed at/after
+        ``rotated_out`` fails an as-of check.
+
+        **Same-tick self-strand guard.** A scalar logical clock cannot order
+        two events within one tick, so rotating on the *same* tick this agent
+        signed would strand that honest co-tick signature: its as-of tick would
+        land on the closed old-key boundary and fail verification (see the
+        "Known limitation" note on :meth:`verify`). Rather than silently lose an
+        agent's own message — or fudge the window in a way that reopens
+        post-rotation forgery — this method **raises** ``ValueError`` if called
+        on a tick at or before the last own-signing tick. The caller advances
+        the logical clock (``set_clock``) before rotating. This keeps behaviour
+        deterministic and forgery-resistant, and turns a silent correctness bug
+        into a loud, actionable one.
 
         Example::
 
+            ident.sign(b"m")
+            ident.set_clock(ident_tick + 1)  # advance before rotating
             rec = ident.rotate_key(b"new-seed")
             kid = rec.new_key_id
         """
@@ -318,6 +362,15 @@ class Ed25519RotatingIdentity:
             msg = "cannot rotate: current key has no private material"
             raise ValueError(msg)
         rotate_at = self._clock
+        if rotate_at <= self._last_sign_tick:
+            msg = (
+                "cannot rotate on the same tick this agent signed: doing so "
+                "would strand the co-tick signature (a scalar logical clock "
+                "cannot order sign-then-rotate within one tick). Advance the "
+                "clock (set_clock) before rotating. See the same-tick note on "
+                "verify()."
+            )
+            raise ValueError(msg)
         old.rotated_out = rotate_at
 
         self._rotation_index += 1
@@ -385,8 +438,23 @@ class Ed25519RotatingIdentity:
         # trace), so an attacker could otherwise replay it to slip past the
         # guard. The successor key id, by contrast, is only present once the
         # genuine rotation has been adopted.
-        already_applied = any(r.key_id == rotation.new_key_id for r in records)
+        applied = next((r for r in records if r.key_id == rotation.new_key_id), None)
+        already_applied = applied is not None
         if old.rotated_out != _INF and not already_applied:
+            return False
+        # Defence in depth: when we treat "already applied" as the reason a
+        # retired ``old`` key is allowed, the presented record must match the
+        # adopted one on more than its ``new_key_id``. A retired-key holder could
+        # otherwise forge a record that reuses a legitimate successor's
+        # ``new_key_id`` while substituting attacker-chosen ``new_public_key`` /
+        # ``issued_at`` and still get a ``True`` here. It is not exploitable via
+        # :meth:`apply_rotation` (which no-ops on a known ``new_key_id`` and never
+        # ingests the forged public key), but any downstream consumer that treats
+        # ``verify_continuity(True)`` as authoritative proof of "this old key
+        # authorised exactly this record" would be misled. Reject the mismatch.
+        if applied is not None and (
+            applied.public_key != rotation.new_public_key or applied.issued_at != rotation.issued_at
+        ):
             return False
         try:
             Ed25519PublicKey.from_public_bytes(old.public_key).verify(
@@ -397,11 +465,26 @@ class Ed25519RotatingIdentity:
         return True
 
     def apply_rotation(self, rotation: RotationRecord) -> bool:
-        """Adopt a verified peer rotation into local key history.
+        """Adopt a verified peer rotation into local key history — idempotently.
 
         Verifies continuity first; on success closes the peer's old key window
         and appends the new key. Returns ``False`` (and changes nothing) if the
         continuity signature does not check out.
+
+        Rotation records are public artifacts that travel over a lossy,
+        duplicating transport, so this method is hardened against replay and
+        out-of-order delivery:
+
+        - **Idempotent** — if ``rotation.new_key_id`` is already in the local
+          history the call is a no-op returning ``True`` (the rotation was
+          already adopted). Without this guard a replayed record appends a
+          duplicate, window-overlapping ``KeyRecord`` that corrupts history and
+          makes :meth:`resolve` non-deterministic.
+        - **Chain-tip only** — the rotation is applied only if its
+          ``old_key_id`` is the current open tip of the chain (the sole record
+          with ``rotated_out == _INF``). A stale rotation whose predecessor was
+          already retired is rejected, so an old record re-broadcast after later
+          rotations cannot re-open a retired key's window.
 
         Example::
 
@@ -410,9 +493,15 @@ class Ed25519RotatingIdentity:
         if not self.verify_continuity(rotation.agent_id, rotation):
             return False
         records = self._records[rotation.agent_id]
-        for r in records:
-            if r.key_id == rotation.old_key_id and r.rotated_out == _INF:
-                r.rotated_out = rotation.issued_at
+        # Idempotent: this rotation has already been adopted.
+        if any(r.key_id == rotation.new_key_id for r in records):
+            return True
+        # Chain-tip only: the predecessor must be the current open key. Rejects
+        # replayed/out-of-order rotations that would re-open a retired window.
+        tip = records[-1]
+        if tip.key_id != rotation.old_key_id or tip.rotated_out != _INF:
+            return False
+        tip.rotated_out = rotation.issued_at
         records.append(
             KeyRecord(
                 key_id=rotation.new_key_id,
@@ -439,6 +528,9 @@ class Ed25519RotatingIdentity:
             msg = "cannot sign: no private key for current record"
             raise ValueError(msg)
         value = record.private_key.sign(payload)
+        # Remember when we last signed so a same-tick rotate_key can nudge its
+        # boundary past this signature instead of stranding it.
+        self._last_sign_tick = self._clock
         return Signature(
             signer=self._agent_id,
             value=value,
@@ -482,23 +574,42 @@ class Ed25519RotatingIdentity:
     ) -> bool:
         """Verify *sig* over *payload* from *agent*, optionally as-of a tick.
 
-        A signature is accepted iff **both** hold:
+        A signature is accepted iff **all** hold:
 
         1. It cryptographically verifies under the key bound to ``sig.key_id``.
-        2. That key's validity window ``[issued_at, rotated_out)`` contains the
+        2. The signing key's window ``[issued_at, rotated_out)`` contains the
            **as-of tick** — the moment verification is anchored to.
+        3. When the signature carries a ``signed_at`` claim, that claim also
+           falls inside the signing key's window. This closes a backdating gap:
+           a new-key signature whose ``signed_at`` is rewritten into a retired
+           key's window is rejected *even when the verifier honestly anchors at
+           the tick it observed* (rule 2 alone would accept it). The claim is
+           only ever an extra *constraint*, never the anchor; a signature with
+           no ``signed_at`` (e.g. a ``did_key``-compatible peer signature) is
+           never rejected by this rule. Credit: the ``signed_at``-in-window
+           check originates from BIN-HACK-FIX; we scope it so it never rejects
+           an honest cross-clock peer signature.
 
         The as-of tick is supplied by the *verifier* via ``as_of`` (e.g. the
-        observed trace tick). It is **never** read from ``sig.signed_at``, which
-        an attacker controls. When ``as_of is None`` we default to the plugin's
-        current clock — the secure default for "is this valid now?" — which
-        still does not force callers to hold the *current* key for historical
-        audits (pass an explicit ``as_of`` for those).
+        observed trace tick) and is **never** the attacker-controlled
+        ``signed_at``. When ``as_of is None`` we default to the plugin's current
+        clock — the secure default for "is this valid now?".
 
-        This single rule defeats both attacks: post-rotation forgery is
-        observed at a tick past the old key's ``rotated_out`` (window fails);
-        backdating presents a new-key signature as-of an old tick before the new
-        key was issued (window fails).
+        This defeats both classic attacks: post-rotation forgery is observed at
+        a tick past the old key's ``rotated_out`` (rule 2 fails), and backdating
+        a new-key signature into an old window fails rule 2 (anchored old) or
+        rule 3 (claim outside the new key's window).
+
+        **Known limitation — same-tick rotation.** ``rotate_key`` retires the
+        old key and issues the new one at the *same* logical tick T. Because a
+        scalar logical clock cannot order two events within one tick, an honest
+        old-key signature made "just before" a rotation at T and a
+        post-rotation forgery made "just after" at T are **byte-identical**
+        (same ``key_id``, same ``signed_at == T``). The window model resolves the
+        ambiguity in favour of security: at T the old key is already retired, so
+        both are rejected. An honest agent therefore must not sign and rotate on
+        the same tick — see :meth:`rotate_key`, which guards against stranding an
+        agent's own co-tick signatures.
 
         Example::
 
@@ -514,13 +625,36 @@ class Ed25519RotatingIdentity:
         record = self._select_record(records, sig.key_id, as_of_tick)
         if record is None:
             return False
-        if not record.is_valid_at(as_of_tick):
+        if not self._window_admits(record, as_of_tick, sig.signed_at):
             return False
         try:
             Ed25519PublicKey.from_public_bytes(record.public_key).verify(sig.value, payload)
         except InvalidSignature:
             return False
         return True
+
+    @staticmethod
+    def _window_admits(
+        record: KeyRecord,
+        as_of_tick: float,
+        signed_at: float | None,
+    ) -> bool:
+        """Decide whether *record*'s window admits a verification.
+
+        Combines the as-of anchor (rule 2) with the ``signed_at``-in-window
+        backdating check (rule 3):
+
+        - **Rule 2:** ``as_of_tick`` must be in the key's half-open window
+          ``[issued, rotated_out)``.
+        - **Rule 3:** if ``signed_at`` is present it must also be in that same
+          window. A claim outside the window — e.g. a new-key signature
+          backdated into a retired window — fails. ``signed_at`` is only a
+          constraint; a missing claim (``None``) never rejects an honest
+          cross-clock peer signature (the ``did_key``-compatible path).
+        """
+        if not record.is_valid_at(as_of_tick):
+            return False
+        return signed_at is None or record.is_valid_at(signed_at)
 
     @staticmethod
     def _select_record(

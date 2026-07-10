@@ -13,6 +13,8 @@ Example::
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from nest_core.types import AgentId, Signature
 from nest_plugins_reference.identity.ed25519_rotating import (
@@ -24,6 +26,15 @@ from nest_plugins_reference.identity.ed25519_rotating import (
 
 def _ident(name: str = "a1", seed: bytes = b"seed") -> Ed25519RotatingIdentity:
     return Ed25519RotatingIdentity(AgentId(name), seed=seed)
+
+
+def _history(ident: Ed25519RotatingIdentity, agent: str) -> list[dict[str, object]]:
+    """Return an agent's exported key history via the public ``resolve`` API.
+
+    Tests inspect key windows through ``resolve().metadata["keys"]`` rather than
+    the plugin's private ``_records`` so they exercise only the public surface.
+    """
+    return asyncio.run(ident.resolve(AgentId(agent))).metadata["keys"]
 
 
 class TestEd25519SignVerify:
@@ -247,6 +258,41 @@ class TestContinuity:
         assert not signer.verify_continuity(AgentId("signer"), evil_rec)
         assert not signer.apply_rotation(evil_rec)
 
+    def test_continuity_rejects_forged_record_reusing_successor_key_id(self) -> None:
+        """Defence in depth: matching only ``new_key_id`` must not bypass the guard.
+
+        A retired-key holder forges a record that reuses the *legitimate*
+        successor's ``new_key_id`` but substitutes attacker-chosen
+        ``new_public_key`` / ``issued_at``. Because ``old`` is retired, the guard
+        would normally reject it — but the "already applied" escape (used for the
+        honest self-verify case) keys off ``new_key_id`` membership. The record's
+        public key and issued tick must therefore be cross-checked against the
+        adopted record, or a downstream consumer that trusts
+        ``verify_continuity(True)`` as proof "this old key authorised exactly this
+        record" would be misled.
+        """
+        from nest_plugins_reference.identity.ed25519_rotating import RotationRecord
+
+        signer = _ident("signer")
+        stale_key_id = signer.current_key_id
+        signer.set_clock(5.0)
+        legit = signer.rotate_key(b"legit-new")  # key0 retired; key1 is the tip
+
+        forged = RotationRecord(
+            agent_id=AgentId("signer"),
+            old_key_id=stale_key_id,
+            new_key_id=legit.new_key_id,  # reuse the real successor id
+            new_public_key=b"\x11" * 32,  # but attacker-chosen public key
+            issued_at=999.0,  # and attacker-chosen tick
+            continuity_signature=b"",
+        )
+        forged.continuity_signature = signer.sign_with(
+            forged.continuity_message(), stale_key_id
+        ).value
+        assert not signer.verify_continuity(AgentId("signer"), forged)
+        # The genuine record for that successor id still verifies.
+        assert signer.verify_continuity(AgentId("signer"), legit)
+
 
 class TestDidKeyCompatibility:
     def test_signature_key_id_signed_at_optional(self) -> None:
@@ -289,3 +335,123 @@ class TestDeterminism:
         ident = _ident()
         with pytest.raises(ValueError, match="no private key"):
             ident.sign_with(b"x", KeyId("deadbeef"))
+
+
+class TestBackdatingSignedAtInWindow:
+    """Rule 3: a signature's own ``signed_at`` claim must fall in its key's window.
+
+    Regression for a backdating gap where a new-key signature whose ``signed_at``
+    is rewritten into a retired key's window verified even when the verifier
+    honestly anchored at the tick it observed. Credit: BIN-HACK-FIX.
+    """
+
+    def test_backdated_claim_rejected_when_verifier_anchors_honestly(self) -> None:
+        ident = _ident()
+        ident.set_clock(5.0)
+        ident.rotate_key(b"new")
+        ident.set_clock(6.0)
+        sig = ident.sign(b"really-made-at-6")
+        sig.signed_at = 1.0  # backdated into key #0's window [0.0, 5.0)
+        # Verifier anchors at the tick it actually observed (6.0), never trusts
+        # signed_at as the anchor; rule 3 still rejects the mismatched claim.
+        assert not ident.verify(b"really-made-at-6", sig, AgentId("a1"), as_of=6.0)
+
+    def test_missing_signed_at_never_rejected_by_rule3(self) -> None:
+        # did_key-compatible peer signatures carry no signed_at and must not be
+        # rejected by the backdating check regardless of cross-clock skew.
+        verifier = _ident("v")
+        signer = _ident("s")
+        verifier.set_clock(4.0)  # verifier clock ahead of signer
+        verifier.register_peer(AgentId("s"), signer.public_key)  # window [4, inf)
+        sig = signer.sign(b"y")
+        stripped = Signature(signer=AgentId("s"), value=sig.value, algorithm="ed25519", key_id=None)
+        assert verifier.verify(b"y", stripped, AgentId("s"), as_of=4.0)
+
+
+class TestApplyRotationReplay:
+    """F2: apply_rotation is idempotent and chain-tip-only under replay."""
+
+    def test_duplicate_apply_is_noop(self) -> None:
+        local = _ident("local")
+        peer = _ident("peer")
+        local.register_peer(AgentId("peer"), peer.public_key)
+        peer.set_clock(5.0)
+        rot = peer.rotate_key(b"p2")
+        assert local.apply_rotation(rot)
+        assert local.apply_rotation(rot)  # replay -> idempotent True
+        assert len(_history(local, "peer")) == 2  # no duplicate append
+
+    def test_stale_rotation_replayed_after_later_rotation_rejected(self) -> None:
+        local = _ident("local")
+        peer = _ident("peer")
+        local.register_peer(AgentId("peer"), peer.public_key)
+        peer.set_clock(5.0)
+        r1 = peer.rotate_key(b"p2")
+        local.apply_rotation(r1)
+        peer.set_clock(10.0)
+        r2 = peer.rotate_key(b"p3")
+        local.apply_rotation(r2)
+        before = _history(local, "peer")
+        # Re-broadcasting the FIRST rotation must not corrupt/reopen history.
+        local.apply_rotation(r1)
+        after = _history(local, "peer")
+        assert before == after
+
+    def test_resolve_deterministic_under_replay(self) -> None:
+        local = _ident("local")
+        peer = _ident("peer")
+        local.register_peer(AgentId("peer"), peer.public_key)
+        peer.set_clock(5.0)
+        rot = peer.rotate_key(b"p2")
+        local.apply_rotation(rot)
+        local.apply_rotation(rot)  # replay
+        # History serialized into the trace must not grow with delivery count.
+        assert len(_history(local, "peer")) == 2
+
+
+class TestRegisterPeerReannounce:
+    """F3: register_peer re-announce is non-destructive."""
+
+    def test_reannounce_current_key_preserves_history(self) -> None:
+        local = _ident("local")
+        peer = _ident("peer")
+        local.register_peer(AgentId("peer"), peer.public_key)
+        peer.set_clock(5.0)
+        rot = peer.rotate_key(b"p2")
+        local.apply_rotation(rot)
+        # Duplicate registry announcement of the (now current) key: no-op.
+        local.register_peer(AgentId("peer"), rot.new_public_key)
+        assert len(_history(local, "peer")) == 2
+
+    def test_reannounce_stale_key_is_noop_not_wipe(self) -> None:
+        local = _ident("local")
+        peer = _ident("peer")
+        local.register_peer(AgentId("peer"), peer.public_key)
+        old_pk = peer.public_key
+        peer.set_clock(5.0)
+        rot = peer.rotate_key(b"p2")
+        local.apply_rotation(rot)
+        # Re-announcing the OLD key must not change a key for a known peer.
+        with pytest.raises(ValueError, match="cannot change a known peer's key"):
+            local.register_peer(AgentId("peer"), old_pk)
+        assert len(_history(local, "peer")) == 2
+
+
+class TestSameTickRotationGuard:
+    """F1: rotating on the same tick an agent signed raises rather than strand it."""
+
+    def test_rotate_same_tick_as_sign_raises(self) -> None:
+        ident = _ident()
+        ident.set_clock(10.0)
+        ident.sign(b"hello")
+        with pytest.raises(ValueError, match="same tick"):
+            ident.rotate_key(b"new")
+
+    def test_advance_then_rotate_preserves_old_signature(self) -> None:
+        ident = _ident()
+        ident.set_clock(10.0)
+        sig = ident.sign(b"hello")
+        ident.set_clock(11.0)
+        ident.rotate_key(b"new")
+        assert ident.verify(b"hello", sig, AgentId("a1"), as_of=10.0)
+        assert not ident.verify(b"hello", sig, AgentId("a1"), as_of=11.0)
