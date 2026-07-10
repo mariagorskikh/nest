@@ -1988,6 +1988,62 @@ class TestRogueTrustedAgentValidators:
         assert not validate_rogue_trusted_agent_reputation([])[0].passed
 
 
+class TestReceiptReputationRingMajorityValidator:
+    """Unit tests for the majority-ring enforcement-liveness check (issue #97)."""
+
+    @staticmethod
+    def _score_event(agent: str, score: float, conf: float, role: str) -> dict[str, Any]:
+        return {
+            "kind": "broadcast",
+            "agent": "auditor-0",
+            "msg": f"score:{agent}:{score:.6f}:{conf:.6f}:{role}",
+        }
+
+    def _events(self, ring_count: int, honest_count: int) -> list[dict[str, Any]]:
+        events = [self._score_event(f"ring-{i}", 0.0, 0.0, "ring") for i in range(ring_count)]
+        events += [
+            self._score_event(f"honest-{i}", 0.8, 1.0, "honest") for i in range(honest_count)
+        ]
+        return events
+
+    def test_majority_ring_passes(self) -> None:
+        from nest_core.validators import validate_receipt_reputation_ring_majority
+
+        results = validate_receipt_reputation_ring_majority(self._events(8, 5))
+        assert len(results) == 1
+        assert results[0].passed
+        assert "8 ring > 5 honest" in results[0].detail
+
+    def test_minority_ring_fails(self) -> None:
+        from nest_core.validators import validate_receipt_reputation_ring_majority
+
+        results = validate_receipt_reputation_ring_majority(self._events(4, 8))
+        assert len(results) == 1
+        assert not results[0].passed
+        assert "not a majority" in results[0].detail
+
+    def test_equal_populations_fail(self) -> None:
+        from nest_core.validators import validate_receipt_reputation_ring_majority
+
+        results = validate_receipt_reputation_ring_majority(self._events(5, 5))
+        assert not results[0].passed
+        assert "not a majority" in results[0].detail
+
+    def test_no_ring_scored_fails(self) -> None:
+        from nest_core.validators import validate_receipt_reputation_ring_majority
+
+        results = validate_receipt_reputation_ring_majority(self._events(0, 5))
+        assert not results[0].passed
+        assert "missing populations" in results[0].detail
+
+    def test_empty_trace_fails_without_crashing(self) -> None:
+        from nest_core.validators import validate_receipt_reputation_ring_majority
+
+        results = validate_receipt_reputation_ring_majority([])
+        assert not results[0].passed
+        assert "missing populations" in results[0].detail
+
+
 class TestValidatorRegistry:
     def test_all_scenario_types_registered(self) -> None:
         expected = {
@@ -2006,6 +2062,7 @@ class TestValidatorRegistry:
             "comms_downgrade",
             "receipt_reputation",
             "manifest_delegated_auth",
+            "receipt_reputation_majority",
             "multi_attribute_market",
             "provenance_supply_chain",
             "bft_hotstuff",

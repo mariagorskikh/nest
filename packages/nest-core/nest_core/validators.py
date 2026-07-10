@@ -3176,6 +3176,55 @@ def validate_receipt_reputation_honest_confidence(
     ]
 
 
+def validate_receipt_reputation_ring_majority(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The scored collusion ring strictly outnumbers the scored honest agents.
+
+    This is the enforcement-liveness check for the majority-ring red-team
+    (issue #97): it proves the trace actually exercised the attack the other
+    two validators defend against — a ring *larger* than the honest population,
+    which the old largest-SCC anchor exemption would have crowned as the honest
+    anchor. Without this check, a scenario quietly shrunk back to a minority
+    ring would pass ``ring_severed`` without ever testing the inversion.
+
+    PASSes iff both populations were scored and ring count > honest count.
+    FAILs on missing populations or a non-majority ring — without crashing.
+
+    Example::
+
+        results = validate_receipt_reputation_ring_majority(events)
+    """
+    scores = _collect_scores(events)
+    ring_count = sum(1 for (_s, _c, role) in scores.values() if role == "ring")
+    honest_count = sum(1 for (_s, _c, role) in scores.values() if role == "honest")
+
+    if ring_count == 0 or honest_count == 0:
+        return [
+            ValidationResult(
+                "receipt_reputation_ring_majority",
+                False,
+                f"missing populations: {ring_count} ring, {honest_count} honest scored",
+            )
+        ]
+    if ring_count <= honest_count:
+        return [
+            ValidationResult(
+                "receipt_reputation_ring_majority",
+                False,
+                f"ring is not a majority: {ring_count} ring <= {honest_count} honest — "
+                "the trace never exercised the issue #97 inversion",
+            )
+        ]
+    return [
+        ValidationResult(
+            "receipt_reputation_ring_majority",
+            True,
+            f"attack precondition held: {ring_count} ring > {honest_count} honest",
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Delegatable auth validators
 # ---------------------------------------------------------------------------
@@ -5253,6 +5302,11 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_delegation_scope_containment,
         validate_no_stale_parent_verify,
         validate_audience_binding,
+    ],
+    "receipt_reputation_majority": [
+        validate_receipt_reputation_ring_severed,
+        validate_receipt_reputation_honest_confidence,
+        validate_receipt_reputation_ring_majority,
     ],
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
