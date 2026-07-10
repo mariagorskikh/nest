@@ -1998,6 +1998,7 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "identity_rotation",
+            "attested_peering",
             "memory_concurrent_writers",
             "streaming_payments",
             "empic_payments",

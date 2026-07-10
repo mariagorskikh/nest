@@ -4610,6 +4610,189 @@ def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[Valid
 
 
 # ---------------------------------------------------------------------------
+# Attested-peering trust validators
+# ---------------------------------------------------------------------------
+
+
+def _attested_observer_lines(events: list[dict[str, Any]]) -> list[str]:
+    """Return the observer's audit-line message bodies (deduped send events).
+
+    The observer emits ``verdict:``/``report:``/``repscore:`` lines by sending
+    them to the victim sink, so each line appears once as a ``send`` and once
+    as a ``receive``; we read only the authoritative ``send`` events.
+
+    Example::
+
+        lines = _attested_observer_lines(events)
+    """
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send" or ev.get("agent") != "observer":
+            continue
+        lines.append(str(ev.get("msg", "")))
+    return lines
+
+
+def _attested_verdicts(lines: list[str]) -> dict[str, tuple[str, bool, bool, bool]]:
+    """Parse ``verdict:`` lines into ``reporter -> (decision, foe, data, work)``.
+
+    Example::
+
+        verdicts = _attested_verdicts(_attested_observer_lines(events))
+    """
+    verdicts: dict[str, tuple[str, bool, bool, bool]] = {}
+    for line in lines:
+        if not line.startswith("verdict:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 7:
+            continue
+        _, reporter, _claimed, decision, foe, data, work = parts
+        verdicts[reporter] = (decision, foe == "1", data == "1", work == "1")
+    return verdicts
+
+
+def validate_attested_no_denied_admitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No peer with a failed (DENY) verdict ever has its evidence admitted.
+
+    The core safety invariant of the attested-peering gate: admission implies
+    an ALLOW verdict, and every ALLOW verdict has all three checks green
+    (friend-or-foe, trust-my-data, who-you-work-for). A trace with no verdict
+    lines (a baseline trust plugin that runs no handshake) cannot violate this
+    and passes vacuously.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+    verdicts = _attested_verdicts(lines)
+
+    if not verdicts:
+        return [
+            ValidationResult(
+                "attested_no_denied_admitted",
+                True,
+                "no attested-peering verdicts in trace (baseline plugin, nothing to gate)",
+            )
+        ]
+
+    violations: list[str] = []
+    for decision, foe, data, work in verdicts.values():
+        if decision == "ALLOW" and not (foe and data and work):
+            violations.append("ALLOW verdict with a failed check (inconsistent gate)")
+            break
+
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        entry = verdicts.get(reporter)
+        if entry is None:
+            violations.append(f"{reporter}: admitted with no verdict")
+        elif entry[0] != "ALLOW":
+            violations.append(f"{reporter}: admitted despite {entry[0]} verdict")
+
+    if violations:
+        return [ValidationResult("attested_no_denied_admitted", False, "; ".join(violations))]
+    allowed = sum(1 for v in verdicts.values() if v[0] == "ALLOW")
+    return [
+        ValidationResult(
+            "attested_no_denied_admitted",
+            True,
+            f"{allowed}/{len(verdicts)} peers admitted, all with an ALLOW verdict",
+        )
+    ]
+
+
+def validate_attested_sybil_quarantined(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An unauthenticated Sybil swarm cannot defame the honest victim.
+
+    Honest reporters file positive evidence, so an ungamed reputation sits at
+    or above the neutral prior (``0.5``); only *admitted* negative evidence can
+    push it below. The attested-peering gate quarantines every unattested
+    reporter, so the victim's score stays high. Under a baseline plugin with no
+    gate (``trust: score_average``) the Sybil swarm's negatives are admitted and
+    the score collapses below ``0.5`` — this validator FAILs there and PASSes
+    under ``trust: attested_peering``.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+
+    score: float | None = None
+    samples: int | None = None
+    for line in lines:
+        if not line.startswith("repscore:"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4 and parts[1] == "victim":
+            score = float(parts[2])
+            samples = int(parts[3])
+    if score is None or samples is None:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "no repscore:victim line found in trace (scenario setup failure)",
+            )
+        ]
+
+    verdicts = _attested_verdicts(lines)
+    admitted_attackers: list[str] = []
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        if not reporter.startswith("honest-"):
+            admitted_attackers.append(reporter)
+
+    if score < 0.5:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                (
+                    f"victim reputation {score:.3f} < 0.5 over {samples} admitted report(s) — "
+                    "an unauthenticated swarm manufactured a negative consensus (gate absent)"
+                ),
+            )
+        ]
+    if admitted_attackers:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "non-honest reporters admitted despite the gate: "
+                f"{sorted(set(admitted_attackers))}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "attested_sybil_quarantined",
+            True,
+            (
+                f"victim reputation {score:.3f} from {samples} attested report(s); "
+                f"{len([v for v in verdicts.values() if v[0] == 'DENY'])} unattested peer(s) "
+                "quarantined"
+            ),
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -4927,6 +5110,10 @@ VALIDATORS: dict[str, list[Any]] = {
     "identity_rotation": [
         validate_identity_rotation_occurred,
         validate_identity_rotation_signatures,
+    ],
+    "attested_peering": [
+        validate_attested_no_denied_admitted,
+        validate_attested_sybil_quarantined,
     ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
