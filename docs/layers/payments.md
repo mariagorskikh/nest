@@ -48,11 +48,15 @@ callers keep working. Where `escrow` conditions one payee's payout and
 once — the missing shape for marketplace revenue splits, royalty payouts, and
 contributor rev-share. The bundled `split_settlement` scenario (12 agents: a
 content marketplace splitting buyer payments 80/20 across contributors and a
-platform) runs under two adversarial validators the default `prepaid_credits`
+platform) runs under three adversarial validators the default `prepaid_credits`
 plugin cannot satisfy: `split_conservation` catches **penny-shaving** (a splitter
-that floors every share and pockets the dust) and `split_weight_fidelity`
+that floors every share and pockets the dust), `split_weight_fidelity`
 recomputes the canonical allocation independently to catch **weight tampering**
-(a mid-flight reweight or self-dealing that still sums to the amount). Source:
+(a mid-flight reweight or self-dealing that still sums to the amount), and
+`split_ledger_attestation` catches **ledger skimming** (canonical-looking
+receipts that credit the shared ledger short) by cross-checking the payer's
+receipts against each payee's own `split:observed` balance attestation. The first
+two audit reported receipts; the third audits payee-observed ledger truth. Source:
 [`nest_plugins_reference/payments/split_settlement.py`](../../packages/nest-plugins-reference/nest_plugins_reference/payments/split_settlement.py).
 
 ## Writing your own

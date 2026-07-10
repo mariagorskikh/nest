@@ -3235,14 +3235,24 @@ def validate_escrow_no_payout_without_delivery(
 # ---------------------------------------------------------------------------
 # Split-settlement (weighted fan-out) validators
 #
-# The split_settlement scenario broadcasts two structured events per round:
+# The split_settlement scenario broadcasts three structured events per round:
 #   split:opened:ref=..:payer=..:weights=payee~weight;...   (declared weights)
-#   split:settled:ref=..:amount=..:alloc=payee~credit;...   (actual credits)
-# They catch two attacks the default prepaid_credits plugin cannot even express
+#   split:settled:ref=..:amount=..:alloc=payee~credit;...   (reported credits)
+#   split:observed:ref=..:payee=..:balance=..               (payee ledger truth)
+# They catch three attacks the default prepaid_credits plugin cannot even express
 # and that a buggy splitter would silently commit:
 #   1. penny-shaving  -- credited total != debited amount (floored dust kept);
 #   2. weight tampering -- credits deviate from the largest-remainder split of
-#      the *declared* weights (mid-flight reweight / self-dealing).
+#      the *declared* weights (mid-flight reweight / self-dealing);
+#   3. ledger skimming -- receipts look canonical but the shared ledger is
+#      credited short, so a payee's observed balance moves by less than reported.
+#
+# Trust boundary: split_conservation and split_weight_fidelity audit the payer's
+# *reported receipts* (the opened/settled broadcasts). That is necessary but not
+# sufficient -- a splitter can return honest-looking receipts while crediting the
+# real ledger short. split_ledger_attestation closes that gap by cross-checking
+# the receipts against *payee-observed ledger truth* (the observed broadcasts,
+# emitted by the payees themselves from a read-only view of the shared ledger).
 # The canonical allocation is recomputed independently below; these validators
 # never import the plugin, so a compromised plugin cannot subvert its own audit.
 # ---------------------------------------------------------------------------
@@ -3332,6 +3342,12 @@ def validate_split_conservation(
     debits, and this check fails on the shortfall.  Also fails when no settlement
     events appear at all -- the signature of a plugin with no fan-out protocol.
 
+    Trust boundary: this audits the payer's *reported receipts* (the ``settled``
+    broadcast), not the shared ledger.  A splitter that reports conserved,
+    correctly weighted credits while crediting the ledger short passes this check
+    and :func:`validate_split_weight_fidelity`; that residual gap is what
+    :func:`validate_split_ledger_attestation` closes with payee-observed truth.
+
     Example::
 
         results = validate_trace(Path("trace.jsonl"), "split_settlement")
@@ -3385,12 +3401,22 @@ def validate_split_weight_fidelity(
     """Every settlement matches the largest-remainder split of its declared weights.
 
     Recomputes the canonical allocation from the weights named in the matching
-    ``split:opened`` event and compares it, payee by payee, to the credits in the
-    ``split:settled`` event.  Catches weight tampering: a splitter that reweights
-    mid-flight, drops or injects a payee, or routes dust to itself produces an
-    allocation that will not match the independent recomputation, and this check
-    fails.  A settlement with no matching ``opened`` contract is itself a
-    violation.
+    ``split:opened`` event and compares it, as a ``payee -> credit`` map, to the
+    credits in the ``split:settled`` event.  Catches weight tampering: a splitter
+    that reweights mid-flight, drops or injects a payee, or routes dust to itself
+    produces an allocation that will not match the independent recomputation, and
+    this check fails.  A settlement with no matching ``opened`` contract is itself
+    a violation.
+
+    The comparison is order-insensitive by design: the ``split:settled`` format
+    never declares allocation order canonical, so a splitter that lists the same
+    payees and credits in a different order is honest and passes.  It is compared
+    as ``dict(reported) == dict(expected)`` with a length guard -- a payee that
+    repeats in the reported allocation is a violation, not silently collapsed.
+
+    Trust boundary: like :func:`validate_split_conservation`, this audits the
+    payer's *reported receipts*, not ledger truth; :func:`validate_split_ledger_attestation`
+    cross-checks the receipts against payee-observed balances.
 
     Example::
 
@@ -3423,9 +3449,18 @@ def validate_split_weight_fidelity(
             violations.append(f"ref={ref!r}: declared weights are not a valid positive vector")
             continue
         reported = _parse_pairs(ev.get("alloc", ""))
-        if reported != expected:
+        reported_map = dict(reported)
+        if len(reported_map) != len(reported):
+            violations.append(f"ref={ref!r}: duplicate payee in reported allocation {reported}")
+            continue
+        # Order-insensitive: the settled format does not fix allocation order, so
+        # compare payee->credit maps, not position by position. The length guard
+        # above already rejected duplicate payees on the reported side; the
+        # canonical vector never repeats a payee, so this map compare is exact.
+        if reported_map != dict(expected):
             violations.append(
-                f"ref={ref!r}: allocation {reported} != canonical {expected} for declared weights"
+                f"ref={ref!r}: allocation {reported} != canonical {expected} "
+                f"for declared weights (compared as payee->credit maps)"
             )
     if violations:
         return [ValidationResult("split_weight_fidelity", False, "; ".join(violations))]
@@ -3442,6 +3477,112 @@ def validate_split_weight_fidelity(
             "split_weight_fidelity",
             True,
             f"{checked} settlements matched the largest-remainder split of their declared weights",
+        )
+    ]
+
+
+def validate_split_ledger_attestation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every payee's observed ledger delta equals the credit the payer reported.
+
+    The other two split validators audit the payer's *reported receipts* (the
+    ``split:opened`` / ``split:settled`` broadcasts).  Both are the payer's own
+    account, so a splitter that returns canonical receipts while crediting the
+    shared ledger short passes both of them.  This validator closes that gap by
+    reading the *payees'* own ``split:observed:ref=..:payee=..:balance=..``
+    attestations -- each payee's current shared-ledger balance, taken from a
+    read-only view it cannot forge -- and cross-checking ledger truth against the
+    receipts.
+
+    For each payee it walks the attestations in trace order and takes the delta
+    between consecutive balances (the first is measured from a zero starting
+    balance, since the scenario's payees are passive sinks that begin empty).
+    Because settlements are scheduled one-per-tick, that delta is exactly the
+    credit applied by the single settlement the attestation references, and it
+    must equal the credit the payer reported to that payee in the matching
+    ``split:settled`` event.  Any mismatch is reported as ``ref + payee +
+    reported vs observed delta``.
+
+    Also fails when a settlement has no covering attestations, and when no
+    settlements appear at all -- the same fail-when-absent behavior the other two
+    validators use against a plugin with no fan-out protocol.
+
+    Example::
+
+        results = validate_trace(Path("trace.jsonl"), "split_settlement")
+        assert results[2].passed
+    """
+    parsed = _parse_split_events(events)
+
+    # Reported credits per settlement: ref -> {payee: credit}, in trace order.
+    reported: dict[str, dict[str, int]] = {}
+    settled_order: list[str] = []
+    for ev in parsed:
+        if ev["kind"] != "settled":
+            continue
+        ref = ev.get("ref", "")
+        reported[ref] = dict(_parse_pairs(ev.get("alloc", "")))
+        settled_order.append(ref)
+
+    prior_balance: dict[str, int] = defaultdict(int)
+    covered: set[tuple[str, str]] = set()
+    violations: list[str] = []
+    attested = 0
+
+    for ev in parsed:
+        if ev["kind"] != "observed":
+            continue
+        ref = ev.get("ref", "")
+        payee = ev.get("payee", "")
+        try:
+            balance = int(ev.get("balance", ""))
+        except ValueError:
+            violations.append(
+                f"ref={ref!r} payee={payee!r}: non-integer balance {ev.get('balance', '')!r}"
+            )
+            continue
+        attested += 1
+        credited = reported.get(ref, {})
+        if payee not in credited:
+            violations.append(
+                f"ref={ref!r} payee={payee!r}: attestation with no matching reported credit"
+            )
+            continue
+        observed_delta = balance - prior_balance[payee]
+        prior_balance[payee] = balance
+        covered.add((ref, payee))
+        if observed_delta != credited[payee]:
+            violations.append(
+                f"ref={ref!r} payee={payee!r}: reported credit {credited[payee]} "
+                f"!= observed ledger delta {observed_delta}"
+            )
+
+    missing = [
+        f"{ref}/{payee}"
+        for ref in settled_order
+        for payee in reported[ref]
+        if (ref, payee) not in covered
+    ]
+    if missing:
+        violations.append(f"settlements with no covering attestation: {', '.join(missing)}")
+
+    if violations:
+        return [ValidationResult("split_ledger_attestation", False, "; ".join(violations))]
+    if not settled_order:
+        return [
+            ValidationResult(
+                "split_ledger_attestation",
+                False,
+                "no split settlements observed in trace -- plugin lacks fan-out settlement",
+            )
+        ]
+    return [
+        ValidationResult(
+            "split_ledger_attestation",
+            True,
+            f"{attested} payee attestations matched their reported credits "
+            f"across {len(settled_order)} settlements",
         )
     ]
 
@@ -5627,5 +5768,6 @@ VALIDATORS: dict[str, list[Any]] = {
     "split_settlement": [
         validate_split_conservation,
         validate_split_weight_fidelity,
+        validate_split_ledger_attestation,
     ],
 }
