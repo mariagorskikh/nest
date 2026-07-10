@@ -68,14 +68,23 @@ hotstuff = "nest_plugins_reference.coordination.hotstuff:HotStuff"
 [project.entry-points."nest.plugins.negotiation"]
 alternating_offers = "nest_plugins_reference.negotiation.alternating_offers:AlternatingOffers"
 pareto = "nest_plugins_reference.negotiation.pareto:ParetoNegotiation"
+[project.entry-points."nest.plugins.auth"]
+mesh_revocable = "nest_plugins_reference.auth.mesh_revocable:MeshRevocableAuth"
+
+[project.entry-points."nest.plugins.comms"]
+authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
 
 [project.entry-points."nest.plugins.memory"]
 blackboard = "nest_plugins_reference.memory.blackboard:Blackboard"
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"
 
+[project.entry-points."nest.plugins.registry"]
+byzantine_gossip = "nest_plugins_reference.registry.byzantine_gossip:ByzantineGossipRegistry"
+
 [project.entry-points."nest.plugins.privacy"]
 noop = "nest_plugins_reference.privacy.noop:NoopPrivacy"
 hybrid_x25519 = "nest_plugins_reference.privacy.hybrid_x25519:HybridX25519Privacy"
+trust_gated = "nest_plugins_reference.privacy.trust_gated:TrustGatedPrivacy"
 
 [project.entry-points."nest.plugins.datafacts"]
 datafacts_v1 = "nest_plugins_reference.datafacts.datafacts_v1:DataFactsV1"
@@ -84,6 +93,12 @@ cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
 [project.entry-points."nest.plugins.failure_detector"]
 heartbeat = "nest_plugins_reference.failure_detection.heartbeat:HeartbeatFailureDetector"
 phi_accrual = "nest_plugins_reference.failure_detection.phi_accrual:PhiAccrualFailureDetector"
+
+[project.entry-points."nest.plugins.trust"]
+parc = "nest_plugins_reference.trust.parc:ParcTrust"
+aae_permit_gate = "nest_plugins_reference.trust.aae_permit_gate:AAEPermitGate"
+bonded_trust = "nest_plugins_reference.trust.bonded_trust:BondedTrust"
+attested_peering = "nest_plugins_reference.trust.attested_peering:AttestedPeeringTrust"
 
 [build-system]
 requires = ["hatchling"]
