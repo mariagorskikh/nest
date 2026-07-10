@@ -111,7 +111,9 @@ class IntermediaryAgent(StateMachineAgent):
 
             self._token = Token(payload.decode())
             for leaf_id in self._leaf_ids:
-                leaf_token: Token = await auth.delegate(self._token, leaf_id, ["read"], ttl=600.0)
+                leaf_token: Token = await auth.delegate(
+                    self._token, leaf_id, ["read"], ttl=600.0, caller=self._id
+                )
                 await ctx.send(leaf_id, leaf_token.encode())
 
 

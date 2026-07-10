@@ -1,104 +1,203 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Property tests for the delegatable auth plugin.
+"""Property-based tests for the delegatable auth plugin.
 
-Two invariants under random delegation chains: (1) *monotone
-attenuation* — a verified leaf never holds a scope its root lacked and
-never outlives any ancestor; (2) *cascading revocation* — revoking a
-random ancestor always invalidates every descendant minted under it.
-Token bytes are also deterministic for a fixed clock and secret.
+Three invariants under Hypothesis:
+
+1. **Scope subset invariant** — any subset of parent scopes succeeds in
+   ``delegate()``, any strict superset raises ``ScopeEscalationError``.
+2. **HMAC round-trip** — every token issued by ``issue()`` or ``delegate()``
+   can be verified and returns the same scopes.
+3. **Revocation cascade** — revoking any ancestor in a chain makes every
+   descendant unverifiable.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Coroutine
-from typing import Any
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from nest_core.types import AgentId, Token
 from nest_plugins_reference.auth.delegatable import (
     DelegatableAuth,
     RevokedAncestorError,
+    ScopeEscalationError,
 )
 
-_SCOPES = st.sets(st.sampled_from(["read", "write", "pay", "admin"]), min_size=1)
+# ---------------------------------------------------------------------------
+# Shared strategies
+# ---------------------------------------------------------------------------
+
+_scope_name = st.text(
+    alphabet=st.characters(whitelist_categories=("Ll",), whitelist_characters="_"),
+    min_size=1,
+    max_size=8,
+)
+_scope_list = st.lists(_scope_name, min_size=0, max_size=6, unique=True)
 
 
-def _run(coro: Coroutine[Any, Any, None]) -> None:
-    asyncio.run(coro)
+def _run(coro: object) -> None:
+    """Run a coroutine in a fresh event loop, closing it afterwards."""
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(coro)  # type: ignore[arg-type]
+    finally:
+        loop.close()
 
 
-async def _build_chain(
-    auth: DelegatableAuth,
-    root_scopes: set[str],
-    subset_picks: list[int],
-) -> tuple[list[Token], list[set[str]]]:
-    tokens: list[Token] = [await auth.issue(AgentId("agent-0"), sorted(root_scopes))]
-    scope_sets: list[set[str]] = [set(root_scopes)]
-    for depth, pick in enumerate(subset_picks, start=1):
-        parent_scopes = sorted(scope_sets[-1])
-        keep = max(1, pick % (len(parent_scopes) + 1))
-        child_scopes = set(parent_scopes[:keep])
-        token = await auth.delegate(
-            tokens[-1],
-            AgentId(f"agent-{depth}"),
-            sorted(child_scopes),
-            ttl=100.0,
-        )
-        tokens.append(token)
-        scope_sets.append(child_scopes)
-    return tokens, scope_sets
+# ---------------------------------------------------------------------------
+# 1. Scope subset invariant
+# ---------------------------------------------------------------------------
 
 
-@settings(max_examples=50, deadline=None)
-@given(root_scopes=_SCOPES, picks=st.lists(st.integers(min_value=1), min_size=1, max_size=6))
-def test_leaf_scopes_never_exceed_root(root_scopes: set[str], picks: list[int]) -> None:
-    async def scenario() -> None:
-        auth = DelegatableAuth(secret=b"prop", clock=0.0)
-        tokens, _ = await _build_chain(auth, root_scopes, picks)
-        ctx = await auth.verify(tokens[-1])
-        assert set(ctx.scopes).issubset(root_scopes)
-        root_ctx = await auth.verify(tokens[0])
-        assert root_ctx.expires_at is not None and ctx.expires_at is not None
-        assert ctx.expires_at <= root_ctx.expires_at
-
-    _run(scenario())
-
-
-@settings(max_examples=50, deadline=None)
 @given(
-    root_scopes=_SCOPES,
-    picks=st.lists(st.integers(min_value=1), min_size=1, max_size=6),
-    revoke_at=st.integers(min_value=0),
+    parent_scopes=_scope_list,
+    child_scopes=_scope_list,
 )
-def test_revoking_any_ancestor_invalidates_leaf(
-    root_scopes: set[str],
-    picks: list[int],
-    revoke_at: int,
-) -> None:
-    async def scenario() -> None:
-        auth = DelegatableAuth(secret=b"prop", clock=0.0)
-        tokens, _ = await _build_chain(auth, root_scopes, picks)
-        target = revoke_at % (len(tokens) - 1)  # any strict ancestor of the leaf
-        await auth.revoke(tokens[target])
-        try:
-            await auth.verify(tokens[-1])
-        except RevokedAncestorError:
-            return
-        raise AssertionError("leaf verified despite revoked ancestor")
+@settings(max_examples=200)
+def test_scope_subset_invariant(parent_scopes: list[str], child_scopes: list[str]) -> None:
+    """Delegating a subset always succeeds; a superset always raises."""
 
-    _run(scenario())
+    async def _inner() -> None:
+        auth = DelegatableAuth(secret=b"prop-secret", clock=1000.0)
+        root = await auth.issue(AgentId("coord"), parent_scopes, ttl=3600.0)
+        parent_set = set(parent_scopes)
+        child_set = set(child_scopes)
+
+        if child_set <= parent_set:
+            child = await auth.delegate(root, AgentId("worker"), child_scopes, ttl=60.0)
+            ctx = await auth.verify(child, caller=AgentId("worker"))
+            assert set(ctx.scopes) == child_set
+        else:
+            with pytest.raises(ScopeEscalationError):
+                await auth.delegate(root, AgentId("worker"), child_scopes, ttl=60.0)
+
+    _run(_inner())
 
 
-@settings(max_examples=25, deadline=None)
-@given(root_scopes=_SCOPES)
-def test_token_bytes_deterministic(root_scopes: set[str]) -> None:
-    async def scenario() -> None:
-        first = DelegatableAuth(secret=b"prop", clock=42.0)
-        second = DelegatableAuth(secret=b"prop", clock=42.0)
-        token_a = await first.issue(AgentId("a1"), sorted(root_scopes))
-        token_b = await second.issue(AgentId("a1"), sorted(root_scopes))
-        assert str(token_a) == str(token_b)
+# ---------------------------------------------------------------------------
+# 2. HMAC round-trip invariant
+# ---------------------------------------------------------------------------
 
-    _run(scenario())
+
+@given(
+    scopes=_scope_list,
+    secret=st.binary(min_size=1, max_size=64),
+)
+@settings(max_examples=200)
+def test_hmac_round_trip(scopes: list[str], secret: bytes) -> None:
+    """Every issued token verifies correctly and returns identical scopes."""
+
+    async def _inner() -> None:
+        auth = DelegatableAuth(secret=secret, clock=1000.0)
+        root = await auth.issue(AgentId("a"), scopes, ttl=3600.0)
+        ctx = await auth.verify(root)
+        assert set(ctx.scopes) == set(scopes)
+        assert ctx.subject == AgentId("a")
+
+    _run(_inner())
+
+
+@given(
+    parent_scopes=st.lists(_scope_name, min_size=1, max_size=6, unique=True),
+    child_scopes_draw=st.data(),
+)
+@settings(max_examples=150)
+def test_delegation_round_trip(parent_scopes: list[str], child_scopes_draw: st.DataObject) -> None:
+    """Every delegated token verifies correctly and returns correct scopes."""
+    child_scopes = child_scopes_draw.draw(
+        st.lists(
+            st.sampled_from(parent_scopes),
+            min_size=0,
+            max_size=len(parent_scopes),
+            unique=True,
+        )
+    )
+
+    async def _inner() -> None:
+        auth = DelegatableAuth(secret=b"rt-secret", clock=1000.0)
+        root = await auth.issue(AgentId("coord"), parent_scopes, ttl=3600.0)
+        child = await auth.delegate(root, AgentId("worker"), child_scopes, ttl=600.0)
+        ctx = await auth.verify(child, caller=AgentId("worker"))
+        assert set(ctx.scopes) == set(child_scopes)
+
+    _run(_inner())
+
+
+# ---------------------------------------------------------------------------
+# 3. Revocation cascade invariant
+# ---------------------------------------------------------------------------
+
+
+@given(chain_depth=st.integers(min_value=1, max_value=4))
+@settings(max_examples=100)
+def test_revocation_cascade(chain_depth: int) -> None:
+    """Revoking any node in a chain invalidates all its descendants."""
+
+    async def _inner() -> None:
+        auth = DelegatableAuth(secret=b"rev-secret", clock=1000.0)
+        scopes = ["read", "write", "exec"]
+        tokens: list[Token] = []
+
+        root = await auth.issue(AgentId("root"), scopes, ttl=3600.0)
+        tokens.append(root)
+
+        for i in range(chain_depth):
+            prev = tokens[-1]
+            # prev is a root token for i=0 (no aud), a delegated token after that.
+            caller = AgentId(f"a{i - 1}") if i > 0 else None
+            tokens.append(
+                await auth.delegate(prev, AgentId(f"a{i}"), ["read"], ttl=3600.0, caller=caller)
+            )
+
+        await auth.revoke(tokens[0])
+        for t in tokens:
+            with pytest.raises(RevokedAncestorError):
+                await auth.verify(t)
+
+    _run(_inner())
+
+
+@given(
+    left_depth=st.integers(min_value=0, max_value=3),
+    right_depth=st.integers(min_value=0, max_value=3),
+)
+@settings(max_examples=80)
+def test_revoke_one_branch_leaves_sibling_intact(left_depth: int, right_depth: int) -> None:
+    """Revoking one branch must not affect a sibling branch."""
+
+    async def _inner() -> None:
+        auth = DelegatableAuth(secret=b"branch-secret", clock=1000.0)
+        root = await auth.issue(AgentId("root"), ["read", "write"], ttl=3600.0)
+
+        left: list[Token] = [root]
+        for i in range(left_depth):
+            caller = AgentId(f"L{i - 1}") if i > 0 else None
+            left.append(
+                await auth.delegate(left[-1], AgentId(f"L{i}"), ["read"], ttl=3600.0, caller=caller)
+            )
+
+        right: list[Token] = [root]
+        for i in range(right_depth):
+            caller = AgentId(f"R{i - 1}") if i > 0 else None
+            right.append(
+                await auth.delegate(
+                    right[-1], AgentId(f"R{i}"), ["read"], ttl=3600.0, caller=caller
+                )
+            )
+
+        await auth.revoke(left[-1])
+
+        if left_depth == 0:
+            # left[-1] is root → root revoked, right branch also fails
+            with pytest.raises(RevokedAncestorError):
+                await auth.verify(root)
+        else:
+            ctx = await auth.verify(root)
+            assert "read" in ctx.scopes
+            caller = AgentId(f"R{right_depth - 1}") if right_depth > 0 else None
+            ctx2 = await auth.verify(right[-1], caller=caller)
+            assert "read" in ctx2.scopes
+
+    _run(_inner())

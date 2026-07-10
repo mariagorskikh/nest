@@ -15,10 +15,11 @@ Four attacks are blocked:
 * **Audience confusion at verify** — ``verify(token, caller=agent_id)`` raises
   ``AudienceConfusionError`` when the caller is not the token's declared
   audience.
-* **Audience confusion at delegate** — ``delegate(token, ..., caller=agent_id)``
-  raises ``AudienceConfusionError`` when the caller is not the token's declared
-  audience, preventing a thief who holds a stolen token from minting valid
-  grandchildren.
+* **Audience confusion at delegate** — ``delegate()`` raises
+  ``AudienceConfusionError`` when the parent token has a declared audience and
+  ``caller`` is absent OR does not match that audience.  This blocks the exploit
+  unconditionally: a thief calling ``delegate(stolen, ...)`` with *no* ``caller=``
+  kwarg is rejected just as firmly as one who passes a wrong ``caller=``.
 
 The plugin satisfies the ``Auth`` protocol (``issue`` / ``verify`` /
 ``revoke``).  The extra ``delegate`` surface is additive; existing callers
@@ -343,15 +344,19 @@ class DelegatableAuth:
             audience: The agent the child token is issued to.
             scopes: Capability scopes for the child (must ⊆ parent scopes).
             ttl: Requested lifetime in seconds; capped at parent's remaining TTL.
-            caller: If provided, must match the parent token's declared audience.
-                Prevents a thief who holds a stolen token from minting valid
-                grandchildren under a different identity.
+            caller: Identity of the agent performing the delegation.  When the
+                parent token has a declared audience (i.e. it is itself a
+                delegated token, not a root token), ``caller`` is **required**
+                and must exactly match that audience.  Omitting ``caller`` on
+                an audience-bound parent raises ``AudienceConfusionError``
+                immediately, blocking the exploit where a thief calls
+                ``delegate(stolen, ...)`` with no ``caller=`` kwarg.
 
         Raises:
             ScopeEscalationError: *scopes* is not a subset of the parent's.
             RevokedAncestorError: The parent or one of its ancestors is revoked.
-            AudienceConfusionError: *caller* is provided and does not match the
-                parent token's declared audience.
+            AudienceConfusionError: The parent token has a declared audience and
+                ``caller`` is absent or does not match it.
             ValueError: The parent token is malformed, has an invalid signature,
                 or has expired.
 
@@ -364,10 +369,19 @@ class DelegatableAuth:
                 child, AgentId("leaf"), ["read"], ttl=60.0, caller=AgentId("worker")
             )
         """
-        # Verify parent (also catches revocation, expiry, and audience binding)
-        parent_ctx = await self.verify(parent_token, caller=caller)
-
+        # Audience-binding check: must happen before verify() because verify()
+        # only raises AudienceConfusionError when caller is not None.  An attacker
+        # calling delegate(stolen) with no caller= would otherwise bypass the check.
+        # Rule: if the parent token has a declared audience, caller must be supplied
+        # and must match — omitting caller= is as wrong as supplying the wrong one.
         parent_data, _ = self._parse(parent_token)
+        raw_aud = parent_data.get("aud")
+        if raw_aud is not None and (caller is None or str(caller) != str(raw_aud)):
+            msg = f"token issued for {raw_aud!r}; caller {caller!r} may not delegate it"
+            raise AudienceConfusionError(msg)
+
+        # Verify parent (also catches revocation, expiry, and signature)
+        parent_ctx = await self.verify(parent_token, caller=caller)
         parent_tid = str(parent_data["tid"])
         parent_exp = float(str(parent_data["exp"]))
 

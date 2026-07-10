@@ -113,7 +113,7 @@ class TestDelegation:
     async def test_delegate_preserves_parent_subject(self, auth: DelegatableAuth) -> None:
         root = await auth.issue(AgentId("coord"), ["read", "write", "exec"])
         mid = await auth.delegate(root, AgentId("mid"), ["read", "exec"], ttl=300.0)
-        leaf = await auth.delegate(mid, AgentId("leaf"), ["read"], ttl=60.0)
+        leaf = await auth.delegate(mid, AgentId("leaf"), ["read"], ttl=60.0, caller=AgentId("mid"))
         ctx = await auth.verify(leaf, caller=AgentId("leaf"))
         # subject traces back to the original issuer
         assert ctx.subject == AgentId("coord")
@@ -136,7 +136,9 @@ class TestDelegation:
     async def test_three_level_chain(self, auth: DelegatableAuth) -> None:
         root = await auth.issue(AgentId("a"), ["admin", "read", "write", "exec"])
         mid = await auth.delegate(root, AgentId("b"), ["read", "write", "exec"], ttl=3600.0)
-        leaf = await auth.delegate(mid, AgentId("c"), ["read", "exec"], ttl=600.0)
+        leaf = await auth.delegate(
+            mid, AgentId("c"), ["read", "exec"], ttl=600.0, caller=AgentId("b")
+        )
         ctx = await auth.verify(leaf, caller=AgentId("c"))
         assert set(ctx.scopes) == {"read", "exec"}
 
@@ -185,7 +187,7 @@ class TestCascadingRevocation:
     async def test_revoke_root_blocks_grandchild(self, auth: DelegatableAuth) -> None:
         root = await auth.issue(AgentId("a"), ["read", "write", "exec"])
         mid = await auth.delegate(root, AgentId("b"), ["read", "write"], ttl=3600.0)
-        leaf = await auth.delegate(mid, AgentId("c"), ["read"], ttl=600.0)
+        leaf = await auth.delegate(mid, AgentId("c"), ["read"], ttl=600.0, caller=AgentId("b"))
         await auth.revoke(root)
         with pytest.raises(RevokedAncestorError):
             await auth.verify(leaf)
@@ -193,7 +195,7 @@ class TestCascadingRevocation:
     async def test_revoke_middle_blocks_leaf_not_root(self, auth: DelegatableAuth) -> None:
         root = await auth.issue(AgentId("a"), ["read", "write", "exec"])
         mid = await auth.delegate(root, AgentId("b"), ["read", "write"], ttl=3600.0)
-        leaf = await auth.delegate(mid, AgentId("c"), ["read"], ttl=600.0)
+        leaf = await auth.delegate(mid, AgentId("c"), ["read"], ttl=600.0, caller=AgentId("b"))
         await auth.revoke(mid)
         # root still valid
         ctx = await auth.verify(root)
@@ -318,6 +320,20 @@ class TestDelegateCallerBypass:
             await auth.delegate(
                 alice_token, AgentId("intruder"), ["read"], ttl=30.0, caller=AgentId("intruder")
             )
+
+    async def test_delegate_without_caller_also_rejected(self, auth: DelegatableAuth) -> None:
+        """The reviewer's exact exploit — no caller= kwarg at all — must also be blocked.
+
+        The incomplete fix (passing caller=caller through to verify()) only activates
+        when caller is explicitly supplied.  This test proves the unconditional
+        audience-binding check in delegate() closes the no-kwarg path too.
+        """
+        root = await auth.issue(AgentId("coord"), ["read", "write"])
+        alice_token = await auth.delegate(root, AgentId("alice"), ["read"], ttl=600.0)
+
+        # Exact call form from the reviewer's review — no caller= kwarg whatsoever.
+        with pytest.raises(AudienceConfusionError):
+            await auth.delegate(alice_token, AgentId("intruder"), ["read"], ttl=30.0)
 
     async def test_delegate_accepts_correct_caller(self, auth: DelegatableAuth) -> None:
         """The legitimate holder can still delegate onward after the fix."""
