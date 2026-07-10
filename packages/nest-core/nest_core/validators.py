@@ -797,62 +797,44 @@ def validate_supply_chain_no_lost(
 def validate_reputation_scoring(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """Reputation scores decrease for agents that cheat."""
-    # Track scores: agent -> score
-    scores: dict[str, int] = defaultdict(int)
-    cheaters: set[str] = set()
+    """Every explicit cheating event must result in a bad reputation report."""
+    reported_bad: set[str] = set()
+    explicit_cheaters: set[str] = set()
 
     for ev in events:
         if ev.get("kind") != "send":
             continue
+
         msg = _message_body(ev)
+
         if msg.startswith("report:"):
             parts = msg.split(":")
-            if len(parts) >= 4:
-                agent_str = parts[2]
-                outcome = parts[3]
-                if outcome == "good":
-                    scores[agent_str] += 1
-                elif outcome == "bad":
-                    scores[agent_str] -= 2
-                    cheaters.add(agent_str)
+            if len(parts) >= 4 and parts[3] == "bad":
+                reported_bad.add(parts[2])
 
-    violations: list[str] = []
-    for cheater in cheaters:
-        if scores[cheater] >= 0:
-            # If a cheater has never had their score go negative from cheating
-            # that's fine — they might have enough good trades.  We check that
-            # at least one bad report actually decremented the score.
-            pass
-
-    # The core invariant: agents with bad reports should have lower scores
-    # than they would without those reports.  We verify that at least one
-    # "bad" report exists for every cheater.
-    bad_agents_with_reports: set[str] = set()
-    for ev in events:
-        if ev.get("kind") != "send":
-            continue
-        msg = _message_body(ev)
-        if msg.startswith("cheat:"):
+        elif msg.startswith("cheat:"):
             parts = msg.split(":")
             if len(parts) >= 3:
-                cheater_id = parts[2]
-                bad_agents_with_reports.add(cheater_id)
+                explicit_cheaters.add(parts[2])
 
-    # Check: if someone cheated, they should have a bad report
-    unreported = bad_agents_with_reports - cheaters
-    # cheaters is set of agents that got "bad" reports, bad_agents_with_reports
-    # is set of agents that sent cheat messages
+    unreported = explicit_cheaters - reported_bad
     if unreported:
-        violations.append(f"cheaters not reported: {unreported}")
+        return [
+            ValidationResult(
+                "reputation_scoring",
+                False,
+                f"cheaters not reported: {sorted(unreported)}",
+            )
+        ]
 
-    if violations:
-        return [ValidationResult("reputation_scoring", False, "; ".join(violations))]
     return [
         ValidationResult(
             "reputation_scoring",
             True,
-            f"checked {len(cheaters)} cheaters, {len(scores)} agents scored",
+            (
+                f"checked {len(explicit_cheaters)} cheaters, "
+                f"{len(reported_bad)} agents received bad reports"
+            ),
         )
     ]
 

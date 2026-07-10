@@ -617,6 +617,15 @@ class TestReputationScoring:
         results = validate_reputation_scoring(events)
         assert results[0].passed is True
 
+    def test_bad_report_alone_does_not_count_as_cheating(self) -> None:
+        """Bad reports without an explicit cheat event are not labeled cheaters."""
+        events = [
+            _send("reporter-0", "observer-0", "report:1:agent-9:bad"),
+        ]
+        results = validate_reputation_scoring(events)
+        assert results[0].passed is True
+        assert "checked 0 cheaters" in results[0].detail
+
 
 class TestReputationWarnings:
     def test_pass_warning_issued(self) -> None:
