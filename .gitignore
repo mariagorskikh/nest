@@ -14,3 +14,4 @@ data/hackathon-runs/*.jsonl
 data/hackathon-runs/*.png
 # Per-agent isolated worktrees / clones.
 .harness-work/
+.superpowers/
