@@ -4916,6 +4916,8 @@ def validate_attested_sybil_quarantined(
                 f"{len([v for v in verdicts.values() if v[0] == 'DENY'])} unattested peer(s) "
                 "quarantined"
             ),
+        )
+    ]
 # ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------

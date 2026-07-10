@@ -238,11 +238,29 @@ Three validators FAIL on the baseline, PASS on `bonded_trust`:
 
 ### Boundary
 
-Spend *real* bond, gain real influence — intended ("most at stake, most say"), bounded by spend and independent of identity count. Free Sybils get `0.0`.
-
 **Source:** [`bonded_trust.py`](../../packages/nest-plugins-reference/nest_plugins_reference/trust/bonded_trust.py) ·
 [`stake_ledgers.py`](../../packages/nest-plugins-reference/nest_plugins_reference/trust/stake_ledgers.py) ·
 [`sybil_bond.yaml`](../../scenarios/sybil_bond.yaml) · `sybil_bond_*` in
+[`validators.py`](../../packages/nest-core/nest_core/validators.py)
+
+## `sybil_resistant` : a 2-Pass Eigen-weighted reputation plugin
+
+`sybil_resistant` calculates transitive reputation scores by weighting opinions based on reporter credibility and actively penalizing coordination patterns.
+
+**Mechanism.**
+- **2-Pass Weighting**: Pass 1 computes a baseline reputation for all agents. Pass 2 weights each opinion by the reporter's Pass 1 reputation, discounting reports from untrusted identities.
+- **Collusion Ring Penalty**: A directed-graph algorithm detects mutual-boosting cliques (reporters who only boost each other positively and never report negatively). Mutual-boosters receive a `0.1` weight multiplier penalty.
+- **Burst Damping**: Uses exponentially decayed EMA step sizes to restrict the score inflation of rapid-fire positive reports.
+- **Negative Feedback Dominance**: Negative reports are weighted 3.0x more heavily than positive reports to ensure a single cheat isolates the attacker.
+
+**Scenario.**
+`sybil_reputation` — 16 honest traders + 4 coordinated Sybil attackers + 1 observer. Honest traders query `trust.score()` before trading and reject partners below a `0.45` score.
+
+- Under `score_average` (naive baseline), the collusion ring succeeds, cheats are high, and no refusals occur $\rightarrow$ **FAIL** (scenario validators fail).
+- Under `sybil_resistant` (this plugin), the collusion ring is neutralized, cheats are mitigated ($< 12$), and refusals are triggered $\rightarrow$ **PASS** (all validators pass).
+
+**Source:** [`sybil_resistant.py`](../../packages/nest-plugins-reference/nest_plugins_reference/trust/sybil_resistant.py) ·
+[`sybil_reputation.yaml`](../../scenarios/sybil_reputation.yaml) · `sybil_reputation_*` in
 [`validators.py`](../../packages/nest-core/nest_core/validators.py)
 
 ## Writing your own
