@@ -11,6 +11,7 @@ from nest_core.metrics import (
     ALL_METRICS,
     compute_metrics,
     generate_html_report,
+    validate_protocol,
 )
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
@@ -243,6 +244,33 @@ class TestMarketplaceMetrics:
         assert results["deal_rate"] == 0.0
         assert results["rejection_rate"] == 0.0
         assert results["mean_rounds_to_deal"] == 0.0
+
+
+class TestValidateProtocol:
+    def test_empty_trace_fails_closed_only_for_registered_scenarios(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        trace = tmp_path / "empty.jsonl"
+        trace.touch()
+
+        assert validate_protocol(trace, "marketplace") == {
+            "validations": [
+                {
+                    "name": "trace_nonempty",
+                    "passed": False,
+                    "detail": (
+                        "trace contains no events and therefore cannot prove "
+                        "the scenario invariants"
+                    ),
+                }
+            ],
+            "all_passed": False,
+        }
+        assert validate_protocol(trace, "unknown_scenario") == {
+            "validations": [],
+            "all_passed": True,
+        }
 
 
 class TestHtmlReport:

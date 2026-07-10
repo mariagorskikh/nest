@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from nest_core.validators import (
     VALIDATORS,
     ValidationResult,
@@ -659,13 +660,33 @@ class TestValidateEvents:
             _send("seller-0", "buyer-0", "sold:product-0:50"),
         ]
         results = validate_events(events, "marketplace")
-        assert len(results) == 3
+        assert [result.name for result in results] == [
+            "marketplace_no_double_sell",
+            "marketplace_all_responded",
+            "marketplace_price_agreement",
+        ]
         assert all(r.passed for r in results)
+        assert all(result.name != "trace_nonempty" for result in results)
+
+    @pytest.mark.parametrize("scenario_type", sorted(VALIDATORS))
+    def test_empty_events_fail_closed_for_registered_scenario(
+        self,
+        scenario_type: str,
+    ) -> None:
+        results = validate_events([], scenario_type)
+
+        assert len(results) == 1
+        assert results[0].name == "trace_nonempty"
+        assert results[0].passed is False
+        assert (
+            results[0].detail
+            == "trace contains no events and therefore cannot prove the scenario invariants"
+        )
 
     def test_unknown_scenario(self) -> None:
         events = [_send("a", "b", "hello")]
-        results = validate_events(events, "unknown_scenario")
-        assert results == []
+        assert validate_events(events, "unknown_scenario") == []
+        assert validate_events([], "unknown_scenario") == []
 
 
 class TestValidateTrace:
@@ -677,8 +698,28 @@ class TestValidateTrace:
         trace = tmp_path / "trace.jsonl"
         trace.write_text("\n".join(json.dumps(e) for e in events))
         results = validate_trace(trace, "marketplace")
-        assert len(results) == 3
+        assert [result.name for result in results] == [
+            "marketplace_no_double_sell",
+            "marketplace_all_responded",
+            "marketplace_price_agreement",
+        ]
         assert all(r.passed for r in results)
+        assert all(result.name != "trace_nonempty" for result in results)
+
+    def test_empty_file_fails_closed_for_registered_scenario(self, tmp_path: Path) -> None:
+        trace = tmp_path / "empty.jsonl"
+        trace.touch()
+
+        results = validate_trace(trace, "marketplace")
+
+        assert len(results) == 1
+        assert results[0].name == "trace_nonempty"
+        assert results[0].passed is False
+        assert (
+            results[0].detail
+            == "trace contains no events and therefore cannot prove the scenario invariants"
+        )
+        assert validate_trace(trace, "unknown_scenario") == []
 
 
 class TestValidationResult:

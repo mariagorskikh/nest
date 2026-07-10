@@ -72,7 +72,18 @@ def validate_events(
 
         results = validate_events(event_list, "auction")
     """
-    validators = VALIDATORS.get(scenario_type, [])
+    validators = VALIDATORS.get(scenario_type)
+    if validators is None:
+        return []
+    if not events:
+        return [
+            ValidationResult(
+                "trace_nonempty",
+                False,
+                "trace contains no events and therefore cannot prove the scenario invariants",
+            )
+        ]
+
     results: list[ValidationResult] = []
     for validator_fn in validators:
         results.extend(validator_fn(events))
