@@ -286,14 +286,15 @@ class TestMetricsConsistency:
     @settings(max_examples=25)
     @given(events=_trace_events_strategy())
     def test_success_rate_bounded(self, events: list[dict[str, Any]]) -> None:
-        """success_rate is always >= 0."""
+        """success_rate is always a proper fraction in [0.0, 1.0]."""
         trace = _write_trace_events(events)
         try:
             results = compute_metrics(str(trace), ["success_rate"])
             rate = results["success_rate"]
-            # success_rate = receives / sends; can exceed 1.0 if more receives
-            # than sends due to independent generation, but must always be >= 0
-            assert rate >= 0.0
+            # success_rate = receives / (receives + dropped). The denominator
+            # can never be smaller than the numerator, so for any trace -- unicast
+            # or broadcast-heavy -- the rate stays within [0.0, 1.0].
+            assert 0.0 <= rate <= 1.0
         finally:
             trace.unlink(missing_ok=True)
 

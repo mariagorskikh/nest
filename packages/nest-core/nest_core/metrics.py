@@ -73,6 +73,14 @@ def _delivery_rate(events: list[dict[str, Any]]) -> float:
     scenario reported 1.21).  For unicast the two definitions agree exactly --
     every ``send`` yields one ``receive`` or one ``dropped`` -- so this only
     corrects the broadcast case and can never exceed 1.0.
+
+    Because the denominator is resolved attempts, two edge cases behave slightly
+    differently from the old ``send``-based formula: messages still queued when
+    ``max_ticks`` truncates a run are neither ``receive`` nor ``dropped`` and so
+    no longer drag the rate down, and a ``ctx.schedule()`` timer fire (a
+    ``receive`` with no originating ``send``) now counts as a delivered attempt.
+    Both are intended -- the metric measures delivery of attempts the simulator
+    actually resolved.
     """
     receives = 0
     dropped = 0
