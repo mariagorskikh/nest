@@ -10,28 +10,33 @@ supply-chain shape::
 
 Each producer hop publishes a *dataset* through ``plugins["datafacts"]`` and
 declares exactly the previous hop's dataset as its single provenance parent, so
-the lineage is one unbranched chain four hops long. ``auditor-0``:
+the lineage is one unbranched chain four hops long. A linear chain is just a
+diamond with the fan-out removed, so the producer hops and the shared datafacts
+wiring are **reused directly** from ``provenance_supply_chain``: the supplier is
+a ``SourceAgent`` fanning out to a single downstream, and each middle hop is a
+``RefineAgent``. Only ``AuditorAgent`` is defined here, because it does something
+the diamond's verifier does not -- it measures the lineage *depth*.
+
+``auditor-0``:
 
 1. **Verifies** -- walks the whole parent chain from the retailer's dataset back
-   to the supplier's root and reports how many distinct datasets it found. A
-   single broken hop anywhere along a deep chain must surface as a break.
+   to the supplier's root, reporting both the number of distinct datasets
+   (``chain_ok``) *and* the longest root-path length (``chain_depth``). The depth
+   is what distinguishes this scenario from the diamond: a four-hop spine is
+   depth 4, whereas the diamond's longest path is only 3, even though both have
+   four distinct nodes. A single broken hop anywhere along a deep chain must
+   still surface as a break.
 2. **Attacks** -- as an *outsider* (signing with its own identity, never the
    supplier's), it runs the three provenance attacks against the root:
-
-   * *Substitution*: republish different content under the supplier's exact
-     ``name`` -- does it land on the supplier's URL?
-   * *Forged freshness*: republish identical content claiming the supplier as
-     ``owner`` -- does the supplier then read as freshly attested under an
-     outsider's signature?
-   * *Broken provenance*: publish a dataset whose declared parent was never
-     published -- is it rejected?
+   substitution, forged freshness, and broken provenance.
 
 Every step is reported as a ``|``-delimited trace message (``:`` collides with
 the ``df://`` URL scheme) using the *same* wire protocol as the diamond
 scenario, so the two share one validator set: point ``layers.datafacts`` at
 ``cid_facts`` and every adversarial validator passes; point it at
-``datafacts_v1`` and they fail, because that reference plugin has no
-content-addressing, no signed freshness, and no provenance concept at all.
+``datafacts_v1`` and they fail. The extra ``chain_depth`` message is ignored by
+the shared validators (which match exact prefixes), so validator reuse is
+unaffected.
 
 Example::
 
@@ -40,102 +45,37 @@ Example::
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 from nest_core.scenario import ScenarioConfig
+
+# Reuse the diamond scenario's producer agents and datafacts wiring rather than
+# copying them: the two scenarios are twins that share one validator set, so a
+# second copy of the emitters could silently drift. These package-internal
+# helpers are deliberately reused (see PR #51 review); the ignores keep
+# provenance_supply_chain itself untouched instead of widening its public API.
+from nest_core.scenarios_builtin.provenance_supply_chain import (
+    _PHANTOM_PARENT,  # pyright: ignore[reportPrivateUsage]
+    RefineAgent,
+    SourceAgent,
+    _build_datafacts_handles,  # pyright: ignore[reportPrivateUsage]
+    _parents_of,  # pyright: ignore[reportPrivateUsage]
+)
 from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.types import AgentId, DatasetMetadata
 
 # The producer hops of the linear chain, upstream-to-downstream. Kept as data so
 # the spine is easy to read and to lengthen; the auditor is appended separately.
 _CHAIN: tuple[str, ...] = ("supplier", "manufacturer", "distributor", "retailer")
-_PHANTOM_PARENT = "df://sha256-" + "0" * 64
-
-
-def _parents_of(meta: DatasetMetadata) -> list[str]:
-    """Read declared provenance parents off a dataset as plain URL strings.
-
-    Example::
-
-        parents = _parents_of(meta)
-    """
-    raw: object = meta.metadata.get("parents", [])
-    if not isinstance(raw, list):
-        return []
-    return [str(p) for p in cast("list[Any]", raw)]
-
-
-class SupplierAgent(StateMachineAgent):
-    """Publishes the root dataset (no parents) and hands it to the next hop.
-
-    Example::
-
-        supplier = SupplierAgent(AgentId("supplier-0"), downstream=AgentId("manufacturer-0"),
-                                 name="raw_materials", description="lot-A")
-    """
-
-    def __init__(self, agent_id: AgentId, downstream: AgentId, name: str, description: str) -> None:
-        self._id = agent_id
-        self._downstream = downstream
-        self._name = name
-        self._description = description
-
-    async def on_start(self, ctx: AgentContext) -> None:
-        """Publish the root dataset and send its URL to the next hop.
-
-        Example::
-
-            await supplier.on_start(ctx)
-        """
-        facts = ctx.plugins.get("datafacts")
-        if facts is None:
-            return
-        dataset = DatasetMetadata(name=self._name, owner=self._id, description=self._description)
-        url = await facts.publish(dataset)
-        await ctx.send(self._downstream, f"lineage|{url}|{self._id}".encode())
-
-
-class ChainHopAgent(StateMachineAgent):
-    """A middle hop: publishes a dataset parented on the one it received, forwards it.
-
-    Manufacturer, distributor, and retailer are all this same hop with different
-    ids -- each declares exactly one parent, keeping the lineage an unbranched
-    spine.
-
-    Example::
-
-        hop = ChainHopAgent(AgentId("manufacturer-0"), downstream=AgentId("distributor-0"),
-                            name="assembled_goods")
-    """
-
-    def __init__(self, agent_id: AgentId, downstream: AgentId, name: str) -> None:
-        self._id = agent_id
-        self._downstream = downstream
-        self._name = name
-
-    async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
-        """Publish a dataset parented on the received URL and forward it downstream.
-
-        Example::
-
-            await hop.on_message(ctx, AgentId("supplier-0"), b"lineage|df://sha256-x|supplier-0")
-        """
-        msg = payload.decode("utf-8", errors="replace")
-        if not msg.startswith("lineage|"):
-            return
-        facts = ctx.plugins.get("datafacts")
-        if facts is None:
-            return
-        _, parent_url, _owner = msg.split("|", 2)
-        dataset = DatasetMetadata(
-            name=self._name, owner=self._id, metadata={"parents": [parent_url]}
-        )
-        url = await facts.publish(dataset)
-        await ctx.send(self._downstream, f"lineage|{url}|{self._id}".encode())
 
 
 class AuditorAgent(StateMachineAgent):
-    """Walks the deep linear lineage, then runs three attacks as an outsider.
+    """Walks the deep linear lineage measuring its depth, then attacks as an outsider.
+
+    Unlike the diamond's verifier, this reports the longest root-path length
+    (``chain_depth``) alongside the distinct-node count, so the trace makes the
+    scenario's defining property -- lineage *depth* -- verifiable rather than
+    indistinguishable from a shallow fan-out.
 
     Example::
 
@@ -169,22 +109,28 @@ class AuditorAgent(StateMachineAgent):
         await self._attack_provenance(ctx, facts)
 
     async def _verify_chain(self, ctx: AgentContext, facts: Any, leaf_url: str) -> str | None:
-        """Walk the parent chain from the leaf to its root, reporting depth.
+        """Walk the parent chain from the leaf to its root, reporting size and depth.
 
         Follows every declared parent (so a mis-wired fork would still be caught)
-        and de-dupes, though a correct linear chain visits each hop exactly once.
+        and de-dupes. Each node is pushed with its distance from the leaf, so the
+        longest root-path length can be emitted as ``chain_depth`` -- for an
+        unbranched chain this is simply the number of hops (4 here), which is the
+        one property that distinguishes this scenario from the diamond (whose
+        longest path is 3). Also emits ``chain_ok`` with the distinct-node count.
         Returns the single root (a node with no parents) so the substitution
         attack can target the true supplier. A parent that does not resolve is a
         broken chain.
         """
         seen: set[str] = set()
         roots: list[str] = []
-        stack: list[str] = [leaf_url]
+        max_depth = 0
+        stack: list[tuple[str, int]] = [(leaf_url, 1)]
         while stack:
-            url = stack.pop()
+            url, dist = stack.pop()
             if url in seen:
                 continue
             seen.add(url)
+            max_depth = max(max_depth, dist)
             try:
                 meta: DatasetMetadata = await facts.fetch(url)
             except KeyError:
@@ -192,10 +138,11 @@ class AuditorAgent(StateMachineAgent):
                 return None
             parents = _parents_of(meta)
             if parents:
-                stack.extend(parents)
+                stack.extend((parent, dist + 1) for parent in parents)
             else:
                 roots.append(url)
         await ctx.send(self._id, f"chain_ok|{leaf_url}|{len(seen)}".encode())
+        await ctx.send(self._id, f"chain_depth|{leaf_url}|{max_depth}".encode())
         return sorted(roots)[0] if roots else None
 
     async def _attack_substitution(self, ctx: AgentContext, facts: Any, source_url: str) -> None:
@@ -229,54 +176,17 @@ class AuditorAgent(StateMachineAgent):
         await ctx.send(self._id, f"attack_provenance|{_PHANTOM_PARENT}|{rejected}".encode())
 
 
-def _build_datafacts_handles(
-    datafacts_cls: type[Any],
-    identities: dict[AgentId, Any],
-    all_ids: list[AgentId],
-) -> dict[AgentId, Any]:
-    """Instantiate one datafacts handle per agent, sharing state where possible.
-
-    Plugins taking an ``Identity`` plus ``datasets``/``proofs``/``clock`` keyword
-    arguments (e.g. ``cid_facts``) get one handle per agent over the same shared
-    dicts and logical clock -- so substitution resistance is meaningful
-    swarm-wide while each agent still signs as itself. Plugins with a no-argument
-    constructor (e.g. ``datafacts_v1``) get a single shared instance, already
-    correct for them since their storage is one dict.
-
-    Example::
-
-        handles = _build_datafacts_handles(CidFacts, identities, all_ids)
-    """
-    shared_datasets: dict[Any, Any] = {}
-    shared_proofs: dict[Any, Any] = {}
-    shared_clock: Any = None
-    shared_instance: Any = None
-    handles: dict[AgentId, Any] = {}
-
-    for aid in all_ids:
-        try:
-            kwargs: dict[str, Any] = {"datasets": shared_datasets, "proofs": shared_proofs}
-            if shared_clock is not None:
-                kwargs["clock"] = shared_clock
-            handle = datafacts_cls(identities[aid], **kwargs)
-            shared_clock = getattr(handle, "clock", shared_clock)
-            handles[aid] = handle
-        except TypeError:
-            if shared_instance is None:
-                shared_instance = datafacts_cls()
-            handles[aid] = shared_instance
-    return handles
-
-
 def provenance_supply_chain_linear_factory(
     config: ScenarioConfig,
     plugins: dict[str, Any],
 ) -> dict[AgentId, StateMachineAgent]:
     """Create the linear chain: supplier -> manufacturer -> distributor -> retailer -> auditor.
 
-    Instantiates per-agent identity instances (so each hop signs as itself) and
-    wires the resolved ``datafacts`` plugin class into per-agent handles via
-    :func:`_build_datafacts_handles`.
+    Reuses ``SourceAgent`` (as the supplier, fanning out to a single downstream)
+    and ``RefineAgent`` (as each middle hop) from ``provenance_supply_chain``;
+    only the depth-measuring ``AuditorAgent`` is local. Instantiates per-agent
+    identity instances so each hop signs as itself, and wires the resolved
+    ``datafacts`` plugin class into per-agent handles.
 
     Example::
 
@@ -309,15 +219,17 @@ def provenance_supply_chain_linear_factory(
     source_name = "raw_materials"
     # Each producer's downstream is the next id in the spine; the last forwards
     # to the auditor.
-    downstream = {**{producer_ids[i]: producer_ids[i + 1] for i in range(len(producer_ids) - 1)}}
+    downstream = {producer_ids[i]: producer_ids[i + 1] for i in range(len(producer_ids) - 1)}
     downstream[producer_ids[-1]] = auditor_id
 
     agents: dict[AgentId, StateMachineAgent] = {
-        source_id: SupplierAgent(
-            source_id, downstream=downstream[source_id], name=source_name, description="lot-A"
+        # A linear supplier is just a SourceAgent that fans out to one downstream.
+        source_id: SourceAgent(
+            source_id, refiners=[downstream[source_id]], name=source_name, description="lot-A"
         )
     }
+    # Middle hops are RefineAgents forwarding to the next id in the spine.
     for aid in producer_ids[1:]:
-        agents[aid] = ChainHopAgent(aid, downstream=downstream[aid], name=f"{aid}_dataset")
+        agents[aid] = RefineAgent(aid, aggregator=downstream[aid], name=f"{aid}_dataset")
     agents[auditor_id] = AuditorAgent(auditor_id, source_id=source_id, source_name=source_name)
     return agents
