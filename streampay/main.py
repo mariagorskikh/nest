@@ -9,7 +9,8 @@ Example::
 
     curl -X POST https://streampay.onrender.com/streams \
       -H "Content-Type: application/json" \
-      -d '{"stream_id":"s-1","payer":"agent-a","payee":"agent-b","rate_per_tick":10,"max_total":500}'
+      -d '{"stream_id":"s-1","payer":"agent-a","payee":"agent-b",
+           "rate_per_tick":10,"max_total":500}'
 """
 
 from __future__ import annotations
@@ -122,7 +123,8 @@ observes a non-zero balance. Idempotent by stream_id.
 Body: {{"stream_id": "s-1", "payer": "agent-a", "payee": "agent-b",
        "rate_per_tick": 10, "max_total": 500}}
 Example: curl -X POST {BASE_URL}/streams -H "Content-Type: application/json"
-         -d '{{"stream_id":"s-1","payer":"agent-a","payee":"agent-b","rate_per_tick":10,"max_total":500}}'
+         -d '{{"stream_id":"s-1","payer":"agent-a","payee":"agent-b",
+              "rate_per_tick":10,"max_total":500}}'
 Response 201: {{"stream_id":"s-1","payer":"agent-a","payee":"agent-b",
                "rate_per_tick":10,"max_total":500,"total_debited":10,
                "remaining":490,"is_open":true}}
@@ -231,7 +233,9 @@ async def create_stream(body: StreamCreate) -> dict[str, Any]:
             status_code=422,
             detail={
                 "error": "invalid_params",
-                "detail": f"max_total ({body.max_total}) must be >= rate_per_tick ({body.rate_per_tick})",
+                "detail": (
+                    f"max_total ({body.max_total}) must be >= rate_per_tick ({body.rate_per_tick})"
+                ),
             },
         )
 
