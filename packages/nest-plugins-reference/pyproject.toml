@@ -36,6 +36,9 @@ Repository = "https://github.com/projnanda/nandatown"
 [project.entry-points."nest.plugins.coordination"]
 resonance_bft = "nest_plugins_reference.coordination.resonance_bft:ResonanceBFT"
 
+[project.entry-points."nest.plugins.auth"]
+mesh_revocable = "nest_plugins_reference.auth.mesh_revocable:MeshRevocableAuth"
+
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
 

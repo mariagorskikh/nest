@@ -21,12 +21,17 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("comms", "nest_native"): f"{_REF}.comms.nest_native:NestNativeComms",
     ("comms", "versioned"): f"{_REF}.comms.versioned:VersionedComms",
     ("comms", "authenticated"): f"{_REF}.comms.authenticated:AuthenticatedComms",
+    ("comms", "replay_safe"): f"{_REF}.comms.replay_safe:ReplaySafeComms",
     ("identity", "did_key"): f"{_REF}.identity.did_key:DidKeyIdentity",
     ("identity", "ed25519_rotating"): (f"{_REF}.identity.ed25519_rotating:Ed25519RotatingIdentity"),
     ("registry", "in_memory"): f"{_REF}.registry.in_memory:InMemoryRegistry",
     ("registry", "gossip"): f"{_REF}.registry.gossip:GossipRegistry",
+    ("registry", "verified_capabilities"): (
+        f"{_REF}.registry.verified_capabilities:VerifiedCapabilitiesRegistry"
+    ),
     ("auth", "jwt"): f"{_REF}.auth.jwt_auth:JwtAuth",
     ("auth", "delegatable"): f"{_REF}.auth.delegatable:DelegatableAuth",
+    ("auth", "mesh_revocable"): f"{_REF}.auth.mesh_revocable:MeshRevocableAuth",
     ("trust", "score_average"): f"{_REF}.trust.score_average:ScoreAverageTrust",
     ("trust", "agent_receipts"): f"{_REF}.trust.agent_receipts:AgentReceiptsTrust",
     ("trust", "parc"): f"{_REF}.trust.parc:ParcTrust",
