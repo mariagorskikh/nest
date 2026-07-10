@@ -299,7 +299,7 @@ class Attestation(BaseModel):
 class Evidence(BaseModel):
     """Evidence of misbehavior for trust reporting.
 
-    The ``receipt`` field (added in v0.2.0) carries structured evidence such as
+    The ``receipt`` field carries structured evidence such as
     cross-signed receipts or cryptographic proofs. When present, trust plugins
     prefer it over parsing ``detail`` as JSON. The ``detail`` field remains for
     backward compatibility and plain-text evidence.

@@ -220,20 +220,36 @@ class AuditorAgent(StateMachineAgent):
         """Report one receipt to the trust plugin under its issuer.
 
         The ``Evidence`` carries ``kind="positive"`` (so ``score_average``
-        rewards it) and ``detail`` = the JSON receipt (so ``agent_receipts``
-        gates it). ``subject`` is the issuer — the agent the receipt is *about*.
+        rewards it) and ``receipt`` = the structured receipt (so ``agent_receipts``
+        uses the new field). Falls back to ``detail`` for legacy compatibility.
+        ``subject`` is the issuer — the agent the receipt is *about*.
         """
         if self._trust is None:  # pragma: no cover - on_start always runs first
             return
-        await self._trust.report(
-            issuer,
-            Evidence(
-                reporter=self._id,
-                subject=issuer,
-                kind="positive",
-                detail=receipt_json,
-            ),
-        )
+
+        # Parse JSON to use structured receipt field
+        try:
+            receipt_dict = json.loads(receipt_json)
+            await self._trust.report(
+                issuer,
+                Evidence(
+                    reporter=self._id,
+                    subject=issuer,
+                    kind="positive",
+                    receipt=receipt_dict,
+                ),
+            )
+        except (json.JSONDecodeError, TypeError):
+            # Fallback to detail field for malformed JSON
+            await self._trust.report(
+                issuer,
+                Evidence(
+                    reporter=self._id,
+                    subject=issuer,
+                    kind="positive",
+                    detail=receipt_json,
+                ),
+            )
 
     async def _finalize(self, ctx: AgentContext) -> None:
         """Score every agent and emit one ``score:`` trace line per agent."""

@@ -35,9 +35,10 @@ This is **self-contained**: it depends only on the standard library and
 Receipts are plain ``dict`` documents; canonicalization is sorted-key JSON; an
 agent's identity is the lowercase hex of its raw 32-byte Ed25519 public key.
 
-NEST's ``Evidence`` has no receipt field, so a cross-signed receipt rides as
-JSON in ``evidence.detail``. Stock scenarios (e.g. the marketplace) pass a
-plain-string ``detail``; those fall back to the reference score-average
+NEST's ``Evidence`` supports a structured ``receipt`` field for cross-signed receipts,
+with fallback to parsing JSON from ``evidence.detail`` for backward compatibility.
+Structured receipts are preferred when available; stock scenarios (e.g. the marketplace)
+that pass plain-string ``detail`` fall back to the reference score-average
 heuristic so this plugin still works as a drop-in ``trust:`` replacement.
 
 Registered under ``("trust", "agent_receipts")`` in ``nest_core.plugins``.
@@ -45,6 +46,14 @@ Registered under ``("trust", "agent_receipts")`` in ``nest_core.plugins``.
 Example::
 
     trust = AgentReceiptsTrust()
+
+    # Preferred: structured receipt field
+    await trust.report(
+        AgentId("a1"),
+        Evidence(reporter=r, subject=s, kind="positive", receipt=receipt_dict),
+    )
+
+    # Legacy: JSON in detail field (still supported)
     await trust.report(
         AgentId("a1"),
         Evidence(reporter=r, subject=s, kind="positive", detail=json.dumps(receipt)),

@@ -225,7 +225,7 @@ class DomainAAuditor(StateMachineAgent):
                     reporter=self._id,
                     subject=self._id,
                     kind="positive",
-                    detail=json.dumps(receipt),
+                    receipt=receipt,
                 ),
             )
         # The plugin maps AgentId -> receipt did via the same sha256 seed
@@ -308,7 +308,7 @@ class CorruptAuditor(StateMachineAgent):
                     reporter=self._id,
                     subject=self._id,
                     kind="positive",
-                    detail=json.dumps(receipt),
+                    detail=json.dumps(receipt),  # Keep one detail caller as fallback test
                 ),
             )
         vc = await trust.build_credential(

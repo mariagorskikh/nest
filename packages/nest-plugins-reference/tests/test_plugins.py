@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from nest_core.types import (
     AgentCard,
@@ -531,20 +533,149 @@ class TestAgentReceiptsStructuredReceipt:
     """Tests for Evidence.receipt field in agent_receipts plugin.
 
     These tests verify the new structured receipt field works alongside
-    the legacy detail-as-JSON path. Tests use the heuristic fallback
-    (invalid receipts) to verify the code paths, not cryptographic validity.
+    the legacy detail-as-JSON path. Uses valid receipts with proper signatures
+    to test the actual receipt processing code path.
     """
 
+    def _seed(self, name: str) -> bytes:
+        """Deterministic 32-byte Ed25519 seed for an agent."""
+        import hashlib
+
+        return hashlib.sha256(name.encode()).digest()[:32]
+
+    def _did(self, name: str) -> str:
+        """The receipt identity (hex pubkey) for an agent."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        from nest_plugins_reference.trust.agent_receipts import did_for_pubkey
+
+        sk = Ed25519PrivateKey.from_private_bytes(self._seed(name))
+        return did_for_pubkey(sk.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+
+    def _receipt(
+        self, issuer: str, cp: str, *, rid: str, category: str = "purchase"
+    ) -> dict[str, Any]:
+        """Build a signed receipt."""
+        from nest_plugins_reference.trust.agent_receipts import sign_receipt
+
+        r: dict[str, Any] = {
+            "receipt_id": rid,
+            "issuer_did": self._did(issuer),
+            "action": {"category": category, "counterparty_did": self._did(cp)},
+        }
+        return sign_receipt(r, issuer_seed=self._seed(issuer))
+
+    def _corroborated(
+        self, issuer: str, cp: str, *, rid: str, category: str = "purchase"
+    ) -> dict[str, Any]:
+        """Build a corroborated (cosigned) receipt."""
+        from nest_plugins_reference.trust.agent_receipts import cosign_receipt
+
+        return cosign_receipt(
+            self._receipt(issuer, cp, rid=rid, category=category),
+            counterparty_seed=self._seed(cp),
+        )
+
     @pytest.mark.asyncio
-    async def test_structured_receipt_field_present_invalid_fallback(self) -> None:
-        """Invalid receipt in structured field falls back to heuristic."""
+    async def test_structured_receipt_field_with_valid_receipt(self) -> None:
+        """Valid receipt in structured field is processed properly."""
         from nest_plugins_reference.trust.agent_receipts import AgentReceiptsTrust
 
         trust = AgentReceiptsTrust()
         agent = AgentId("agent-1")
 
+        # Create a valid, corroborated receipt using the helper functions
+        valid_receipt = self._corroborated("agent-1", "agent-2", rid="r1", category="purchase")
+
+        evidence = Evidence(
+            reporter=AgentId("reporter"),
+            subject=agent,
+            kind="positive",
+            receipt=valid_receipt,
+        )
+
+        await trust.report(agent, evidence)
+
+        # Should process the valid receipt (not use heuristic)
+        score_obj = await trust.score(agent)
+        assert score_obj.score > 0.0  # Non-zero score from receipt processing
+        assert score_obj.sample_count == 1
+        assert score_obj.confidence > 0.0
+
+    @pytest.mark.asyncio
+    async def test_structured_receipt_preferred_over_detail(self) -> None:
+        """When both receipt and detail present, valid receipt field takes precedence."""
+        import json
+
+        from nest_plugins_reference.trust.agent_receipts import AgentReceiptsTrust
+
+        trust = AgentReceiptsTrust()
+        agent = AgentId("agent-2")
+
+        # Valid receipt in receipt field, invalid detail - receipt should be used
+        valid_receipt = self._corroborated("agent-2", "agent-3", rid="r2", category="purchase")
+        invalid_detail_json = {"receipt_id": "invalid-detail"}
+
+        evidence = Evidence(
+            reporter=AgentId("reporter"),
+            subject=agent,
+            kind="positive",
+            receipt=valid_receipt,
+            detail=json.dumps(invalid_detail_json),
+        )
+
+        await trust.report(agent, evidence)
+
+        # Should use valid receipt (not invalid detail)
+        score_obj = await trust.score(agent)
+        assert score_obj.score > 0.0  # From valid receipt processing
+        assert score_obj.sample_count == 1
+        assert score_obj.confidence > 0.0
+
+    @pytest.mark.asyncio
+    async def test_receipt_ordering_with_discriminating_test(self) -> None:
+        """Receipt field wins over detail when both present (discriminating test)."""
+        import json
+
+        from nest_plugins_reference.trust.agent_receipts import AgentReceiptsTrust
+
+        trust = AgentReceiptsTrust()
+        agent = AgentId("agent-order")
+
+        # Valid receipt in receipt field
+        valid_receipt = self._corroborated(
+            "agent-order", "agent-other", rid="rvalid", category="purchase"
+        )
+
+        # Invalid detail (will fallback to heuristic if used)
+        invalid_detail = {"receipt_id": "invalid", "missing": "fields"}
+
+        evidence = Evidence(
+            reporter=AgentId("reporter"),
+            subject=agent,
+            kind="negative",  # Negative kind for heuristic fallback
+            receipt=valid_receipt,  # Valid receipt
+            detail=json.dumps(invalid_detail),  # Invalid detail
+        )
+
+        await trust.report(agent, evidence)
+
+        # If receipt field was used: score > 0 from valid receipt processing
+        # If detail was used: score = 0 from negative heuristic fallback
+        score_obj = await trust.score(agent)
+        assert score_obj.score > 0.0  # Proves receipt field was used, not detail
+        assert score_obj.sample_count == 1
+        assert score_obj.confidence > 0.0
+
+    @pytest.mark.asyncio
+    async def test_structured_receipt_field_invalid_fallback(self) -> None:
+        """Invalid receipt in structured field falls back to heuristic."""
+        from nest_plugins_reference.trust.agent_receipts import AgentReceiptsTrust
+
+        trust = AgentReceiptsTrust()
+        agent = AgentId("agent-fallback")
+
         # Invalid receipt (will fail verification, use heuristic)
-        # This tests that the structured field is being READ
         invalid_receipt = {
             "receipt_id": "r1",
             # Missing required issuer_did, action, signature
@@ -564,37 +695,8 @@ class TestAgentReceiptsStructuredReceipt:
         assert score_obj.score == 1.0
 
     @pytest.mark.asyncio
-    async def test_structured_receipt_preferred_over_detail(self) -> None:
-        """When both receipt and detail present, receipt field is checked first."""
-        import json
-
-        from nest_plugins_reference.trust.agent_receipts import AgentReceiptsTrust
-
-        trust = AgentReceiptsTrust()
-        agent = AgentId("agent-2")
-
-        # Both fields present - receipt should be tried first
-        # (both invalid, will use heuristic, but logs show which was tried)
-        receipt_field = {"receipt_id": "structured"}
-        detail_json = {"receipt_id": "detail"}
-
-        evidence = Evidence(
-            reporter=AgentId("reporter"),
-            subject=agent,
-            kind="positive",
-            receipt=receipt_field,
-            detail=json.dumps(detail_json),
-        )
-
-        await trust.report(agent, evidence)
-
-        # Should use heuristic from kind="positive"
-        score_obj = await trust.score(agent)
-        assert score_obj.score == 1.0
-
-    @pytest.mark.asyncio
     async def test_none_receipt_uses_detail_path(self) -> None:
-        """When receipt is None, falls back to detail field."""
+        """When receipt is None, falls back to detail field with valid receipt."""
         import json
 
         from nest_plugins_reference.trust.agent_receipts import AgentReceiptsTrust
@@ -602,22 +704,24 @@ class TestAgentReceiptsStructuredReceipt:
         trust = AgentReceiptsTrust()
         agent = AgentId("agent-3")
 
-        # Invalid receipt in detail (will use heuristic)
-        receipt = {"receipt_id": "r3"}
+        # Valid receipt in detail JSON (legacy path)
+        valid_receipt = self._corroborated("agent-3", "agent-4", rid="r3", category="purchase")
 
         evidence = Evidence(
             reporter=AgentId("reporter"),
             subject=agent,
             kind="positive",
             receipt=None,  # Explicitly None
-            detail=json.dumps(receipt),
+            detail=json.dumps(valid_receipt),
         )
 
         await trust.report(agent, evidence)
 
-        # Should use detail path, then fall back to heuristic
+        # Should use detail path successfully
         score_obj = await trust.score(agent)
-        assert score_obj.score == 1.0
+        assert score_obj.score > 0.0  # From valid receipt processing
+        assert score_obj.sample_count == 1
+        assert score_obj.confidence > 0.0
 
     @pytest.mark.asyncio
     async def test_plain_text_detail_still_works(self) -> None:
