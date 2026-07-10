@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 from nest_core.layers.trust import Trust
 from nest_core.plugins import PluginRegistry
@@ -421,9 +421,9 @@ def test_property_copied_delegation_always_denied(
         offer_env=True,
     )
     # Only a *foreign* key exercises the substitution; identical keys are the
-    # honest case and out of scope for this property.
-    if thief.card.public_key == honest.card.public_key:
-        return
+    # honest case and out of scope for this property. Use ``assume`` so the skip
+    # is explicit to Hypothesis rather than a silent early pass.
+    assume(thief.card.public_key != honest.card.public_key)
     verdict = _handshake(verifier, thief, f"thief-{victim_id}", kind="negative")
     assert verdict.decision == "DENY"
     assert not verdict.friend_or_foe.ok
@@ -483,6 +483,27 @@ def test_property_report_order_invariant(seed: int) -> None:
     rep = _run(verifier.score(AgentId("victim")))
     assert rep.sample_count == len(honest_ids)
     assert rep.score == 1.0
+
+
+def test_operator_fingerprint_collision_rejected() -> None:
+    """Defence in depth: an operator key that fingerprints to a trusted id but is not the
+    trusted key (a 64-bit fingerprint second-preimage / substituted operator) is denied at
+    who-you-work-for, even though its delegation is internally consistent.
+
+    Example::
+
+        test_operator_fingerprint_collision_rejected()
+    """
+    verifier, honest = _verifier(), _honest("honest-0")
+    verifier.trust_operator(honest.operator_id, honest.operator_public_key)
+    assert _handshake(verifier, honest, "s-ok").decision == "ALLOW"
+    # Simulate a fingerprint collision: the roster maps honest's operator id to a DIFFERENT
+    # public key. The card still passes _verify_card (its op_id == fingerprint of its own
+    # operator key), but the full trusted key no longer matches.
+    verifier.trust_operator(honest.operator_id, b"\x00" * 32)
+    verdict = _handshake(verifier, honest, "s-collide")
+    assert verdict.decision == "DENY"
+    assert not verdict.who_you_work_for.ok
 
 
 # ---------------------------------------------------------------------------

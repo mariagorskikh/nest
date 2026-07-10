@@ -875,6 +875,16 @@ class AttestedPeeringTrust:
                 work_ok, work_detail = False, "no operator delegation (self-asserted principal)"
             elif op_id not in policy.trusted_operators:
                 work_ok, work_detail = False, f"operator {op_id} is not on your trusted roster"
+            elif policy.trusted_operators[op_id] != peer_facts.operator_public_key:
+                # Defence in depth: the roster is keyed by the 64-bit operator fingerprint, so
+                # match the FULL trusted public key too. Without this a fingerprint second-
+                # preimage could present a different operator key under a trusted id. Combined
+                # with the key-bound delegation, the operator identity is now pinned end-to-end.
+                work_ok, work_detail = (
+                    False,
+                    f"operator {op_id} fingerprint is on the roster but its public key "
+                    "does not match the trusted key (substituted operator / fingerprint collision)",
+                )
             else:
                 work_ok, work_detail = True, f"operator {op_id} delegated and trusted"
         else:
