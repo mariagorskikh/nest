@@ -5168,12 +5168,13 @@ def _extract_delegation_audits(events: list[dict[str, Any]]) -> dict[str, bool]:
     for ev in events:
         if ev.get("kind") != "broadcast":
             continue
-        try:
-            msg = json.loads(_message_body(ev))
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(msg, dict) and msg.get("kind") == "delegation_audit":
-            audits[str(msg["attack"])] = bool(msg["blocked"])
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            msg_raw: object = json.loads(_message_body(ev))
+            if not isinstance(msg_raw, dict):
+                continue
+            msg = cast("dict[str, Any]", msg_raw)
+            if msg.get("kind") == "delegation_audit":
+                audits[str(msg["attack"])] = bool(msg["blocked"])
     return audits
 
 
@@ -5240,9 +5241,7 @@ def validate_chained_capability_stale_ancestor_blocked(
         ValidationResult(
             "chained_capability_stale_ancestor_blocked",
             blocked,
-            "stale ancestor use was rejected"
-            if blocked
-            else "stale ancestor use was NOT rejected",
+            "stale ancestor use was rejected" if blocked else "stale ancestor use was NOT rejected",
         )
     ]
 
@@ -5276,9 +5275,7 @@ def validate_chained_capability_audience_confusion_blocked(
         ValidationResult(
             "chained_capability_audience_confusion_blocked",
             blocked,
-            "audience confusion was rejected"
-            if blocked
-            else "audience confusion was NOT rejected",
+            "audience confusion was rejected" if blocked else "audience confusion was NOT rejected",
         )
     ]
 

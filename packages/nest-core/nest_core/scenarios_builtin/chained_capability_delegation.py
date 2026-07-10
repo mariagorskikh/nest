@@ -187,9 +187,7 @@ class CoordinatorAgent(StateMachineAgent):
         except AudienceMismatchError:
             blocked = True
         await ctx.broadcast(
-            _emit(
-                {"kind": "delegation_audit", "attack": "audience_confusion", "blocked": blocked}
-            )
+            _emit({"kind": "delegation_audit", "attack": "audience_confusion", "blocked": blocked})
         )
 
     async def on_message(self, ctx: AgentContext, sender: AgentId, payload: bytes) -> None:
