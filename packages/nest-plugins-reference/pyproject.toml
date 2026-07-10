@@ -45,6 +45,7 @@ trust_gated = "nest_plugins_reference.privacy.trust_gated:TrustGatedPrivacy"
 
 [project.entry-points."nest.plugins.datafacts"]
 cid_facts = "nest_plugins_reference.datafacts.cid_facts:CidFacts"
+sic_facts = "nest_plugins_reference.datafacts.sic_facts:SicFacts"
 
 [project.entry-points."nest.plugins.failure_detector"]
 heartbeat = "nest_plugins_reference.failure_detection.heartbeat:HeartbeatFailureDetector"

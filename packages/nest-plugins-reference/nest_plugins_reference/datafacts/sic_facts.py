@@ -36,6 +36,20 @@ publish time, every publish issues a :class:`FreshnessProof` signed by the
 publisher's identity-layer key over a logical tick (never wall-clock), and
 ACLs key off the content address.
 
+Two scope decisions, stated plainly:
+
+* **Content-less datasets fall back to byte identity.** Structural invariance
+  is guaranteed only when ``metadata["content"]`` is present. Without it, the
+  address binds ``checksum``/``description`` so distinct datasets keep
+  distinct identities -- but that path is byte-sensitive by construction (see
+  :func:`content_address`).
+* **Ownership is part of the address.** A launderer who re-encodes a dataset
+  and reassigns ``owner`` to themselves does mint a fresh URL. This is
+  deliberate: the address answers "is this the same content, from the same
+  owner", and an ownership change is an attributable signed act, not a silent
+  re-serialization. Addressing content independent of owner would make the
+  URL a pure content hash and drop the ACL binding -- a different plugin.
+
 Example::
 
     identity = DidKeyIdentity(AgentId("supplier-0"), seed=b"sim-seed")
@@ -155,6 +169,11 @@ def _canon_number(value: float) -> bytes:
     which to emit, so the canonical form must not. Non-finite floats have no
     canonical form and are rejected.
 
+    Invariance between int and int-valued float holds only up to
+    ``_INT_SAFE_FLOAT`` (2**53). Beyond it, ``float(int(x))`` is lossy, so
+    ``{"v": 2**53 + 2}`` and its float re-encoding digest differently.
+    Injectivity is preserved in preference to invariance at that boundary.
+
     Example::
 
         assert _canon_number(2.0) == _canon_number(2)
@@ -257,14 +276,36 @@ def content_address(dataset: DatasetMetadata) -> str:
     they change when identical content is re-serialized, which is exactly the
     laundering channel this plugin closes.
 
+    **Checksum fallback.** When ``metadata["content"]`` is absent the dataset
+    has no structural identity, so the address binds ``checksum`` and
+    ``description`` instead (drop-in compatible with content-less publishers
+    such as ``provenance_supply_chain``). Serialization invariance does NOT
+    hold on that path -- a re-export gets a new checksum, hence a new address,
+    exactly as under ``cid_facts``.
+
     Example::
 
         addr = content_address(dataset)
     """
     content: object = dataset.metadata.get("content")
+    if content is not None:
+        content_binding: object = structural_digest(content)
+    else:
+        # Checksum fallback: a dataset with no structural content has no
+        # structural identity, so bind the byte-level fields instead --
+        # otherwise every content-less dataset from one owner/tier collapses
+        # onto a single URL (the collision the review surfaced). Invariance
+        # does NOT hold on this path: ``checksum`` and ``description`` are
+        # encoding artifacts, so a re-export mints a new address, exactly as
+        # ``cid_facts`` behaves. Structural invariance is guaranteed only for
+        # content-bearing datasets.
+        content_binding = {
+            "fallback_checksum": dataset.checksum,
+            "fallback_description": dataset.description,
+        }
     structure = {
         "access_tier": dataset.access_tier,
-        "content": structural_digest(content) if content is not None else None,
+        "content": content_binding,
         "owner": str(dataset.owner),
         "parents": sorted(str(p) for p in parents_of(dataset)),
         "schema_version": dataset.schema_version,
@@ -306,6 +347,23 @@ class SicFacts:
         self._clock = clock if clock is not None else SharedClock()
         self._freshness_window = freshness_window
 
+    @property
+    def clock(self) -> SharedClock:
+        """This instance's logical clock, so callers can share it with peers.
+
+        Scenario factories that don't import ``sic_facts`` directly wire up a
+        shared tick source via ``getattr(handle, "clock", None)`` -- duck
+        typing, mirroring ``cid_facts``. Without this property every per-agent
+        handle silently builds its own :class:`SharedClock` and cross-agent
+        freshness windows are meaningless.
+
+        Example::
+
+            facts_b = SicFacts(identity_b, clock=facts_a.clock)
+            assert facts_a.clock is facts_b.clock
+        """
+        return self._clock
+
     async def publish(self, dataset: DatasetMetadata) -> DataFactsUrl:
         """Publish dataset metadata; return its serialization-invariant URL.
 
@@ -330,9 +388,17 @@ class SicFacts:
         if url not in self._datasets:
             self._datasets[url] = dataset
 
+        # A republish only refreshes the stored proof when the publisher IS the
+        # kept record's owner. Structural addressing makes every re-encoding
+        # land on the same URL, so without this guard any peer could clobber
+        # the owner's proof (griefing their freshness) just by republishing.
+        # The signer is read off the signature itself -- the Identity protocol
+        # exposes no "who am I", but every signature names its signer.
         tick = self._clock.advance()
         signature = self._identity.sign(_freshness_payload(url, tick))
-        self._proofs[url] = FreshnessProof(url=url, tick=tick, signature=signature)
+        kept = self._datasets[url]
+        if self._proofs.get(url) is None or signature.signer == kept.owner:
+            self._proofs[url] = FreshnessProof(url=url, tick=tick, signature=signature)
         return url
 
     async def fetch(self, url: DataFactsUrl) -> DatasetMetadata:

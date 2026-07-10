@@ -134,9 +134,11 @@ async def test_freshness_signed_over_logical_ticks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_forged_freshness_by_outsider_fails() -> None:
-    """An outsider republishing identical content cannot mint a proof that
-    verifies as the owner's -- the signer must equal the declared owner."""
+async def test_forged_freshness_by_outsider_cannot_clobber() -> None:
+    """An outsider republishing identical content cannot replace the owner's
+    freshness proof -- publish keeps the stored proof unless the new signer
+    matches the kept record's owner, so Mallory's republish is a no-op on
+    freshness and the owner's dataset stays fresh."""
     clock = SharedClock()
     store: dict[DataFactsUrl, DatasetMetadata] = {}
     proofs: dict[DataFactsUrl, FreshnessProof] = {}
@@ -145,8 +147,11 @@ async def test_forged_freshness_by_outsider_fails() -> None:
         DidKeyIdentity(OUTSIDER, seed=b"mallory"), datasets=store, proofs=proofs, clock=clock
     )
     url = await owner_facts.publish(_meta(CONTENT_A))
-    await mallory_facts.publish(_meta(CONTENT_B))  # overwrites proof with Mallory's sig
-    assert await owner_facts.verify_freshness(url) is False
+    owner_proof = proofs[url]
+    await mallory_facts.publish(_meta(CONTENT_B))  # same URL; must NOT clobber the proof
+    assert proofs[url] == owner_proof
+    assert proofs[url].signature.signer == OWNER
+    assert await owner_facts.verify_freshness(url) is True
 
 
 @pytest.mark.asyncio
@@ -202,3 +207,140 @@ async def test_provenance_fork_via_alias_neutralized() -> None:
     child = await facts.publish(_meta({"v": 10}, name="child", parents=[str(parent_v2)]))
     assert parent_v1 == parent_v2
     assert facts.ancestors(child) == {parent_v1}
+
+
+# ---------------------------------------------------------------------------
+# 4. Checksum fallback for content-less datasets
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_content_less_datasets_do_not_collide() -> None:
+    """Regression (review point 1): two content-less datasets from one owner
+    must keep distinct identities via the checksum/description fallback."""
+    facts = SicFacts(_identity())
+    a = await facts.publish(
+        DatasetMetadata(name="raw-a", owner=OWNER, checksum="sha256:aaaa", description="lot A")
+    )
+    b = await facts.publish(
+        DatasetMetadata(name="raw-b", owner=OWNER, checksum="sha256:bbbb", description="lot B")
+    )
+    assert a != b
+
+
+@pytest.mark.asyncio
+async def test_content_less_substitution_still_detected() -> None:
+    """The provenance_supply_chain attack shape: a forged republish with a
+    different description (same owner, no content) must mint a different URL."""
+    facts = SicFacts(_identity())
+    original = await facts.publish(
+        DatasetMetadata(name="field-x", owner=OWNER, description="genuine readings")
+    )
+    forged = await facts.publish(
+        DatasetMetadata(name="field-x", owner=OWNER, description="tampered-by-attacker")
+    )
+    assert original != forged
+
+
+@pytest.mark.asyncio
+async def test_content_less_fallback_is_byte_sensitive() -> None:
+    """Documented limitation: invariance does NOT hold on the fallback path.
+    A re-export (new checksum, same meaning) mints a new address -- exactly
+    the cid_facts behavior, confined to datasets without structural content."""
+    facts = SicFacts(_identity())
+    a = await facts.publish(DatasetMetadata(name="x", owner=OWNER, checksum="sha256:v1"))
+    b = await facts.publish(DatasetMetadata(name="x", owner=OWNER, checksum="sha256:v2"))
+    assert a != b
+
+
+# ---------------------------------------------------------------------------
+# 5. Property-based canonicalization tests (hypothesis)
+# ---------------------------------------------------------------------------
+
+from hypothesis import given, settings  # noqa: E402
+from hypothesis import strategies as st  # noqa: E402
+from nest_plugins_reference.datafacts.sic_facts import _canon  # noqa: E402
+
+# ASCII-only keys: canonically-equivalent unicode keys (NFC vs NFD of the same
+# text) inside ONE dict would merge under re-encoding and fail spuriously.
+_ascii_key = st.text(
+    alphabet=st.characters(min_codepoint=33, max_codepoint=126), min_size=1, max_size=8
+)
+
+json_value = st.recursive(
+    st.none()
+    | st.booleans()
+    | st.integers(min_value=-(2**53), max_value=2**53)
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text(max_size=12),
+    lambda children: st.lists(children, max_size=4)
+    | st.dictionaries(_ascii_key, children, max_size=4),
+    max_leaves=12,
+)
+
+
+def _reencode(value: object) -> object:
+    """Preserve structure, change bytes: key order, int->float, NFC->NFD."""
+    import unicodedata
+
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int) and abs(value) <= 2**53:
+        return float(value)
+    if isinstance(value, str):
+        return unicodedata.normalize("NFD", value)
+    if isinstance(value, list):
+        return [_reencode(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _reencode(v) for k, v in reversed(list(value.items()))}
+    return value
+
+
+_SENTINEL = "\x00mutated\x00"
+
+
+def _mutate(value: object) -> object:
+    """Change exactly one leaf to a canonically-distinct value."""
+    if isinstance(value, dict):
+        if value:
+            k = next(iter(value))
+            return {**value, k: _mutate(value[k])}
+        return {_SENTINEL: 1}
+    if isinstance(value, list):
+        if value:
+            return [_mutate(value[0]), *value[1:]]
+        return [_SENTINEL]
+    return _SENTINEL if value != _SENTINEL else _SENTINEL + "x"
+
+
+@settings(max_examples=200)
+@given(json_value)
+def test_property_digest_invariant_under_reencoding(value: object) -> None:
+    """structural_digest(v) == structural_digest(reencode(v)) for arbitrary
+    JSON-ish structures under key-shuffle, int->float, and NFC->NFD."""
+    assert structural_digest(value) == structural_digest(_reencode(value))
+
+
+@settings(max_examples=200)
+@given(json_value)
+def test_property_digest_sensitive_to_mutation(value: object) -> None:
+    """Changing one leaf must change the digest (no over-normalization)."""
+    assert structural_digest(value) != structural_digest(_mutate(value))
+
+
+@settings(max_examples=200)
+@given(json_value, json_value)
+def test_property_digest_collision_free_modulo_canon(a: object, b: object) -> None:
+    """Digests agree exactly when canonical encodings agree (injectivity
+    spot-check: the digest adds no collisions beyond canonical equality)."""
+    assert (structural_digest(a) == structural_digest(b)) == (_canon(a) == _canon(b))
+
+
+def test_int_float_invariance_stops_at_2_53() -> None:
+    """The documented boundary: beyond _INT_SAFE_FLOAT, float(int(x)) is lossy,
+    so the int and its float re-encoding digest DIFFERENTLY (injectivity is
+    preserved in preference to invariance)."""
+    big = 2**53 + 2
+    assert structural_digest({"v": big}) != structural_digest({"v": float(big)})
+    safe = 2**53
+    assert structural_digest({"v": safe}) == structural_digest({"v": float(safe)})

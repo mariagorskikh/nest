@@ -4841,11 +4841,47 @@ def validate_sic_phantom_parent_rejected(
     return [ValidationResult("sic_phantom_parent_rejected", True, "unpublished parent rejected")]
 
 
+def validate_sic_freshness_signed(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An owner-signed freshness proof over the shared logical clock verifies.
+
+    The audit agent publishes a dataset it owns and immediately verifies it:
+    a valid owner signature at the current shared tick must read fresh. A
+    ``freshness_stale`` row means the proof or the shared clock wiring is
+    broken (e.g. per-agent handles each built their own clock).
+
+    Example::
+
+        results = validate_sic_freshness_signed(events)
+    """
+    stale = _sic_field_msg(events, "freshness_stale|")
+    if stale:
+        return [
+            ValidationResult(
+                "sic_freshness_signed",
+                False,
+                f"owner-signed probe read stale: {stale[0][1]}",
+            )
+        ]
+    ok = _sic_field_msg(events, "freshness_ok|")
+    if not ok:
+        return [ValidationResult("sic_freshness_signed", False, "no freshness probe recorded")]
+    return [
+        ValidationResult(
+            "sic_freshness_signed",
+            True,
+            f"owner-signed freshness verified for {ok[0][1]}",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
     "serialization_invariance": [
         validate_sic_launder_neutralized,
         validate_sic_tamper_still_detected,
         validate_sic_phantom_parent_rejected,
+        validate_sic_freshness_signed,
     ],
     "sybil_bond": [
         validate_sybil_bond_no_free_trust,

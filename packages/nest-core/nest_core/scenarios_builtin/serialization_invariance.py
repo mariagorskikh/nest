@@ -225,6 +225,22 @@ class AuditAgent(StateMachineAgent):
         except Exception:  # noqa: BLE001 - plugin-specific error types
             await ctx.send(self._id, b"phantom_rejected|orphan")
 
+        # Freshness probe: publish a dataset this agent owns, then verify it.
+        # This exercises the owner-signed proof over the SHARED logical clock
+        # (per-agent handles must share one tick source via the plugin's
+        # ``clock`` property) -- a valid proof at the current tick reads fresh.
+        probe_url = await facts.publish(
+            DatasetMetadata(
+                name="freshness_probe",
+                owner=self._id,
+                metadata={"content": {"probe": str(self._id)}},
+            )
+        )
+        if await facts.verify_freshness(probe_url):
+            await ctx.send(self._id, f"freshness_ok|{probe_url}".encode())
+        else:
+            await ctx.send(self._id, f"freshness_stale|{probe_url}".encode())
+
 
 def serialization_invariance_factory(
     config: ScenarioConfig,
