@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from nest_core.validators import (
     VALIDATORS,
     ValidationResult,
@@ -2023,17 +2024,24 @@ class TestValidatorRegistry:
 
 
 class TestOrSetValidator:
-    def test_validator_fails_against_blackboard(self) -> None:
+    @pytest.mark.asyncio
+    async def test_validator_fails_against_blackboard(self) -> None:
         """The convergence validator must FAIL against the default blackboard
         memory plugin, which does not converge under concurrent writes.
         """
-        from nest_core.validators import validate_or_set_convergence
+        from nest_core.validators import validate_crdt_convergence
+        from nest_plugins_reference.memory.blackboard import Blackboard
 
-        # Generate a trace using blackboard memory with concurrent writes
-        events = [
-            {"agent": "a", "msg": 'final: {"value": "x"}'},
-            {"agent": "b", "msg": 'final: {"value": "y"}'},
+        # Drive actual Blackboard through convergence validator with an add/remove interleaving
+        writes = [
+            (0, b"add:x"),
+            (1, b"remove:x"),
         ]
-        results = validate_or_set_convergence(events)
-        # At least one result should fail (divergence detected)
-        assert any(not r.passed for r in results), "Validator should catch blackboard divergence"
+        delivery_orders = [
+            [0, 1],
+            [1, 0],
+        ]
+        results = await validate_crdt_convergence(
+            lambda _node: Blackboard(), writes, delivery_orders
+        )
+        assert not any(r.passed for r in results), "Validator should catch blackboard divergence"

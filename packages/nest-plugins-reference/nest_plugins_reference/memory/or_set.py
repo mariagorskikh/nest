@@ -191,17 +191,20 @@ class OrSetMemory:
             return None
         elements: dict[str, str] = state["elements"]
         tombstones: set[str] = set(state.get("tombstones", []))
+
+        # Filter active elements before sorting to save CPU
+        active_elements = [(k, v) for k, v in elements.items() if k not in tombstones]
+        if not active_elements:
+            return None
+
         # Sort primarily by tick (descending), then by node_id (descending)
-        # to avoid priority inversion.
-        sorted_elements = sorted(
-            elements.items(),
-            key=lambda item: self._parse_tag(item[0]),
-            reverse=True,
-        )
-        for tag, b64payload in sorted_elements:
-            if tag not in tombstones:
-                return self._b64dec(b64payload)
-        return None
+        # We pre-parse tags to avoid running string operations on every comparison.
+        parsed_elements = [
+            (self._parse_tag(tag), tag, b64payload) for tag, b64payload in active_elements
+        ]
+        parsed_elements.sort(key=lambda item: item[0], reverse=True)
+
+        return self._b64dec(parsed_elements[0][2])
 
     async def write(self, key: str, value: bytes) -> None:
         """Add a value to the OR-Set (or re-add if previously removed).
@@ -238,11 +241,13 @@ class OrSetMemory:
             return False
         elements: dict[str, str] = state["elements"]
         tombstones: list[str] = state["tombstones"]
+        tombstones_set: set[str] = set(tombstones)
         removed = False
         target_b64 = self._b64(value)
-        for tag, b64payload in list(elements.items()):
-            if b64payload == target_b64 and tag not in tombstones:
+        for tag, b64payload in elements.items():
+            if b64payload == target_b64 and tag not in tombstones_set:
                 tombstones.append(tag)
+                tombstones_set.add(tag)
                 removed = True
         if removed:
             # Notify with the new winning raw payload (not the CRDT envelope).
@@ -346,12 +351,20 @@ class OrSetMemory:
         ):
             return False
 
+        if not all(isinstance(v, str) for v in (elements or {}).values()):  # type: ignore[reportUnknownVariableType]
+            return False
+
+        if not all(isinstance(t, str) for t in (tombstones or [])):  # type: ignore[reportUnknownVariableType]
+            return False
+
+        remote_elements = cast("dict[str, str]", elements)
+        remote_ts = cast("list[str]", tombstones)
+
         state = self._get_or_create(key)
         changed = False
 
         # Union elements: only add tags not already known locally.
         local_elements: dict[str, str] = state["elements"]
-        remote_elements = cast("dict[str, str]", elements)
         for tag, b64payload in remote_elements.items():
             if tag not in local_elements:
                 local_elements[tag] = b64payload
@@ -359,7 +372,6 @@ class OrSetMemory:
 
         # Union tombstones: only add tombstones not already known locally.
         local_ts: list[str] = state["tombstones"]
-        remote_ts = cast("list[str]", tombstones)
         local_ts_set: set[str] = set(local_ts)
         for t in remote_ts:
             if t not in local_ts_set:
@@ -367,23 +379,20 @@ class OrSetMemory:
                 local_ts_set.add(t)
                 changed = True
 
-        # Update local _tick based on any merged tags matching our _node_id to prevent collisions
-        local_prefix = f"{self._node_id}:"
+        # Update local _tick based on all merged tags to preserve Lamport causal order.
         max_seen_tick = -1
         for tag in remote_elements:
-            if tag.startswith(local_prefix):
-                try:
-                    tick_str = tag.rsplit(":", 1)[1]
-                    max_seen_tick = max(max_seen_tick, int(tick_str))
-                except (ValueError, IndexError):
-                    pass
+            try:
+                tick_str = tag.rsplit(":", 1)[1]
+                max_seen_tick = max(max_seen_tick, int(tick_str))
+            except (ValueError, IndexError):
+                pass
         for tag in remote_ts:
-            if tag.startswith(local_prefix):
-                try:
-                    tick_str = tag.rsplit(":", 1)[1]
-                    max_seen_tick = max(max_seen_tick, int(tick_str))
-                except (ValueError, IndexError):
-                    pass
+            try:
+                tick_str = tag.rsplit(":", 1)[1]
+                max_seen_tick = max(max_seen_tick, int(tick_str))
+            except (ValueError, IndexError):
+                pass
         if max_seen_tick >= self._tick:
             self._tick = max_seen_tick + 1
 
@@ -392,7 +401,7 @@ class OrSetMemory:
             new_val = await self.read(key)
             await self._notify(key, new_val if new_val is not None else b"")
 
-        return True
+        return changed
 
     # ------------------------------------------------------------------
     # Bulk helpers used by scenarios/tests

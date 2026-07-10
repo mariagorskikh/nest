@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import random
+import tempfile
+from pathlib import Path
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from nest_core.validators import validate_crdt_convergence
+from nest_core.runner import ScenarioRunner
+from nest_core.scenario import ScenarioConfig
+from nest_core.validators import validate_crdt_convergence, validate_trace
 from nest_plugins_reference.memory.or_set import OrSetMemory
 
 
@@ -368,3 +372,77 @@ async def test_merge_converges_for_any_operation_sequence(values: list[bytes], s
         await a.merge("k", b_export2)  # quiesce
 
     assert a.export("k") == b.export("k"), "OR-Set failed to converge"
+
+
+@pytest.mark.asyncio
+async def test_read_your_writes_after_merge() -> None:
+    """merge() must advance local tick past ALL incoming tags (Lamport's rule).
+    Otherwise, a local write following a merge might be assigned a stale tick,
+    causing it to lose read() resolution to older remote values.
+    """
+    a = OrSetMemory("a")
+    for _ in range(50):
+        await a.write("k", b"old")  # tags up to a:49
+    b = OrSetMemory("b")
+    a_export = a.export("k")
+    assert a_export is not None
+    await b.merge("k", a_export)  # b._tick must advance to at least 50
+    await b.write("k", b"new")  # tag b:50
+    assert await b.read("k") == b"new"  # must win against a:49
+
+
+@pytest.mark.asyncio
+async def test_add_wins_concurrent() -> None:
+    """Add-wins: if replica A removes x while replica B concurrently re-adds it,
+    post-merge both read it as present because B's fresh tag is not tombstoned.
+    """
+    a = OrSetMemory("a")
+    b = OrSetMemory("b")
+
+    # Common base state
+    await a.write("k", b"x")
+    base_state = a.export("k")
+    assert base_state is not None
+    await a.merge("k", base_state)
+    await b.merge("k", base_state)
+
+    # A removes x
+    await a.remove("k", b"x")
+    assert await a.read("k") is None
+
+    # B concurrently re-adds x
+    await b.write("k", b"x")
+    assert await b.read("k") == b"x"
+
+    # Merge and verify add-wins
+    a_state = a.export("k")
+    b_state = b.export("k")
+    assert a_state is not None
+    assert b_state is not None
+
+    await a.merge("k", b_state)
+    await b.merge("k", a_state)
+
+    # Both must resolve to present
+    assert await a.read("k") == b"x"
+    assert await b.read("k") == b"x"
+
+
+class TestScenario:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("seed", [42, 7, 1337])
+    async def test_scenario_converges_and_is_deterministic(self, seed: int) -> None:
+        traces: list[bytes] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            for run in range(2):
+                config = ScenarioConfig.from_yaml("scenarios/memory_or_set.yaml")
+                config.seed = seed
+                out = Path(tmp) / f"run-{run}.jsonl"
+                config.output.trace = str(out)
+                trace_path = await ScenarioRunner(config).run()
+                traces.append(trace_path.read_bytes())
+                if run == 0:
+                    results = validate_trace(trace_path, "memory_or_set_writers")
+                    assert results, "validator produced no results"
+                    assert all(r.passed for r in results), [r.detail for r in results]
+        assert traces[0] == traces[1], "trace not byte-identical under same seed"

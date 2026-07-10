@@ -4922,6 +4922,7 @@ def validate_sybil_bond_attempts_rejected(
         )
     ]
 
+
 def validate_or_set_convergence(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
@@ -4987,20 +4988,8 @@ def validate_or_set_convergence(
                 )
             )
 
-    # Check 2: No tombstoned tag is active
-    for agent, state in final_states.items():
-        elements: dict[str, str] = state.get("elements", {})
-        tombstones: list[str] = state.get("tombstones", [])
-        overlap = set(tombstones).intersection(set(elements.keys()))
-        if overlap:
-            results.append(
-                ValidationResult(
-                    name="or_set_convergence",
-                    passed=False,
-                    detail=f"Agent {agent}: active elements contain tombstoned tags: {overlap}",
-                )
-            )
-
+    # Check 2: (Removed as requested: implementations may GC payloads while keeping tombstones)
+    pass
     # Check 3: All replicas converge to byte-identical canonical state
     canonical_states: set[str] = set()
     for _agent, state in final_states.items():

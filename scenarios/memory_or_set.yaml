@@ -7,9 +7,7 @@ seed: 42
 agents:
   count: 8
   brain: state-machine
-roles:
-  - name: writer
-    count: 8
+
 layers:
   transport: in_memory
   comms: nest_native

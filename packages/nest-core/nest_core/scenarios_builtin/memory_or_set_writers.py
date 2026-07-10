@@ -38,7 +38,6 @@ class OrSetWriterAgent(StateMachineAgent):
         self._rng = random.Random(seed)
 
     async def on_start(self, ctx: AgentContext) -> None:
-        ctx.plugins["memory"]
 
         # Schedule a burst of ops at T=0.1 to T=1.0 to simulate concurrent writes
         for i in range(10):
