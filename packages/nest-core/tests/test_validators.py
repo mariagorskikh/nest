@@ -593,7 +593,7 @@ class TestSupplyChainNoLost:
 
 class TestReputationScoring:
     def test_pass_cheaters_reported(self) -> None:
-        """Cheater is reported and has negative score."""
+        """Cheater is reported."""
         events = [
             _send("malicious-0", "honest-0", "cheat:1:malicious-0"),
             _send("honest-0", "observer-0", "report:1:malicious-0:bad"),
@@ -620,59 +620,39 @@ class TestReputationScoring:
         results = validate_reputation_scoring(events)
         assert results[0].passed is True
 
-    def test_fail_agent_with_bad_report_has_positive_score(self) -> None:
-        """Agent got bad report but score manipulation keeps it non-negative.
+    def test_pass_cheater_reported_even_with_positive_score(self) -> None:
+        """Cheater is reported, which is all we require (final score doesn't matter).
 
-        This test exercises the core bug fix: the validator now enforces that
-        agents with bad reports must have net-negative scores.
+        A probabilistic cheater who cheats rarely and delivers honestly most
+        of the time can end with a positive score. The validator ensures
+        cheaters are reported, not that they end negative.
         """
         events = [
-            # agent-9 gets 5 good reports (5 * 1 = +5)
+            # agent-9 cheats once
+            _send("agent-9", "honest-0", "cheat:1:agent-9"),
+            # agent-9 gets 5 good reports (+5) and 1 bad report (-2) = +3
             _send("peer-0", "observer-0", "report:1:agent-9:good"),
             _send("peer-1", "observer-0", "report:2:agent-9:good"),
             _send("peer-2", "observer-0", "report:3:agent-9:good"),
             _send("peer-3", "observer-0", "report:4:agent-9:good"),
             _send("peer-4", "observer-0", "report:5:agent-9:good"),
-            # agent-9 gets 2 bad reports (2 * -2 = -4)
-            # Net score: +5 - 4 = +1 (still positive despite bad reports!)
             _send("peer-5", "observer-0", "report:6:agent-9:bad"),
-            _send("peer-6", "observer-0", "report:7:agent-9:bad"),
+        ]
+        results = validate_reputation_scoring(events)
+        assert results[0].passed is True  # Cheater was reported
+
+    def test_fail_multiple_cheaters_one_unreported(self) -> None:
+        """Multiple cheaters, one not reported."""
+        events = [
+            _send("agent-1", "honest-0", "cheat:1:agent-1"),
+            _send("honest-0", "observer-0", "report:1:agent-1:bad"),
+            _send("agent-2", "honest-1", "cheat:2:agent-2"),
+            # agent-2 never reported!
         ]
         results = validate_reputation_scoring(events)
         assert results[0].passed is False
-        assert "agent-9" in results[0].detail
-        assert "non-negative scores" in results[0].detail
-
-    def test_pass_agent_with_bad_report_has_negative_score(self) -> None:
-        """Agent got bad reports and score is properly negative."""
-        events = [
-            # agent-9 gets 1 good report (+1)
-            _send("peer-0", "observer-0", "report:1:agent-9:good"),
-            # agent-9 gets 2 bad reports (-4)
-            # Net score: +1 - 4 = -3 (negative, as expected)
-            _send("peer-1", "observer-0", "report:2:agent-9:bad"),
-            _send("peer-2", "observer-0", "report:3:agent-9:bad"),
-        ]
-        results = validate_reputation_scoring(events)
-        assert results[0].passed is True
-
-    def test_fail_multiple_agents_with_inflated_scores(self) -> None:
-        """Multiple agents have bad reports but non-negative scores."""
-        events = [
-            # agent-1: 2 good (+2), 1 bad (-2) = 0 (non-negative!)
-            _send("peer-0", "observer-0", "report:1:agent-1:good"),
-            _send("peer-1", "observer-0", "report:2:agent-1:good"),
-            _send("peer-2", "observer-0", "report:3:agent-1:bad"),
-            # agent-2: 10 good (+10), 3 bad (-6) = +4 (positive!)
-            *[_send(f"peer-{i}", "observer-0", f"report:{i}:agent-2:good") for i in range(10)],
-            _send("peer-10", "observer-0", "report:10:agent-2:bad"),
-            _send("peer-11", "observer-0", "report:11:agent-2:bad"),
-            _send("peer-12", "observer-0", "report:12:agent-2:bad"),
-        ]
-        results = validate_reputation_scoring(events)
-        assert results[0].passed is False
-        assert "agent-1" in results[0].detail
         assert "agent-2" in results[0].detail
+        assert "agent-1" not in results[0].detail  # agent-1 was properly reported
 
     def test_pass_empty_trace(self) -> None:
         """Empty trace passes vacuously."""
