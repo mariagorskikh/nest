@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# Sealed-bid auction that RESOLVES the `sealedbox` privacy layer.
+#
+# Identical to the `auction` scenario except the privacy layer is `sealedbox`
+# instead of `noop`. IMPORTANT — what this run does and does not prove: the
+# Tier-1 auction task routes payloads through the transport, not the privacy
+# layer, so bids appear in cleartext in the trace here, exactly as in the `noop`
+# variant (and exactly as in the sibling `sealed_bid_with_privacy.yaml`, which
+# wires `hybrid_x25519`). What this file demonstrates end-to-end is that the
+# `sealedbox` plugin is discoverable, resolves to `SealedBoxPrivacy`, and that
+# the run is byte-deterministic under replay (Tier-1 reproducibility); see
+# `tests/test_sealedbox_scenario.py`.
+#
+# The actual sealed-bid crypto — hybrid X25519 + ChaCha20-Poly1305, SIV-style
+# deterministic derivation, plaintext-never-on-the-wire, nonce-misuse resistance
+# across a reconstructed instance, selective disclosure, and revocation — is
+# exercised directly in `tests/test_sealedbox.py`, not in this simulator run.
+# This file is the `sealedbox` variant and does not modify the hybrid one.
+name: sealed_bid_sealedbox
+description: "1 auctioneer and 7 bidders; resolves the sealedbox privacy layer (crypto exercised in tests/test_sealedbox.py)."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 8
+  brain: state-machine
+  roles:
+    - name: auctioneer
+      count: 1
+    - name: bidder
+      count: 7
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: sealedbox
+  datafacts: datafacts_v1
+
+task:
+  type: auction
+  config:
+    rounds: 3
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/sealed_bid_sealedbox.jsonl
