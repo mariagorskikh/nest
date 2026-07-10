@@ -7,6 +7,7 @@ import pytest
 from nest_core.types import (
     AgentCard,
     AgentId,
+    DataFactsUrl,
     DatasetMetadata,
     Evidence,
     Message,
@@ -504,6 +505,14 @@ class TestDataFactsV1:
         assert grant.tier == "read"
 
     @pytest.mark.asyncio
+    async def test_request_access_rejects_unknown_dataset(self) -> None:
+        from nest_plugins_reference.datafacts.datafacts_v1 import DataFactsV1
+
+        df = DataFactsV1()
+        with pytest.raises(KeyError, match="Dataset not found"):
+            await df.request_access(DataFactsUrl("df://missing"), AgentId("a2"))
+
+    @pytest.mark.asyncio
     async def test_verify_freshness(self) -> None:
         from nest_plugins_reference.datafacts.datafacts_v1 import DataFactsV1
 
@@ -513,8 +522,25 @@ class TestDataFactsV1:
         assert await df.verify_freshness(url) is True
 
     @pytest.mark.asyncio
+    async def test_verify_freshness_uses_injected_clock(self) -> None:
+        from nest_plugins_reference.datafacts.datafacts_v1 import DataFactsV1
+
+        now = 100.0
+
+        def clock() -> float:
+            return now
+
+        df = DataFactsV1(clock=clock, freshness_window_seconds=10.0)
+        url = await df.publish(DatasetMetadata(name="timed", owner=AgentId("a1")))
+
+        now = 109.0
+        assert await df.verify_freshness(url) is True
+
+        now = 111.0
+        assert await df.verify_freshness(url) is False
+
+    @pytest.mark.asyncio
     async def test_fetch_missing(self) -> None:
-        from nest_core.types import DataFactsUrl
         from nest_plugins_reference.datafacts.datafacts_v1 import DataFactsV1
 
         df = DataFactsV1()
