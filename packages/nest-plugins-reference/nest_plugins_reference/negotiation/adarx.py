@@ -4,7 +4,8 @@
 Unlike the reference `alternating_offers` plugin (a generic Rubinstein
 patience-discount model with no domain knowledge), this plugin ports the
 real, independently-tested negotiation logic from ADAR-X
-(https://github.com/<your-repo>/adar-x), an autonomous procurement agent.
+(https://github.com/merry-tresata/nanda-adarx-procurement), an autonomous
+procurement agent.
 The underlying math -- volume-tiered discounts and strategy-adjusted
 terms -- has been exercised against dozens of real transactions in that
 project before being adapted here.
@@ -36,8 +37,6 @@ Example::
 """
 
 from __future__ import annotations
-
-import uuid
 
 from nest_core.types import (
     AgentId,
@@ -113,6 +112,7 @@ class ADARXNegotiation:
     def __init__(self, agent_id: AgentId) -> None:
         self._agent_id = agent_id
         self._sessions: dict[str, NegotiationSession] = {}
+        self._session_counter = 0
 
     async def open(self, partner: AgentId, terms: Terms) -> NegotiationSession:
         """
@@ -128,8 +128,10 @@ class ADARXNegotiation:
 
         compliance_status = terms.metadata.get("compliance_status", "APPROVED")
 
+        self._session_counter += 1
+
         session = NegotiationSession(
-            id=str(uuid.uuid4()),
+            id=f"adarx-{self._agent_id}-{self._session_counter}",
             initiator=self._agent_id,
             partner=partner,
             status=(
