@@ -197,3 +197,7 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("capability_spoofing", capability_spoofing_factory)
+    elif name == "delegated_auth_hmac":
+        from nest_core.scenarios_builtin.delegated_auth_hmac import delegated_auth_hmac_factory
+
+        register_scenario("delegated_auth_hmac", delegated_auth_hmac_factory)

@@ -2945,6 +2945,264 @@ def validate_comms_replay_honest_delivery(
 
 
 # ---------------------------------------------------------------------------
+# Delegated-auth (capability delegation + cascading revocation) validators
+# ---------------------------------------------------------------------------
+
+
+def _collect_auth_issued(events: list[dict[str, Any]]) -> dict[str, tuple[str, list[str]]]:
+    """Map each root token id to ``(subject, scopes)`` from ``issued:`` lines."""
+    issued: dict[str, tuple[str, list[str]]] = {}
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        body = _message_body(ev)
+        if not body.startswith("issued:"):
+            continue
+        _, token_id, subject, scopes_csv = body.split(":", 3)
+        issued[token_id] = (subject, [s for s in scopes_csv.split(",") if s])
+    return issued
+
+
+def _collect_auth_delegations(
+    events: list[dict[str, Any]],
+) -> dict[str, tuple[str, str, list[str]]]:
+    """Map each delegated child token id to ``(parent_id, audience, scopes)``."""
+    delegations: dict[str, tuple[str, str, list[str]]] = {}
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        body = _message_body(ev)
+        if not body.startswith("delegated:"):
+            continue
+        _, child_id, parent_id, audience, scopes_csv = body.split(":", 4)
+        delegations[child_id] = (parent_id, audience, [s for s in scopes_csv.split(",") if s])
+    return delegations
+
+
+def _collect_auth_blocked_delegations(events: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """List of ``(attack_kind, parent_id)`` from ``delegate_blocked:`` lines."""
+    blocked: list[tuple[str, str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        body = _message_body(ev)
+        if body.startswith("delegate_blocked:"):
+            _, attack_kind, parent_id = body.split(":", 2)
+            blocked.append((attack_kind, parent_id))
+    return blocked
+
+
+def _collect_auth_verify_results(events: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    """List of ``(token_id, check_kind, outcome)`` from ``verify_result:`` lines, in trace order."""
+    results: list[tuple[str, str, str]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        body = _message_body(ev)
+        if body.startswith("verify_result:"):
+            _, token_id, check_kind, outcome = body.split(":", 3)
+            results.append((token_id, check_kind, outcome))
+    return results
+
+
+def _auth_ancestors(token_id: str, delegations: dict[str, tuple[str, str, list[str]]]) -> set[str]:
+    """Walk ``parent_id`` links up to the root; returns the ancestor set including ``token_id``."""
+    seen = {token_id}
+    current = token_id
+    while current in delegations:
+        parent_id = delegations[current][0]
+        if parent_id in seen:
+            break
+        seen.add(parent_id)
+        current = parent_id
+    return seen
+
+
+def validate_auth_delegation_occurred(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """The full delegation tree (root + 3 intermediaries + 12 leaves) must exist.
+
+    The delegation tree is the whole point of the scenario: a trace with no
+    ``issued:``/``delegated:`` lines never exercised it. ``jwt`` has no
+    ``delegate`` method at all, so the coordinator's capability gate skips
+    the entire cascade -- the honest demonstration that ``jwt`` cannot
+    delegate.
+
+    Example::
+
+        results = validate_auth_delegation_occurred(events)
+    """
+    issued = _collect_auth_issued(events)
+    delegations = _collect_auth_delegations(events)
+    if not issued:
+        return [
+            ValidationResult(
+                "auth_delegation_occurred",
+                False,
+                "no root token issued (auth plugin cannot delegate)",
+            )
+        ]
+    if len(delegations) < 15:  # 3 intermediaries + 12 leaves
+        return [
+            ValidationResult(
+                "auth_delegation_occurred",
+                False,
+                f"expected 15 delegations (3 intermediaries + 12 leaves), saw {len(delegations)}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "auth_delegation_occurred", True, f"{len(delegations)} delegations observed"
+        )
+    ]
+
+
+def validate_auth_scope_escalation_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A delegation attempt requesting scopes the parent lacks must be blocked.
+
+    Catches the *scope-escalation* attack named in the problem brief.
+
+    Example::
+
+        results = validate_auth_scope_escalation_blocked(events)
+    """
+    blocked = _collect_auth_blocked_delegations(events)
+    escalations = [p for kind, p in blocked if kind == "scope_escalation"]
+    if not escalations:
+        return [
+            ValidationResult(
+                "auth_scope_escalation_blocked",
+                False,
+                "no scope-escalation attempt observed/blocked",
+            )
+        ]
+    return [
+        ValidationResult(
+            "auth_scope_escalation_blocked",
+            True,
+            f"{len(escalations)} scope-escalation attempt(s) correctly blocked",
+        )
+    ]
+
+
+def validate_auth_cascading_revocation(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Revoking one token must invalidate every descendant, and only those.
+
+    Catches the *stale parent* attack named in the problem brief: after a
+    ``revoked:<id>`` event, no token whose ancestor chain includes ``<id>``
+    may still verify ``ok``. Also confirms the mechanism actually fired
+    (>=1 blocked descendant) and that an unrelated sibling subtree is
+    unaffected (>=1 ``ok`` outside the revoked subtree) -- otherwise a
+    validator that is never exercised would trivially pass.
+
+    Processes events in trace order (not just by final revoked-set
+    membership), so a token correctly verifying ``ok`` *before* its ancestor
+    was ever revoked is not mistaken for a violation -- only ``ok`` results
+    observed after the revocation that should have caught them count.
+
+    Example::
+
+        results = validate_auth_cascading_revocation(events)
+    """
+    delegations = _collect_auth_delegations(events)
+
+    revoked_so_far: set[str] = set()
+    total_revocations = 0
+    violations: list[str] = []
+    blocked_descendant_seen = False
+    ok_outside_seen = False
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        body = _message_body(ev)
+        if body.startswith("revoked:"):
+            revoked_so_far.add(body.split(":", 1)[1])
+            total_revocations += 1
+            continue
+        if not body.startswith("verify_result:"):
+            continue
+        _, token_id, check_kind, outcome = body.split(":", 3)
+        if check_kind != "normal":
+            continue
+        under_revoked = bool(_auth_ancestors(token_id, delegations) & revoked_so_far)
+        if under_revoked:
+            if outcome == "ok":
+                violations.append(f"{token_id}: descendant of revoked token still verified ok")
+            elif outcome == "revoked_ancestor":
+                blocked_descendant_seen = True
+        elif outcome == "ok":
+            ok_outside_seen = True
+
+    if total_revocations == 0:
+        return [ValidationResult("auth_cascading_revocation", False, "no revocation observed")]
+    if violations:
+        return [ValidationResult("auth_cascading_revocation", False, "; ".join(violations))]
+    if not blocked_descendant_seen:
+        return [
+            ValidationResult(
+                "auth_cascading_revocation",
+                False,
+                "revocation recorded but no descendant was ever rejected for it",
+            )
+        ]
+    if not ok_outside_seen:
+        return [
+            ValidationResult(
+                "auth_cascading_revocation",
+                False,
+                "no unaffected sibling verified ok (revocation scope not exercised)",
+            )
+        ]
+    return [
+        ValidationResult(
+            "auth_cascading_revocation",
+            True,
+            "revoked subtree blocked; unrelated sibling subtree unaffected",
+        )
+    ]
+
+
+def validate_auth_audience_confusion_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """A token presented by an agent other than its declared audience must be rejected.
+
+    Catches the *audience confusion* attack named in the problem brief.
+
+    Example::
+
+        results = validate_auth_audience_confusion_blocked(events)
+    """
+    results = _collect_auth_verify_results(events)
+    attempts = [(tid, outcome) for tid, kind, outcome in results if kind == "audience_attack"]
+    if not attempts:
+        return [
+            ValidationResult(
+                "auth_audience_confusion_blocked",
+                False,
+                "no audience-confusion attempt observed",
+            )
+        ]
+    bad = [tid for tid, outcome in attempts if outcome != "audience_mismatch"]
+    if bad:
+        return [
+            ValidationResult(
+                "auth_audience_confusion_blocked",
+                False,
+                f"{len(bad)} audience-confusion attempt(s) incorrectly accepted: {bad}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "auth_audience_confusion_blocked",
+            True,
+            f"{len(attempts)} audience-confusion attempt(s) correctly rejected",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Receipt-reputation (collusion-ring) validators
 # ---------------------------------------------------------------------------
 
@@ -5297,6 +5555,12 @@ VALIDATORS: dict[str, list[Any]] = {
     "comms_replay": [
         validate_comms_replay_resistance,
         validate_comms_replay_honest_delivery,
+    ],
+    "delegated_auth_hmac": [
+        validate_auth_delegation_occurred,
+        validate_auth_scope_escalation_blocked,
+        validate_auth_cascading_revocation,
+        validate_auth_audience_confusion_blocked,
     ],
     "marketplace": [
         validate_marketplace_no_double_sell,

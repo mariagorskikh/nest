@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated-auth scenario: coordinator -> 3 intermediaries -> 12 leaves.
+#
+# The coordinator issues a root token and delegates a narrower sub-token to
+# each intermediary, which each delegate further to 4 leaves. Every leaf
+# verifies its token with a single auditor twice: once right after receiving
+# it, and again after the coordinator revokes one intermediary's token. Also
+# exercised: a scope-escalation attempt (must be blocked) and an
+# audience-confusion probe from one designated leaf (must be blocked).
+#
+# Verify::
+#
+#     nest run scenarios/delegated_auth_hmac.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/delegated_auth_hmac.jsonl'), 'delegated_auth_hmac')]"
+name: delegated_auth_hmac
+description: "Coordinator -> 3 intermediaries -> 12 leaves; scope escalation, cascading revocation, and audience confusion are all exercised."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 17
+  brain: state-machine
+
+layers:
+  auth: delegatable_hmac
+
+task:
+  type: delegated_auth_hmac
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 5000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/delegated_auth_hmac.jsonl
