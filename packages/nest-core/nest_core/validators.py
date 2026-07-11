@@ -4306,6 +4306,105 @@ def validate_bft_no_stuck_view(
     ]
 
 
+def validate_bft_locked_qc_respected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No PREPARE proposal ignores an already-formed, higher prior lock.
+
+    ``validate_bft_no_conflicting_commits`` only compares commits *within
+    the same view*, so it cannot see a fork where a leader gets a fresh,
+    unrelated value committed at a *later* view than one that was already
+    prepare-QC'd (and therefore locked, by any honest replica that received
+    that QC) at an earlier view -- the exact "locked-QC bypass" a leader can
+    otherwise pull off by sending a PREPARE with no ``justify_qc`` at all
+    (``ReplicaAgent._handle_prepare`` in
+    ``nest_core.scenarios_builtin.bft_hotstuff`` only checked
+    ``justify_qc.view`` when a ``justify_qc`` was present, letting a
+    byzantine leader dodge the check entirely by omitting it).
+
+    Reads every ``qc:prepare:<view>:<hash>:...`` broadcast as a lock point
+    (recorded at its broadcast timestamp -- a lower bound on when any honest
+    replica could have locked on it) and every ``prepare:<view>:<hash>:
+    <value>:<qc_field>`` proposal. For a proposal at view ``V`` sent after a
+    lock already formed at some view ``< V``, ``qc_field`` must be present
+    (not ``"none"``) and its embedded view must be ``>=`` the highest such
+    prior lock -- otherwise the proposal is exactly the bypass attack. This
+    validator FAILS against a ``bft_hotstuff`` trace where a
+    ``malicious_kind: no_justify`` leader's bypass proposal is accepted, and
+    PASSES once the locked-QC check correctly rejects it.
+
+    Example::
+
+        results = validate_bft_locked_qc_respected(events)
+    """
+    locks: list[tuple[float, int]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("qc:prepare:"):
+            continue
+        parts = msg.split(":", 5)
+        if len(parts) != 6:
+            continue
+        try:
+            lock_view = int(parts[2])
+        except ValueError:
+            continue
+        locks.append((float(ev.get("ts", 0.0)), lock_view))
+
+    violations: list[str] = []
+    checked = 0
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("prepare:"):
+            continue
+        parts = msg.split(":", 4)
+        if len(parts) != 5:
+            continue
+        try:
+            view = int(parts[1])
+        except ValueError:
+            continue
+        ts = float(ev.get("ts", 0.0))
+        qc_field = parts[4]
+
+        prior_lock_views = [lv for (lts, lv) in locks if lts < ts and lv < view]
+        if not prior_lock_views:
+            continue
+        highest_lock = max(prior_lock_views)
+        checked += 1
+
+        if qc_field == "none":
+            violations.append(
+                f"view {view}: leader {ev.get('agent')} proposed with no justify_qc "
+                f"despite an existing lock at view {highest_lock}"
+            )
+            continue
+        qc_parts = qc_field.split(";", 2)
+        try:
+            justify_view = int(qc_parts[1]) if len(qc_parts) >= 2 else -1
+        except ValueError:
+            justify_view = -1
+        if justify_view < highest_lock:
+            violations.append(
+                f"view {view}: justify_qc view {justify_view} is behind the "
+                f"existing lock at view {highest_lock}"
+            )
+
+    if violations:
+        return [ValidationResult("bft_locked_qc_respected", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "bft_locked_qc_respected",
+            True,
+            f"checked {checked} proposal(s) made after a prior lock existed, no bypass",
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Failure-detection validators
 # ---------------------------------------------------------------------------
@@ -5382,6 +5481,7 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_bft_no_equivocation,
         validate_bft_forged_quorum,
         validate_bft_no_stuck_view,
+        validate_bft_locked_qc_respected,
     ],
     "escrow_marketplace": [
         validate_escrow_state_machine,

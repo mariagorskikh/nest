@@ -13,7 +13,17 @@ COMMIT, each gathering its own 2f+1-vote Quorum Certificate out of 3f+1
 total replicas. Safety across view-changes comes from the standard
 locked-QC rule (never vote prepare for a view below what you've already
 locked), not from the phase count -- the third phase in the original paper
-buys cross-view pipelining/throughput, which is out of scope here.
+buys cross-view pipelining/throughput, which is out of scope here. The
+locked-QC rule must reject a proposal with *no* justify_qc exactly as it
+rejects one with a too-low justify_qc -- ``NoJustifyLeaderAgent`` below is
+the adversarial agent that exercises that edge, and
+``validate_bft_locked_qc_respected`` in ``nest_core.validators`` is the
+trace-level check that catches a leader who tries it.
+
+Two malicious leader behaviors are available via
+``task.config.malicious_kind``: ``MaliciousLeaderAgent`` (equivocation --
+different proposals to different followers) and ``NoJustifyLeaderAgent``
+(locked-QC bypass -- proposes with no justify_qc at all).
 
 The ``Coordination``-protocol-shaped plugin (``nest_plugins_reference.
 coordination.hotstuff.HotStuff``) is a separate, non-networked conformance
@@ -186,11 +196,25 @@ class ReplicaAgent(StateMachineAgent):
             return
         if msg.justify_qc is not None and not self._qc_is_valid(ctx, msg.justify_qc):
             return
-        if (
-            self._locked_qc is not None
-            and msg.justify_qc is not None
-            and msg.justify_qc.view < self._locked_qc.view
+        if self._locked_qc is not None and (
+            msg.justify_qc is None or msg.justify_qc.view < self._locked_qc.view
         ):
+            # Locked-QC safety rule (Yin et al. 2019, sec 4.3): once this replica
+            # has locked on a prepare-QC, it must refuse any proposal that does
+            # not carry a justify_qc at least as high as that lock. A leader
+            # cannot satisfy this by simply omitting justify_qc -- treating "no
+            # justify_qc" as equivalent to "justify_qc at view -1" (i.e. always
+            # too low once anything is locked) closes that bypass. Only the
+            # unlocked genesis case (locked_qc is None) may pass with no
+            # justify_qc at all.
+            # Locked-QC safety rule (Yin et al. 2019, sec 4.3): once this replica
+            # has locked on a prepare-QC, it must refuse any proposal that does
+            # not carry a justify_qc at least as high as that lock. A leader
+            # cannot satisfy this by simply omitting justify_qc -- treating "no
+            # justify_qc" as equivalent to "justify_qc at view -1" (i.e. always
+            # too low once anything is locked) closes that bypass. Only the
+            # unlocked genesis case (locked_qc is None) may pass with no
+            # justify_qc at all.
             return
         if msg.view > self._current_view:
             self._current_view = msg.view
@@ -322,6 +346,42 @@ class MaliciousLeaderAgent(ReplicaAgent):
         await self._send_signed(ctx, body_b, group_b)
 
 
+class NoJustifyLeaderAgent(ReplicaAgent):
+    """A replica that drops its justify_qc only on its own leader turns.
+
+    When this replica is leader for a view, it proposes with
+    ``justify_qc=None`` regardless of what QC it actually knows about --
+    the "leader claims no history" attack that the locked-QC safety rule in
+    ``ReplicaAgent._handle_prepare`` must reject once any honest replica has
+    already locked on a real prepare-QC from an earlier view. Without that
+    rule (or with the pre-fix version that only checked ``justify_qc.view``
+    when a ``justify_qc`` was present at all), this lets a byzantine leader
+    strand an already-locked value and push through an unrelated one after a
+    view-change -- exactly the fork the locked-QC rule exists to prevent.
+    Outside of its own leader turns this agent behaves like an honest
+    ``ReplicaAgent``, so the scenario exercises exactly one failure mode.
+
+    Example::
+
+        leader = NoJustifyLeaderAgent(AgentId("replica-1"), replica_ids, f=2)
+    """
+
+    async def _propose(self, ctx: AgentContext, view: int, justify_qc: QuorumCert | None) -> None:
+        if view in self._proposed_for_view:
+            return
+        self._proposed_for_view.add(view)
+        value = str(ctx.rng.randint(1, 100))
+        self._current_value_for_view[view] = value
+        body = hotstuff_wire.encode_prepare(view, value, None)
+        await self._send_signed(ctx, body, self._replica_ids)
+
+
+_MALICIOUS_AGENT_KINDS: dict[str, type[ReplicaAgent]] = {
+    "equivocate": MaliciousLeaderAgent,
+    "no_justify": NoJustifyLeaderAgent,
+}
+
+
 def instantiate_identity(plugins: dict[str, Any], all_ids: Sequence[AgentId]) -> None:
     """Wire a per-agent signed ``DidKeyIdentity`` with full peer cross-registration.
 
@@ -356,9 +416,13 @@ def bft_hotstuff_factory(
     """Create HotStuff replica agents and wire per-agent signed identities.
 
     Reads ``task.config.f`` (defaults to ``(count - 1) // 3``),
-    ``task.config.view_timeout_ticks`` (default 40), and
+    ``task.config.view_timeout_ticks`` (default 40),
     ``task.config.malicious_agents`` (a list of replica id strings to
-    instantiate as ``MaliciousLeaderAgent`` instead of ``ReplicaAgent``).
+    instantiate as the malicious agent class instead of ``ReplicaAgent``),
+    and ``task.config.malicious_kind`` (``"equivocate"`` for
+    ``MaliciousLeaderAgent`` -- the default, unchanged from before -- or
+    ``"no_justify"`` for ``NoJustifyLeaderAgent``, the locked-QC-bypass
+    attacker).
 
     Example::
 
@@ -369,6 +433,8 @@ def bft_hotstuff_factory(
     f = int(task_config.get("f", (count - 1) // 3))
     view_timeout_ticks = int(task_config.get("view_timeout_ticks", 40))
     malicious_names: set[str] = set(task_config.get("malicious_agents", []))
+    malicious_kind = str(task_config.get("malicious_kind", "equivocate"))
+    malicious_cls = _MALICIOUS_AGENT_KINDS.get(malicious_kind, MaliciousLeaderAgent)
 
     replica_ids = [AgentId(f"replica-{i}") for i in range(count)]
     instantiate_identity(plugins, replica_ids)
@@ -376,7 +442,7 @@ def bft_hotstuff_factory(
     agents: dict[AgentId, StateMachineAgent] = {}
     for rid in replica_ids:
         if str(rid) in malicious_names:
-            agents[rid] = MaliciousLeaderAgent(
+            agents[rid] = malicious_cls(
                 rid, replica_ids, f=f, view_timeout_ticks=view_timeout_ticks
             )
         else:
