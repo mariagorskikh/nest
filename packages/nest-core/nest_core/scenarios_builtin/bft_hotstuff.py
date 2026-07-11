@@ -207,14 +207,6 @@ class ReplicaAgent(StateMachineAgent):
             # too low once anything is locked) closes that bypass. Only the
             # unlocked genesis case (locked_qc is None) may pass with no
             # justify_qc at all.
-            # Locked-QC safety rule (Yin et al. 2019, sec 4.3): once this replica
-            # has locked on a prepare-QC, it must refuse any proposal that does
-            # not carry a justify_qc at least as high as that lock. A leader
-            # cannot satisfy this by simply omitting justify_qc -- treating "no
-            # justify_qc" as equivalent to "justify_qc at view -1" (i.e. always
-            # too low once anything is locked) closes that bypass. Only the
-            # unlocked genesis case (locked_qc is None) may pass with no
-            # justify_qc at all.
             return
         if msg.view > self._current_view:
             self._current_view = msg.view
