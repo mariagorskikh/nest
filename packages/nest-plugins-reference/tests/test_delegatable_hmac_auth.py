@@ -109,7 +109,7 @@ class TestCascadingRevocation:
         leaf = await auth.delegate(mid, _SUBWORKER, ["read"], ttl=50)
 
         await auth.revoke(root)  # only the root is ever revoked directly
-        assert len(auth._revoked) == 1  # single entry regardless of descendant count
+        assert len(auth._revoked) == 1  # pyright: ignore[reportPrivateUsage]
 
         with pytest.raises(RevokedAncestorError):
             await auth.verify(leaf, presented_by=_SUBWORKER)
