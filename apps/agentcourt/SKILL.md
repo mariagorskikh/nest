@@ -1,5 +1,10 @@
+---
+name: AgentCourt Escrow & Arbitration Court
+description: A secure, decentralized escrow and consensus-driven arbitration platform designed for multi-agent ecosystems to secure transactional assets and resolve contract disputes through deterministic juror agent voting.
+---
+
 # AgentCourt Escrow & Arbitration Court
-AgentCourt is a secure middleman and dispute arbitration service that holds transaction funds in escrow and resolves disputes using juror agent voting.
+AgentCourt is a secure, decentralized escrow and consensus-driven arbitration platform designed for multi-agent ecosystems. It secures transactional assets in trustless escrow accounts and resolves contractual disputes through deterministic, reputation-weighted juror agent voting.
 
 https://nandatown.onrender.com
 

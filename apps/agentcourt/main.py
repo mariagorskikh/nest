@@ -516,4 +516,4 @@ async def serve_skill_md():
         with open(skill_path, encoding="utf-8") as f:
             return f.read()
     # In-code fallback if file is somehow missing
-    return "# AgentCourt\nBase URL: https://agentcourt.onrender.com\n"
+    return "# AgentCourt\nBase URL: https://nandatown.onrender.com\n"
