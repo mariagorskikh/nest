@@ -579,9 +579,25 @@ tr:hover td { background: var(--red-bg); }
       if (se && re) latencies.push(re.ts - se.ts);
     }
 
+    // Correlation-based delivery: a message is "delivered" when its send has a
+    // matching receive under the same correlation id. Well-defined for any
+    // scenario and never exceeds 100% — unlike receives/sends, which over-counts
+    // fan-out and self-scheduled messages. A send whose corr has no receive
+    // (e.g. dropped/partitioned) correctly lowers the rate.
+    let corrSends = 0, corrDelivered = 0;
+    for (const evs of Object.values(correlations)) {
+      const se = evs.find(e => e.kind === "send");
+      if (!se) continue;
+      corrSends++;
+      if (evs.find(e => e.kind === "receive")) corrDelivered++;
+    }
     const totalMessages = sends + broadcasts;
-    const deliveredMessages = receives;
-    const successRate = totalMessages > 0 ? deliveredMessages / totalMessages : 1;
+    const deliveredMessages = corrDelivered;
+    const deliverySends = corrSends;
+    // Fall back to a clamped receives/sends only when a trace carries no corr ids.
+    const successRate = corrSends > 0
+      ? corrDelivered / corrSends
+      : (totalMessages > 0 ? Math.min(1, receives / totalMessages) : 1);
     const meanLatency = latencies.length > 0 ? latencies.reduce((a,b)=>a+b,0)/latencies.length : 0;
     const duration = maxTs - minTs;
     const throughput = duration > 0 ? totalMessages / duration : 0;
@@ -601,7 +617,7 @@ tr:hover td { background: var(--red-bg); }
       sends, receives, dropped, broadcasts,
       minTs, maxTs, duration,
       latencies, meanLatency, successRate, throughput,
-      edges, totalMessages, deliveredMessages, score
+      edges, totalMessages, deliveredMessages, deliverySends, score
     };
   }
 
@@ -906,7 +922,7 @@ tr:hover td { background: var(--red-bg); }
     const metrics = [
       { title:"Success Rate", value:(p.successRate*100).toFixed(1)+"%",
         color: p.successRate>=0.9?"var(--green)":p.successRate>=0.7?"var(--gold)":"var(--red)",
-        detail:`${p.deliveredMessages} of ${p.totalMessages} delivered` },
+        detail:`${p.deliveredMessages} of ${p.deliverySends} delivered` },
       { title:"Mean Latency", value:p.meanLatency.toFixed(2)+" ticks",
         color:"var(--text)", detail:`${p.latencies.length} correlated pairs` },
       { title:"Latency P50 / P95 / P99",
