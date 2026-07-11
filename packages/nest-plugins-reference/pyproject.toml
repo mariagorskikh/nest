@@ -35,6 +35,7 @@ Repository = "https://github.com/projnanda/nandatown"
 # install-time discovery path described in CONTRIBUTING.md.
 [project.entry-points."nest.plugins.auth"]
 macaroon = "nest_plugins_reference.auth.macaroon:MacaroonAuth"
+mesh_revocable = "nest_plugins_reference.auth.mesh_revocable:MeshRevocableAuth"
 
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
