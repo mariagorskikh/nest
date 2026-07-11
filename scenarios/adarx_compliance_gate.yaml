@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# ADARX compliance-gate discriminator scenario.
+#
+# 10 buyer-seller pairs, 5 with an APPROVED seller and 5 with a
+# PENDING_REVIEW seller. The buyer's negotiation plugin is under test: a
+# plugin that checks compliance at open() (adarx) closes every
+# non-compliant pair as a breakdown without ever negotiating price, while
+# a plugin with no compliance concept (alternating_offers) reaches
+# agreement with it anyway. Swapping `negotiation: adarx` below to
+# `negotiation: adarx` flips validate_adarx_compliance_gate
+# from PASS to FAIL -- that swap is the whole point of this scenario.
+#
+# Deterministic: each pair's opening price and quantity are drawn from a
+# generator seeded only from (seed, pair_index).
+name: adarx_compliance_gate
+description: "10 buyer-seller pairs testing whether the buyer's negotiation plugin refuses non-compliant counterparties before negotiating price."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 20
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 10
+    - name: seller
+      count: 10
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: adarx
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: adarx_compliance_gate
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/adarx_compliance_gate.jsonl
