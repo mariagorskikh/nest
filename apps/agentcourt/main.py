@@ -505,6 +505,31 @@ async def vote_on_dispute(escrow_id: str, req: JurorVoteRequest):
         return dispute.to_response()
 
 
+
+
+@app.get("/", summary="Service Info")
+async def root() -> dict[str, object]:
+    """Returns a summary of the AgentCourt service and all available endpoints."""
+    return {
+        "service": "AgentCourt Escrow & Arbitration Court",
+        "description": "A secure, decentralized escrow and consensus-driven arbitration platform for multi-agent ecosystems.",
+        "version": "1.0.0",
+        "base_url": "https://nandatown.onrender.com",
+        "docs": "https://nandatown.onrender.com/docs",
+        "skill_md": "https://nandatown.onrender.com/skill.md",
+        "endpoints": [
+            {"method": "GET",  "path": "/health",                          "description": "Health check"},
+            {"method": "POST", "path": "/escrow",                          "description": "Create a new escrow contract"},
+            {"method": "GET",  "path": "/escrow/{escrow_id}",              "description": "Get escrow status"},
+            {"method": "POST", "path": "/escrow/{escrow_id}/release",      "description": "Release funds to seller"},
+            {"method": "POST", "path": "/escrow/{escrow_id}/refund",       "description": "Refund funds to buyer"},
+            {"method": "POST", "path": "/escrow/{escrow_id}/dispute",      "description": "Raise a dispute"},
+            {"method": "GET",  "path": "/disputes",                        "description": "List all active disputes"},
+            {"method": "POST", "path": "/disputes/{escrow_id}/vote",       "description": "Cast a juror vote on a dispute"},
+        ],
+    }
+
+
 @app.get("/skill.md", response_class=PlainTextResponse)
 async def serve_skill_md():
     """
