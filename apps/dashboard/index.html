@@ -512,9 +512,11 @@ tr:hover td { background: var(--red-bg); }
   }
 
   const INJECTED_TRACE = "__NEST_TRACE_DATA__";
-  if (INJECTED_TRACE !== "__NEST_" + "TRACE_DATA__") {
-    try { parseAndRender(INJECTED_TRACE, "injected-trace.jsonl"); } catch(e) {}
-  }
+  // The auto-load call is deferred to the end of this IIFE (see bottom) so that
+  // every module-level `let`/`const` it depends on — var_red, sortCol, sortAsc —
+  // is initialized first. Calling parseAndRender here instead hits a
+  // temporal-dead-zone ReferenceError and the graph / Agent Stats panels never
+  // render for the `nest dashboard <file>` path.
 
   function parseAndRender(text, filename) {
     const lines = text.trim().split("\n").filter(l => l.trim());
@@ -618,14 +620,18 @@ tr:hover td { background: var(--red-bg); }
   }
 
   // ── Render ──
+  // Each panel renders independently: a throw in one (e.g. renderGraph before
+  // its container has a measured width) must not abort the panels after it,
+  // which previously left Agent Stats / Metrics / Benchmark / Leaderboard blank.
   function renderAll() {
-    renderSummaryCards();
-    renderTimeline();
-    renderGraph();
-    renderTable();
-    renderMetrics();
-    renderBenchmark();
-    renderLeaderboard();
+    const steps = [
+      renderSummaryCards, renderTimeline, renderGraph,
+      renderTable, renderMetrics, renderBenchmark, renderLeaderboard,
+    ];
+    for (const step of steps) {
+      try { step(); }
+      catch (e) { console.error("dashboard render step failed:", step.name, e); }
+    }
   }
 
   function renderSummaryCards() {
@@ -1108,11 +1114,27 @@ tr:hover td { background: var(--red-bg); }
       document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
       tab.classList.add("active");
       document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
-      if (tab.dataset.tab === "graph" && parsedTrace) renderGraph();
+      // Re-render the panel now that it is visible and measurable. Every panel
+      // gets this (not just the graph) so a panel that failed to draw during
+      // the initial load renders correctly the moment it is opened.
+      if (parsedTrace) {
+        const rerender = {
+          timeline: renderTimeline, graph: renderGraph, table: renderTable,
+          metrics: renderMetrics, benchmark: renderBenchmark, leaderboard: renderLeaderboard,
+        }[tab.dataset.tab];
+        if (rerender) { try { rerender(); } catch (e) { console.error("re-render failed:", e); } }
+      }
     });
   });
 
   window.__nestLoadTrace = parseAndRender;
+
+  // Deferred auto-load: runs after every module-level declaration above is
+  // initialized, so the injected-trace path renders all panels (see note by
+  // the INJECTED_TRACE declaration).
+  if (INJECTED_TRACE !== "__NEST_" + "TRACE_DATA__") {
+    parseAndRender(INJECTED_TRACE, "injected-trace.jsonl");
+  }
 })();
 </script>
 </body>
