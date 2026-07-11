@@ -1,9 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Identity recovery scenario: time-locked rotations and K-of-N social recovery.
-# A byzantine agent attempts instant-rotation (blocked by time-lock) and a
-# compromised agent gets recovered via attester quorum.
+#
+# Honest signers rotate with a future activates_at (time-lock enforced).
+# A designated victim agent initiates social recovery after being "compromised".
+# A byzantine agent attempts instant-rotation (blocked by time-lock) and
+# post-rotation forgery (rejected by as-of signature verification).
+#
+# Validators:
+#   identity_recovery_occurred   — at least one recover: trace line present
+#   identity_timelock_enforced   — instant-rotation attempt rejected, none accepted
+#   identity_recoverable_signatures — honest sigs valid in their windows; attacks rejected
 name: identity_recoverable
-description: "10 signers with time-locked rotation and social recovery; byzantine agents attempt instant-rotation and unilateral recovery."
+description: "10 signers with time-locked rotation and social recovery; byzantine agents attempt instant-rotation and post-rotation forgery."
 
 tier: 1
 seed: 42
@@ -13,7 +21,7 @@ agents:
   brain: state-machine
   roles:
     - name: honest
-      count: 9
+      count: 8
     - name: byzantine
       count: 1
 
@@ -32,13 +40,15 @@ layers:
   datafacts: datafacts_v1
 
 task:
-  type: identity_rotation
+  type: identity_recoverable
   config:
-    rounds: 6
-    rotate_at_round: 3
-    byzantine_fraction: 0.10
+    rounds: 10
+    rotate_at_round: 4
+    compromise_round: 5
+    time_lock: 3.0
     recovery_attesters: 3
     recovery_quorum_k: 2
+    byzantine_fraction: 0.10
 
 failures:
   message_drop: 0.0

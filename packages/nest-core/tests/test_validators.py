@@ -2128,6 +2128,7 @@ class TestValidatorRegistry:
             "supply_chain",
             "reputation",
             "identity_rotation",
+            "identity_recoverable",
             "attested_peering",
             "memory_concurrent_writers",
             "streaming_payments",

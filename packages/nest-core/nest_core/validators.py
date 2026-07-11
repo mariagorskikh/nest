@@ -1102,6 +1102,205 @@ def validate_identity_rotation_signatures(
 
 
 # ---------------------------------------------------------------------------
+# Identity recoverable validators
+# ---------------------------------------------------------------------------
+
+
+def _build_recovery_key_windows(
+    events: list[dict[str, Any]],
+) -> dict[str, _KeyWindow]:
+    """Build key validity windows from both ``rotate:`` and ``recover:`` trace lines.
+
+    ``rotate:`` lines use a future ``activates_at`` (time-lock).
+    ``recover:`` lines take effect immediately at ``recovered_at``.
+
+    Example::
+
+        windows = _build_recovery_key_windows(events)
+    """
+    windows: dict[str, _KeyWindow] = {}
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("rotate:"):
+            # rotate:<agent>:<old_key_id>:<new_key_id>:<activates_at>
+            parts = msg.split(":")
+            if len(parts) < 5:
+                continue
+            old_key_id, new_key_id = parts[2], parts[3]
+            activates_at = _parse_tick(parts[4])
+            if activates_at is None:
+                continue
+            old = windows.setdefault(old_key_id, _KeyWindow(issued_at=0.0))
+            old.rotated_out = activates_at
+            windows[new_key_id] = _KeyWindow(issued_at=activates_at)
+        elif msg.startswith("recover:"):
+            # recover:<agent>:<old_key_id>:<new_key_id>:<recovered_at>
+            parts = msg.split(":")
+            if len(parts) < 5:
+                continue
+            old_key_id, new_key_id = parts[2], parts[3]
+            recovered_at = _parse_tick(parts[4])
+            if recovered_at is None:
+                continue
+            old = windows.setdefault(old_key_id, _KeyWindow(issued_at=0.0))
+            old.rotated_out = recovered_at
+            windows[new_key_id] = _KeyWindow(issued_at=recovered_at)
+    return windows
+
+
+def validate_identity_recovery_occurred(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """At least one social recovery happened over the run.
+
+    Example::
+
+        results = validate_identity_recovery_occurred(events)
+    """
+    recoveries = sum(
+        1
+        for ev in events
+        if ev.get("kind") == "send" and _message_body(ev).startswith("recover:")
+    )
+    if recoveries == 0:
+        return [
+            ValidationResult(
+                "identity_recovery_occurred",
+                False,
+                "no social recovery events found in trace",
+            )
+        ]
+    return [
+        ValidationResult(
+            "identity_recovery_occurred",
+            True,
+            f"{recoveries} social recovery events observed",
+        )
+    ]
+
+
+def validate_identity_timelock_enforced(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """At least one ``timelock_reject:`` line is present and no ``timelock_accepted:`` line.
+
+    A ``timelock_accepted:`` line means a byzantine agent's instant-rotation was
+    accepted — the time-lock is broken.  A missing ``timelock_reject:`` line means
+    the byzantine agent never even tried or the plugin silently ate the call.
+
+    Example::
+
+        results = validate_identity_timelock_enforced(events)
+    """
+    rejections = 0
+    acceptances: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if msg.startswith("timelock_reject:"):
+            rejections += 1
+        elif msg.startswith("timelock_accepted:"):
+            acceptances.append(msg)
+
+    if acceptances:
+        return [
+            ValidationResult(
+                "identity_timelock_enforced",
+                False,
+                f"instant rotation was accepted: {acceptances[0]}",
+            )
+        ]
+    if rejections == 0:
+        return [
+            ValidationResult(
+                "identity_timelock_enforced",
+                False,
+                "no timelock_reject: lines found — byzantine agent may not have attacked",
+            )
+        ]
+    return [
+        ValidationResult(
+            "identity_timelock_enforced",
+            True,
+            f"{rejections} instant-rotation attempt(s) correctly rejected",
+        )
+    ]
+
+
+def validate_identity_recoverable_signatures(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Honest signatures verify within their key windows; forged / backdated attacks are rejected.
+
+    Rebuilds key windows from ``rotate:`` and ``recover:`` trace lines (both
+    close the old key's window), then checks every ``signed:`` line.
+
+    Example::
+
+        results = validate_identity_recoverable_signatures(events)
+    """
+    windows = _build_recovery_key_windows(events)
+    honest_invalid: list[str] = []
+    attacks_accepted: list[str] = []
+    ok_count = 0
+    attack_count = 0
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("signed:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 5:
+            continue
+        agent, key_id, claimed_raw, verdict = parts[1], parts[2], parts[3], parts[4]
+        observed_tick = _parse_tick(str(ev.get("ts")))
+        claimed_tick = _parse_tick(claimed_raw)
+
+        window = windows.get(key_id)
+        if window is None and key_id and key_id != "None" and verdict == "ok":
+            window = windows.setdefault(key_id, _KeyWindow(issued_at=0.0))
+
+        window_valid = (
+            window is not None
+            and observed_tick is not None
+            and claimed_tick is not None
+            and window.contains(observed_tick)
+            and window.contains(claimed_tick)
+        )
+
+        if verdict == "ok":
+            ok_count += 1
+            if not window_valid:
+                honest_invalid.append(
+                    f"{agent} honest sig key={key_id[:8] if key_id else '?'} "
+                    f"observed={observed_tick} claimed={claimed_tick} not in a valid window"
+                )
+        else:
+            attack_count += 1
+            if window_valid:
+                attacks_accepted.append(
+                    f"{agent} {verdict} sig key={key_id[:8] if key_id else '?'} "
+                    f"observed={observed_tick} claimed={claimed_tick} accepted"
+                )
+
+    problems = honest_invalid + attacks_accepted
+    if problems:
+        return [ValidationResult("identity_recoverable_signatures", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "identity_recoverable_signatures",
+            True,
+            f"{ok_count} honest signatures valid, {attack_count} attacks rejected",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Memory convergence (CRDT) validators
 # ---------------------------------------------------------------------------
 
@@ -5329,6 +5528,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "identity_rotation": [
         validate_identity_rotation_occurred,
         validate_identity_rotation_signatures,
+    ],
+    "identity_recoverable": [
+        validate_identity_recovery_occurred,
+        validate_identity_timelock_enforced,
+        validate_identity_recoverable_signatures,
     ],
     "attested_peering": [
         validate_attested_no_denied_admitted,

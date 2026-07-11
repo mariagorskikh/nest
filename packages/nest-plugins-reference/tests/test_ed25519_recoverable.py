@@ -377,3 +377,71 @@ class TestAdversarialValidators:
         target, r1, _r2, _r3 = _setup_recovery()
         reports = validate_identity_governance(target, [r1])
         assert all(r.passed for r in reports), [r.detail for r in reports]
+
+
+# ── Discrimination: validators must FAIL against did_key / ed25519_rotating ──
+
+
+class TestAdversarialValidatorsDiscrimination:
+    """Governance validators must return FAIL for plugins that don't enforce the rules.
+
+    This is the discriminating test the PR's docstring promised but never
+    asserted: ``validate_no_instant_rotations`` and
+    ``validate_no_unilateral_recoveries`` must return ``passed=False`` against
+    ``did_key`` and ``ed25519_rotating``, which have no time-lock and no
+    recovery mechanism.
+    """
+
+    def test_validate_no_instant_rotations_fails_against_did_key(self) -> None:
+        from nest_plugins_reference.identity.adversarial_validators import (
+            validate_no_instant_rotations,
+        )
+        from nest_plugins_reference.identity.did_key import DidKeyIdentity
+
+        plugin = DidKeyIdentity(AgentId("dk-1"), seed=b"test")
+        report = validate_no_instant_rotations(plugin)
+        assert not report.passed, (
+            "validate_no_instant_rotations should FAIL against did_key "
+            f"(no rotate/advance support), got: {report.detail}"
+        )
+
+    def test_validate_no_instant_rotations_fails_against_ed25519_rotating(self) -> None:
+        from nest_plugins_reference.identity.adversarial_validators import (
+            validate_no_instant_rotations,
+        )
+        from nest_plugins_reference.identity.ed25519_rotating import Ed25519RotatingIdentity
+
+        plugin = Ed25519RotatingIdentity(AgentId("rot-1"), seed=b"test")
+        report = validate_no_instant_rotations(plugin)
+        assert not report.passed, (
+            "validate_no_instant_rotations should FAIL against ed25519_rotating "
+            f"(no time-lock enforcement), got: {report.detail}"
+        )
+
+    def test_validate_no_unilateral_recoveries_fails_against_did_key(self) -> None:
+        from nest_plugins_reference.identity.adversarial_validators import (
+            validate_no_unilateral_recoveries,
+        )
+        from nest_plugins_reference.identity.did_key import DidKeyIdentity
+
+        plugin = DidKeyIdentity(AgentId("dk-2"), seed=b"test")
+        dummy_attester = _ident("att-1")
+        report = validate_no_unilateral_recoveries(plugin, [dummy_attester])
+        assert not report.passed, (
+            "validate_no_unilateral_recoveries should FAIL against did_key "
+            f"(no observe_recovery support), got: {report.detail}"
+        )
+
+    def test_validate_no_unilateral_recoveries_fails_against_ed25519_rotating(self) -> None:
+        from nest_plugins_reference.identity.adversarial_validators import (
+            validate_no_unilateral_recoveries,
+        )
+        from nest_plugins_reference.identity.ed25519_rotating import Ed25519RotatingIdentity
+
+        plugin = Ed25519RotatingIdentity(AgentId("rot-2"), seed=b"test")
+        dummy_attester = _ident("att-2")
+        report = validate_no_unilateral_recoveries(plugin, [dummy_attester])
+        assert not report.passed, (
+            "validate_no_unilateral_recoveries should FAIL against ed25519_rotating "
+            f"(no recovery mechanism), got: {report.detail}"
+        )

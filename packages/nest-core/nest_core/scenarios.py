@@ -77,6 +77,12 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("identity_rotation", identity_rotation_factory)
+    elif name == "identity_recoverable":
+        from nest_core.scenarios_builtin.identity_recoverable import (
+            identity_recoverable_factory,
+        )
+
+        register_scenario("identity_recoverable", identity_recoverable_factory)
     elif name == "attested_peering":
         from nest_core.scenarios_builtin.attested_peering import (
             attested_peering_factory,
