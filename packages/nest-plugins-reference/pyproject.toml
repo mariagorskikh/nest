@@ -62,6 +62,7 @@ attested_peering = "nest_plugins_reference.trust.attested_peering:AttestedPeerin
 [project.entry-points."nest.plugins.auth"]
 delegatable = "nest_plugins_reference.auth.delegatable:DelegatableAuth"
 delegatable_cascading = "nest_plugins_reference.auth.delegatable_cascading:DelegatableAuth"
+mesh_revocable = "nest_plugins_reference.auth.mesh_revocable:MeshRevocableAuth"
 
 [build-system]
 requires = ["hatchling"]

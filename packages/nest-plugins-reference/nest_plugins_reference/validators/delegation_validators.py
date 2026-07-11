@@ -130,10 +130,16 @@ def check_no_stale_ancestor_use(audits: list[AuditEvent]) -> ValidatorReport:
 
         assert check_no_stale_ancestor_use(audits).passed
     """
+    # Earliest revoke tick governs: revocation is monotonic, so a redundant
+    # later revoke of the same tid must not raise the effective revocation
+    # time (last-write-wins previously hid verifies between the two ticks).
     revoked_at: dict[str, int] = {}
     for audit in audits:
         if audit.get("op") == "revoke":
-            revoked_at[str(audit.get("tid", ""))] = int(cast("int", audit.get("tick", 0)))
+            tid = str(audit.get("tid", ""))
+            tick = int(cast("int", audit.get("tick", 0)))
+            if tid not in revoked_at or tick < revoked_at[tid]:
+                revoked_at[tid] = tick
     violations: list[AuditEvent] = []
     for audit in audits:
         if audit.get("op") != "verify" or not audit.get("verified"):
