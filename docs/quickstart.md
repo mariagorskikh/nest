@@ -95,3 +95,4 @@ report.
 - **Plug in your own layer:** [writing-a-plugin.md](writing-a-plugin.md)
 - **Build a new scenario:** [writing-a-scenario.md](writing-a-scenario.md)
 - **How the layers fit together:** [concepts.md](concepts.md)
+ - **Schema version migration note:** [schema_version_migration.md](schema_version_migration.md)

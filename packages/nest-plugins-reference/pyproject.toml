@@ -38,6 +38,7 @@ mesh_revocable = "nest_plugins_reference.auth.mesh_revocable:MeshRevocableAuth"
 
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
+versioned = "nest_plugins_reference.comms.versioned:VersionedComms"
 
 [project.entry-points."nest.plugins.memory"]
 lww_register = "nest_plugins_reference.memory.lww_register:LwwRegisterMemory"

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Schema evolution comms scenario: forward-compatible unknown fields and
+# breaking major version rejection.
+
+name: comms_schema_evolution
+description: "Mixed-version peers send envelopes to an auditor using schema_evolution comms."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 9
+  brain: state-machine
+  roles:
+    - name: peer
+      count: 8
+    - name: auditor
+      count: 1
+
+layers:
+  comms: versioned
+
+task:
+  type: comms_versioning
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/comms_schema_evolution.jsonl

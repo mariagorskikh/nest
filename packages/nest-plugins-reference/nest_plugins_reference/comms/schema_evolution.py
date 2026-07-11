@@ -1,10 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Versioned communication plugin — forward/backward-compatible wire envelopes.
+"""Schema-evolution-aware comms plugin.
 
-This module implements the canonical `VersionedComms` class which provides an
-in-band `schema_version` and `kind` tag, preserves unknown top-level fields
-from newer-minor peers into `metadata['_unknown']`, and rejects unknown-major
-versions with `UnsupportedSchemaError`.
+This plugin implements a small schema evolution contract for Nanda Town
+wire envelopes:
+
+- every serialized envelope carries an explicit ``schema_version`` and
+  a ``kind`` message tag.
+- same-major versions are accepted.
+- newer-minor fields are preserved and re-emitted on round-trip.
+- unknown-major versions are rejected with a typed ``UnsupportedSchemaError``.
+
+This is the comms layer needed for safe rolling upgrades and compatible
+extension of the wire format.
 """
 
 from __future__ import annotations
@@ -22,17 +29,10 @@ from nest_core.types import (
     Response,
 )
 
-#: Major version this build understands. Bumping it is a *breaking* change:
-#: peers on an older major will reject our envelopes, and we reject theirs.
 SCHEMA_MAJOR = 1
-#: Minor version this build emits. Bumping it must stay backward compatible:
-#: older-minor peers MUST still be able to read our envelopes.
 SCHEMA_MINOR = 1
-#: SemVer string stamped onto every outgoing envelope, e.g. ``"1.1"``.
 SCHEMA_VERSION = f"{SCHEMA_MAJOR}.{SCHEMA_MINOR}"
 
-#: Top-level envelope keys this build assigns meaning to. Anything else on the
-#: wire is an *unknown field* from a newer peer and is preserved, not dropped.
 KNOWN_FIELDS: frozenset[str] = frozenset(
     {
         "schema_version",
@@ -47,20 +47,17 @@ KNOWN_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-#: ``metadata`` keys this plugin reserves for carrying envelope control data in
-#: and out of the :class:`~nest_core.types.Message` model. Callers should treat
-#: these as read-only: ``schema_version`` and ``kind`` report what arrived (and
-#: select what is emitted), and ``_unknown`` holds preserved forward-compat
-#: fields.
-RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"schema_version", "kind", "_unknown"})
+RESERVED_METADATA_KEYS: frozenset[str] = frozenset(
+    {"schema_version", "kind", "_unknown"}
+)
 
 
 class UnsupportedSchemaError(ValueError):
-    """Raised when an envelope's schema version cannot be safely decoded.
+    """Raised when an envelope schema version is unsafe to decode.
 
-    Carries the offending ``version`` string so callers can log or branch on it
-    rather than string-matching the message. Subclasses :class:`ValueError` so
-    existing ``except ValueError`` deserialization guards keep working.
+    This is the safe failure mode for a breaking major version. It subclasses
+    :class:`ValueError` so existing ``except ValueError`` handlers continue to
+    catch versioning failures.
     """
 
     def __init__(self, version: str, detail: str = "") -> None:
@@ -70,12 +67,7 @@ class UnsupportedSchemaError(ValueError):
 
 
 def _parse_major(version: str) -> int:
-    """Return the integer major component of a SemVer string.
-
-    Example::
-
-        assert _parse_major("2.7") == 2
-    """
+    """Return the major SemVer component of a version string."""
     head = version.split(".", 1)[0]
     try:
         return int(head)
@@ -83,12 +75,11 @@ def _parse_major(version: str) -> int:
         raise UnsupportedSchemaError(version, "malformed version") from exc
 
 
-class VersionedComms:
-    """JSON communication protocol with explicit, in-band schema versioning.
+class SchemaEvolutionComms:
+    """Communication layer with explicit in-band schema evolution.
 
-    Drop-in replacement for ``nest_native`` that survives rolling upgrades:
-    unknown fields from newer-minor peers are preserved, and unknown-major
-    peers are rejected rather than silently mis-decoded.
+    This layer preserves forward-compatible unknown fields and rejects
+    unsupported major versions rather than silently decoding them.
     """
 
     def __init__(
@@ -102,18 +93,16 @@ class VersionedComms:
         self._registry = registry
 
     def serialize(self, msg: Message) -> bytes:
-        """Serialize a Message into a versioned JSON envelope.
+        """Serialize a Message to a schema-evolution envelope.
 
-        Stamps :data:`SCHEMA_VERSION` and a ``kind`` tag (read from
-        ``metadata['kind']``, default ``"message"``), and re-emits any
-        forward-compat fields previously parked in ``metadata['_unknown']``.
-        Output is ``sort_keys``-canonical so the same message always produces
-        byte-identical wire bytes (Tier 1 determinism).
+        The envelope is canonical JSON with stable ``sort_keys`` ordering. If
+        the message carries preserved forward-compat fields in
+        ``metadata['_unknown']``, they are re-emitted at the top level.
         """
         meta: dict[str, Any] = dict(msg.metadata)
         version = str(meta.pop("schema_version", SCHEMA_VERSION))
         kind = str(meta.pop("kind", "message"))
-        unknown: dict[str, Any] = meta.pop("_unknown", {}) or {}
+        unknown = meta.pop("_unknown", {}) or {}
 
         envelope: dict[str, Any] = {
             "schema_version": version,
@@ -126,22 +115,16 @@ class VersionedComms:
             "timestamp": msg.timestamp,
             "metadata": meta,
         }
-        # Re-emit preserved unknown fields at the top level. Never let them
-        # clobber a field this build owns -- our semantics win on collision.
         for key, value in unknown.items():
             if key not in envelope:
                 envelope[key] = value
         return json.dumps(envelope, sort_keys=True).encode("utf-8")
 
     def deserialize(self, raw: bytes) -> Message:
-        """Deserialize a versioned envelope, enforcing the compatibility contract.
+        """Deserialize a versioned envelope with the schema evolution contract.
 
-        Accepts any envelope whose major version equals :data:`SCHEMA_MAJOR`
-        (preserving unknown fields from newer minors) and raises
-        :class:`UnsupportedSchemaError` for a higher major or a malformed/
-        non-object envelope. A missing ``schema_version`` is treated as the
-        oldest known release, ``"1.0"`` (backward compat with pre-versioning
-        peers).
+        Missing ``schema_version`` is treated as ``1.0`` for backward compatibility
+        with pre-versioning peers.
         """
         try:
             loaded = json.loads(raw)
@@ -149,8 +132,8 @@ class VersionedComms:
             raise UnsupportedSchemaError("<unparseable>", str(exc)) from exc
         if not isinstance(loaded, dict):
             raise UnsupportedSchemaError("<non-object>", "envelope is not a JSON object")
-        data = cast("dict[str, Any]", loaded)
 
+        data = cast("dict[str, Any]", loaded)
         version = str(data.get("schema_version", "1.0"))
         if _parse_major(version) > SCHEMA_MAJOR:
             raise UnsupportedSchemaError(version, f"this build speaks major {SCHEMA_MAJOR}")
@@ -173,34 +156,16 @@ class VersionedComms:
         )
 
     async def send(self, to: AgentId, msg: Message) -> Response:
-        """Serialize and route a message through the transport layer.
-
-        Example::
-
-            resp = await comms.send(AgentId("a2"), msg)
-        """
         raw = self.serialize(msg)
         if self._transport is not None:
             await self._transport.send(to, raw)
         return Response(success=True)
 
     async def advertise(self, card: AgentCard) -> None:
-        """Advertise an agent card to the registry.
-
-        Example::
-
-            await comms.advertise(my_card)
-        """
         if self._registry is not None:
             await self._registry.register(card)
 
     async def discover(self, query: Query) -> list[AgentCard]:
-        """Discover agents via the registry.
-
-        Example::
-
-            cards = await comms.discover(Query(capabilities=["sell"]))
-        """
         if self._registry is not None:
             result: list[AgentCard] = await self._registry.lookup(query)
             return result
