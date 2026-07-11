@@ -232,7 +232,7 @@ class CidFacts:
         if meta is None:
             msg = f"Dataset not found: {url}"
             raise KeyError(msg)
-        return meta
+        return meta.model_copy(deep=True)
 
     async def request_access(self, url: DataFactsUrl, requester: AgentId) -> AccessGrant:
         """Request access to a dataset; ACL is keyed by content hash, not name.

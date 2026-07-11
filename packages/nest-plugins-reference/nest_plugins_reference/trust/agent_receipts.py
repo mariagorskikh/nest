@@ -22,13 +22,18 @@ A receipt only builds reputation if it clears three independent gates:
 Gate 3 is the novel part. Corroboration alone is gameable: a set of
 distinct-but-colluding identities can mutually co-sign. So we build the directed
 corroboration graph over all agents (issuer -> counterparty, over valid +
-corroborated receipts), take its strongly-connected components, treat the
-**largest** SCC as the honest anchor, and void corroborations from any *other*
-component that is (a) isolated from the anchor (no cross-traffic) and (b) either
-a dense ring (size >= 3, internal density >= 0.8) or a mutual-only pair. A
-severed member's wash-traded receipts — individually corroborated though they
-are — contribute nothing, so it collapses to score 0 / confidence 0, while
-honest agents in the anchor retain their full corroborated score.
+corroborated receipts), take its strongly-connected components, and judge every
+component — the largest included — by one rule: a component is severed iff it is
+(a) **collusion-shaped** (a dense ring of size >= 3 with internal density >=
+0.8, or a mutual-only pair) and (b) **externally uncorroborated** (no
+cross-edges to any clean, non-collusion-shaped component). Component size is
+never evidence of honesty: Sybil identities are free to mint, so a ring grown
+larger than the honest core must not buy immunity by becoming the biggest
+component (issue #97). The symmetric fail-safe: an isolated dense clique with no
+outside trade earns nothing, whatever its size. A severed member's wash-traded
+receipts — individually corroborated though they are — contribute nothing, so it
+collapses to score 0 / confidence 0, while externally-corroborated honest agents
+retain their full score.
 
 This is **self-contained**: it depends only on the standard library and
 ``cryptography`` (already used by the ``ed25519_rotating`` reference identity).
@@ -386,33 +391,62 @@ def _cross_edges(graph: dict[str, dict[str, int]], comp: set[str], other: set[st
     return out + inc
 
 
-def _severed_dids(graph: dict[str, dict[str, int]]) -> set[str]:
-    """Dids in collusion structure isolated from the honest anchor.
+def _collusion_shaped(graph: dict[str, dict[str, int]], comp: list[str]) -> bool:
+    """Whether a component has the shape of a wash-trading structure.
 
-    The largest SCC is the honest anchor. Any *other* SCC with no cross-edges to
-    the anchor is severed iff it is a dense ring (size >= ``RING_MIN_SIZE``,
-    density >= ``RING_MIN_DENSITY``) or a mutual-only pair. Returns the set of
-    severed identities.
+    A component is collusion-shaped iff it is a dense ring (size >=
+    ``RING_MIN_SIZE`` with internal density >= ``RING_MIN_DENSITY``) or a
+    mutual-only pair. These are exactly the criteria :func:`_severed_dids`
+    previously applied only to non-anchor components; extracting them lets
+    severance judge *every* component by evidence shape instead of exempting
+    the largest one (issue #97).
+
+    Example::
+
+        shaped = _collusion_shaped(graph, ["r0", "r1", "r2"])
+    """
+    members = set(comp)
+    if len(members) >= RING_MIN_SIZE and _internal_density(graph, members) >= RING_MIN_DENSITY:
+        return True
+    if len(members) == 2:
+        a, b = comp
+        return b in graph.get(a, {}) and a in graph.get(b, {})
+    return False
+
+
+def _severed_dids(graph: dict[str, dict[str, int]]) -> set[str]:
+    """Dids inside collusion-shaped components with no external corroboration.
+
+    Component **size is never evidence of honesty**: every SCC — the largest
+    included — is judged by the same two-part rule. A component is severed iff
+    it is collusion-shaped (:func:`_collusion_shaped`: dense ring or
+    mutual-only pair) **and** it has zero cross-edges to every *clean*
+    (non-collusion-shaped) component. A single corroborated trade with any
+    clean component exonerates it — an honest agent transacted with it, so it
+    is not isolated.
+
+    This closes the majority-Sybil inversion of issue #97: the previous rule
+    exempted the largest SCC as the "honest anchor", so a ring grown past the
+    honest core kept its wash-traded reputation while the honest minority was
+    severed. Sybil identities are free to mint, so size is the one signal the
+    attacker fully controls; the shape of the evidence and its external
+    corroboration are not. Symmetric fail-safe consequence: an isolated dense
+    clique with no external corroboration earns nothing, whatever its size.
 
     Example::
 
         severed = _severed_dids(_corroboration_graph(receipts))
     """
     comps = _sccs(graph)
-    if not comps:
-        return set()
-    anchor = set(comps[0])
+    clean = [set(comp) for comp in comps if not _collusion_shaped(graph, comp)]
     severed: set[str] = set()
-    for comp in comps[1:]:
+    for comp in comps:
+        if not _collusion_shaped(graph, comp):
+            continue
         members = set(comp)
-        if _cross_edges(graph, members, anchor) > 0:
+        if any(_cross_edges(graph, members, other) > 0 for other in clean):
             continue  # an honest agent transacted with it — not isolated
-        if len(members) >= RING_MIN_SIZE and _internal_density(graph, members) >= RING_MIN_DENSITY:
-            severed |= members
-        elif len(members) == 2:
-            a, b = comp
-            if b in graph.get(a, {}) and a in graph.get(b, {}):
-                severed |= members
+        severed |= members
     return severed
 
 

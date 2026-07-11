@@ -277,11 +277,20 @@ def validate_auction_winner_highest(
         # The invariant is about the winner's REAL bid, not the announced
         # amount. Trusting the announced amount lets an auctioneer award a low
         # bidder while announcing a figure inflated past every real bid, and the
-        # check would pass. Use the winner's own highest observed bid; fall back
-        # to the announced amount only when the winner's bid was not observed
-        # (e.g. dropped under message loss), so this never fails a valid trace.
+        # check would pass. A winner with NO observed bid cannot be the highest
+        # bidder either: bid send-events are recorded at send time and survive
+        # message loss (loss emits a separate "dropped" delivery event), so an
+        # absent winner bid means a fabricated/shill award — never fall back to
+        # the announced amount.
         winner_bids = [amount for bidder, amount in item_bids if bidder == winner]
-        effective_winner_bid = max(winner_bids) if winner_bids else winning_amount
+        if not winner_bids:
+            if item_bids:
+                violations.append(
+                    f"item {item}: winner {winner} announced {winning_amount} "
+                    f"but placed no observed bid"
+                )
+            continue
+        effective_winner_bid = max(winner_bids)
         for bidder, amount in item_bids:
             if amount > effective_winner_bid:
                 violations.append(
@@ -384,9 +393,22 @@ def validate_auction_all_notified(
 def validate_voting_tally(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """The announced result matches the actual vote count."""
-    # round -> list of votes
-    votes: dict[str, list[str]] = defaultdict(list)
+    """The announced result matches the actual vote count.
+
+    Votes are tallied per unique voter (first vote wins), using the same
+    voter-identity rule as ``validate_voting_no_double_vote``: the explicit
+    voter field when present (``vote:<round>:<vote>:<voter>``), otherwise the
+    sending agent. A duplicate vote therefore cannot inflate a tally into one
+    this validator certifies — previously a voter voting twice plus a
+    coordinator announcing the inflated count passed as "correct".
+
+    Example::
+
+        vote:1:yes:voter-0 (sent twice) + result:1:passed:2/2 -> FAIL;
+        the deduplicated tally is 1/1.
+    """
+    # round -> voter -> first vote cast
+    votes: dict[str, dict[str, str]] = defaultdict(dict)
     # round -> (result_str, yes_count, total)
     results: dict[str, tuple[str, int, int]] = {}
 
@@ -396,10 +418,17 @@ def validate_voting_tally(
         msg = _message_body(ev)
         if msg.startswith("vote:"):
             parts = msg.split(":")
-            if len(parts) >= 3:
+            if len(parts) >= 4:
                 rnd = parts[1]
                 vote = parts[2]
-                votes[rnd].append(vote)
+                voter = parts[3]
+            elif len(parts) >= 3:
+                rnd = parts[1]
+                vote = parts[2]
+                voter = ev.get("agent", "")
+            else:
+                continue
+            votes[rnd].setdefault(voter, vote)
         elif msg.startswith("result:"):
             parts = msg.split(":")
             if len(parts) >= 4:
@@ -416,9 +445,9 @@ def validate_voting_tally(
 
     mismatches: list[str] = []
     for rnd, (_result_str, reported_yes, reported_total) in results.items():
-        actual_votes = votes.get(rnd, [])
-        actual_yes = sum(1 for v in actual_votes if v == "yes")
-        actual_total = len(actual_votes)
+        per_voter = votes.get(rnd, {})
+        actual_yes = sum(1 for v in per_voter.values() if v == "yes")
+        actual_total = len(per_voter)
         if actual_yes != reported_yes or actual_total != reported_total:
             mismatches.append(
                 f"round {rnd}: reported {reported_yes}/{reported_total} "
@@ -2761,6 +2790,158 @@ def validate_comms_authentic_delivery(
 
 
 # ---------------------------------------------------------------------------
+# Comms replay-attack validator (adversarial)
+# ---------------------------------------------------------------------------
+# Ground truth for "was this id replayed?" is the wire itself: how many times a
+# given envelope id was actually delivered to the receiver, independent of the
+# decoder under test. An id delivered more than once means an attacker (or a
+# faithfully-replaying relay) captured a genuine envelope and re-sent it. A
+# comms layer passes iff it accepts the *first* delivery of every id and
+# rejects every delivery after that. ``versioned`` and ``authenticated`` have
+# no replay memory -- a captured, byte-identical envelope re-verifies every
+# time -- so they accept the duplicate and fail; ``replay_safe`` remembers
+# accepted ids per sender and rejects the repeat.
+
+
+def _collect_comms_wire_sequence(
+    events: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Map each envelope id to *every* delivery it received, in trace order.
+
+    Unlike :func:`_collect_comms_wire` (which keeps only the last delivery per
+    id), this keeps the full sequence so a second delivery of the same id --
+    the replay itself -- is visible rather than overwritten.
+
+    Example::
+
+        deliveries = _collect_comms_wire_sequence(events)
+        assert len(deliveries["m-0-replayed"]) == 2
+    """
+    wire: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        env = _parse_comms_envelope(str(ev.get("msg", "")))
+        if env is None:
+            continue
+        mid = str(env.get("id"))
+        version = str(env.get("schema_version", "1.0"))
+        wire[mid].append({"version": version, "major": _comms_major(version)})
+    return wire
+
+
+def _collect_comms_ack_sequence(events: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Map each envelope id to the ordered list of ack statuses it received.
+
+    Unlike :func:`_collect_comms_acks` (last ack wins), this preserves every
+    ack in emission order so the first (genuine) delivery's outcome can be
+    checked separately from the replay's.
+
+    Example::
+
+        acks = _collect_comms_ack_sequence(events)
+        assert acks["m-0-replayed"] == ["accepted", "rejected_replay"]
+    """
+    acks: dict[str, list[str]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("ack:"):
+            continue
+        parts = msg.split(":", 3)
+        if len(parts) < 3:
+            continue
+        mid, status = parts[1], parts[2]
+        acks[mid].append(status)
+    return acks
+
+
+def validate_comms_replay_resistance(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every delivery of an id after the first must be rejected as a replay.
+
+    Catches the *replay* attack: an on-path attacker (or relay) captures a
+    genuinely-tagged envelope and re-sends it verbatim. Nothing was rewritten,
+    so tamper-evidence alone (``authenticated``) still verifies it; only a
+    plugin that remembers accepted ids (``replay_safe``) can tell the second
+    delivery apart from the first.
+
+    Example::
+
+        results = validate_comms_replay_resistance(events)
+    """
+    wire = _collect_comms_wire_sequence(events)
+    acks = _collect_comms_ack_sequence(events)
+    replayed = {mid: deliveries for mid, deliveries in wire.items() if len(deliveries) > 1}
+    if not replayed:
+        return [
+            ValidationResult("comms_replay_resistance", False, "no replayed envelopes in trace")
+        ]
+    violations: list[str] = []
+    for mid, deliveries in replayed.items():
+        statuses = acks.get(mid, [])
+        if len(statuses) < len(deliveries):
+            violations.append(
+                f"{mid}: {len(deliveries)} deliveries but only {len(statuses)} ack(s)"
+            )
+            continue
+        for i, status in enumerate(statuses[1 : len(deliveries)], start=2):
+            if not status.startswith("rejected"):
+                violations.append(f"{mid}: replay delivery #{i} not rejected (got {status})")
+    if violations:
+        return [ValidationResult("comms_replay_resistance", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_replay_resistance",
+            True,
+            f"{len(replayed)} replayed envelope(s) correctly rejected after first delivery",
+        )
+    ]
+
+
+def validate_comms_replay_honest_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The first delivery of every id must still be accepted (no false positives).
+
+    The liveness counterpart to :func:`validate_comms_replay_resistance`: a
+    plugin cannot pass the replay check by refusing all traffic. Every id's
+    first delivery -- replayed later or not -- must be accepted.
+
+    Example::
+
+        results = validate_comms_replay_honest_delivery(events)
+    """
+    wire = _collect_comms_wire_sequence(events)
+    acks = _collect_comms_ack_sequence(events)
+    if not wire:
+        return [
+            ValidationResult(
+                "comms_replay_honest_delivery", False, "no delivered envelopes in trace"
+            )
+        ]
+    violations: list[str] = []
+    for mid in wire:
+        statuses = acks.get(mid, [])
+        if not statuses:
+            violations.append(f"{mid}: delivered but no ack")
+            continue
+        if statuses[0] != "accepted":
+            violations.append(f"{mid}: first delivery not accepted (got {statuses[0]})")
+    if violations:
+        return [ValidationResult("comms_replay_honest_delivery", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_replay_honest_delivery",
+            True,
+            f"{len(wire)} first-time delivery(ies) correctly accepted",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Receipt-reputation (collusion-ring) validators
 # ---------------------------------------------------------------------------
 
@@ -3169,6 +3350,55 @@ def validate_receipt_reputation_honest_confidence(
             "receipt_reputation_honest_confidence",
             True,
             f"{len(honest_conf)} honest corroborated, {len(ring_conf)} ring collapsed to 0",
+        )
+    ]
+
+
+def validate_receipt_reputation_ring_majority(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The scored collusion ring strictly outnumbers the scored honest agents.
+
+    This is the enforcement-liveness check for the majority-ring red-team
+    (issue #97): it proves the trace actually exercised the attack the other
+    two validators defend against — a ring *larger* than the honest population,
+    which the old largest-SCC anchor exemption would have crowned as the honest
+    anchor. Without this check, a scenario quietly shrunk back to a minority
+    ring would pass ``ring_severed`` without ever testing the inversion.
+
+    PASSes iff both populations were scored and ring count > honest count.
+    FAILs on missing populations or a non-majority ring — without crashing.
+
+    Example::
+
+        results = validate_receipt_reputation_ring_majority(events)
+    """
+    scores = _collect_scores(events)
+    ring_count = sum(1 for (_s, _c, role) in scores.values() if role == "ring")
+    honest_count = sum(1 for (_s, _c, role) in scores.values() if role == "honest")
+
+    if ring_count == 0 or honest_count == 0:
+        return [
+            ValidationResult(
+                "receipt_reputation_ring_majority",
+                False,
+                f"missing populations: {ring_count} ring, {honest_count} honest scored",
+            )
+        ]
+    if ring_count <= honest_count:
+        return [
+            ValidationResult(
+                "receipt_reputation_ring_majority",
+                False,
+                f"ring is not a majority: {ring_count} ring <= {honest_count} honest — "
+                "the trace never exercised the issue #97 inversion",
+            )
+        ]
+    return [
+        ValidationResult(
+            "receipt_reputation_ring_majority",
+            True,
+            f"attack precondition held: {ring_count} ring > {honest_count} honest",
         )
     ]
 
@@ -4078,14 +4308,24 @@ def validate_bft_no_stuck_view(
 # ---------------------------------------------------------------------------
 
 
-_MAX_PLAUSIBLE_GAP = 22.0
-"""Longest silence (logical time) that a *live* peer can plausibly produce.
+_GAP_MARGIN = 2.0
+"""Safety margin added to ``hb_max`` when deriving the plausible-gap bound.
 
-Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with ``hb_max == 20`` and
-zero message drop, so consecutive observer receipts from a living peer are at
-most 20 apart.  A 2-unit margin gives 22: if the observer received a heartbeat
-within this window, the peer was provably alive and any suspicion of it is a
-false positive.
+Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with zero message drop,
+so consecutive observer receipts from a living peer are at most ``hb_max``
+apart; the margin absorbs event-queue rounding.  If the observer received a
+heartbeat within ``hb_max + _GAP_MARGIN``, the peer was provably alive and any
+suspicion of it is a false positive.
+"""
+
+_MAX_PLAUSIBLE_GAP = 22.0
+"""Fallback plausible-gap bound for traces without an ``fd:config`` marker.
+
+Current scenario runs carry their heartbeat bound in an ``fd:config`` marker
+and :func:`_fd_max_plausible_gap` derives the bound from it, so re-running with
+different ``hb_max`` values cannot silently invalidate the accuracy check.
+This constant (the default ``hb_max == 20`` plus the margin) applies only to
+traces recorded before the marker existed.
 """
 
 _ACCURACY_WARMUP = 100.0
@@ -4116,6 +4356,32 @@ def _parse_fd_record(ev: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(obj, dict):
         return None
     return cast("dict[str, Any]", obj)
+
+
+def _fd_max_plausible_gap(events: list[dict[str, Any]], observer_ids: set[str]) -> float:
+    """Derive the live-peer plausible-gap bound from the trace itself.
+
+    The observer broadcasts one ``fd:config`` marker carrying the scenario's
+    ``hb_max``; the bound is ``hb_max + _GAP_MARGIN``.  Only a marker emitted by
+    an observer (an agent that also publishes ``fd:status`` verdicts) is
+    trusted, so a Byzantine emitter cannot broadcast a spoofed ``fd:config`` to
+    inflate the bound.  Traces without a trusted marker fall back to
+    :data:`_MAX_PLAUSIBLE_GAP`.
+
+    Example::
+
+        gap = _fd_max_plausible_gap(events, _fd_observer_ids(events))
+    """
+    for ev in events:
+        if ev.get("agent") not in observer_ids:
+            continue
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "config":
+            continue
+        hb_max = rec.get("hb_max")
+        if isinstance(hb_max, (int, float)):
+            return float(hb_max) + _GAP_MARGIN
+    return _MAX_PLAUSIBLE_GAP
 
 
 def _fd_observer_ids(events: list[dict[str, Any]]) -> set[str]:
@@ -4383,9 +4649,10 @@ def validate_failure_detection_accuracy(
 
     Accuracy: after a warm-up, while a peer is provably reachable -- it is inside
     a reachable ``fd:phase`` segment *and* the observer received a heartbeat from
-    it no longer than ``_MAX_PLAUSIBLE_GAP`` ago -- the detector must not suspect
-    it.  A tight fixed timeout violates this on the upper tail of normal
-    heartbeat jitter; an accrual detector does not.
+    it no longer than the plausible-gap bound ago (derived from the trace's
+    ``fd:config`` marker by :func:`_fd_max_plausible_gap`) -- the detector must
+    not suspect it.  A tight fixed timeout violates this on the upper tail of
+    normal heartbeat jitter; an accrual detector does not.
 
     Recovery: a peer that genuinely went down and came back must end its final
     reachable segment un-suspected.
@@ -4397,6 +4664,7 @@ def validate_failure_detection_accuracy(
     statuses = _fd_statuses(events)
     observer_ids = _fd_observer_ids(events)
     receipts = _fd_hb_receipts(events, observer_ids)
+    max_gap = _fd_max_plausible_gap(events, observer_ids)
     watched = sorted(statuses.keys())
 
     # ----- accuracy: no false suspicion of a provably-live peer -----
@@ -4420,7 +4688,7 @@ def validate_failure_detection_accuracy(
             if not _in_any_interval(t, intervals):
                 continue
             recent = _last_leq(peer_receipts, t)
-            if recent is not None and (t - recent) <= _MAX_PLAUSIBLE_GAP:
+            if recent is not None and (t - recent) <= max_gap:
                 false_positives.append(
                     f"{peer}: suspected at t={t} but a heartbeat arrived {round(t - recent, 3)} ago"
                 )
@@ -4479,6 +4747,95 @@ def validate_failure_detection_accuracy(
         )
 
     return [accuracy, recovery]
+
+
+def validate_failure_detection_no_forged_liveness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Forged heartbeats must not keep a genuinely dead peer looking alive.
+
+    The attack: while a peer is inside an unreachable ground-truth segment, a
+    Byzantine agent keeps broadcasting heartbeats that *claim* the dead peer's
+    id.  A forged receipt is any observer-received ``FDHB|`` payload whose
+    claimed id differs from the transport-level sender.  For every outage
+    segment during which such forgeries arrived, the detector must still have
+    the peer suspected at the last in-segment status update -- forged liveness
+    must not mask the crash.
+
+    A trace with no forged receipt at all, or whose forgeries never overlap an
+    outage, is a scenario setup failure: this validator is only registered for
+    the forgery scenario, whose entire point is that the attack fires.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+    observer_ids = _fd_observer_ids(events)
+
+    forged: dict[str, list[float]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive" or ev.get("agent") not in observer_ids:
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("FDHB|"):
+            continue
+        claimed = msg[len("FDHB|") :].split("|", 1)[0]
+        sender = ev.get("from")
+        ts = ev.get("ts")
+        if not claimed or not isinstance(sender, str) or not isinstance(ts, (int, float)):
+            continue
+        if claimed != sender:
+            forged[claimed].append(float(ts))
+
+    if not forged:
+        return [
+            ValidationResult(
+                "failure_detection_no_forged_liveness",
+                False,
+                "no forged heartbeat received in trace",
+            )
+        ]
+
+    failures: list[str] = []
+    checked = 0
+    for victim in sorted(forged):
+        forged_ts = forged[victim]
+        downs = [
+            (start, end)
+            for start, end, reachable in _segments_for_peer(transitions.get(victim, []), last_ts)
+            if not reachable
+        ]
+        victim_statuses = statuses.get(victim, [])
+        for u_start, u_end in downs:
+            if not any(u_start < t <= u_end for t in forged_ts):
+                continue
+            checked += 1
+            in_window = [(t, s) for (t, s) in victim_statuses if u_start < t <= u_end]
+            if not in_window:
+                failures.append(f"{victim}: no status during attacked outage [{u_start}, {u_end}]")
+            elif not in_window[-1][1]:
+                failures.append(
+                    f"{victim}: forged heartbeats masked the outage [{u_start}, {u_end}] "
+                    "(not suspected at segment end)"
+                )
+
+    if checked == 0:
+        return [
+            ValidationResult(
+                "failure_detection_no_forged_liveness",
+                False,
+                "forged heartbeats never overlapped an outage segment",
+            )
+        ]
+    if failures:
+        return [
+            ValidationResult("failure_detection_no_forged_liveness", False, "; ".join(failures))
+        ]
+    return [
+        ValidationResult(
+            "failure_detection_no_forged_liveness",
+            True,
+            f"forged liveness rejected across {checked} attacked outage segment(s)",
+        )
+    ]
 
 
 def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:
@@ -4934,6 +5291,10 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_comms_downgrade_resistance,
         validate_comms_authentic_delivery,
     ],
+    "comms_replay": [
+        validate_comms_replay_resistance,
+        validate_comms_replay_honest_delivery,
+    ],
     "marketplace": [
         validate_marketplace_no_double_sell,
         validate_marketplace_responses,
@@ -4998,6 +5359,11 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
     ],
+    "receipt_reputation_majority": [
+        validate_receipt_reputation_ring_severed,
+        validate_receipt_reputation_honest_confidence,
+        validate_receipt_reputation_ring_majority,
+    ],
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
         validate_multi_attribute_individually_rational,
@@ -5023,6 +5389,11 @@ VALIDATORS: dict[str, list[Any]] = {
     "failure_detection": [
         validate_failure_detection_completeness,
         validate_failure_detection_accuracy,
+    ],
+    "failure_detection_forgery": [
+        validate_failure_detection_completeness,
+        validate_failure_detection_accuracy,
+        validate_failure_detection_no_forged_liveness,
     ],
     "parc_migration": [
         validate_parc_honest_admitted,

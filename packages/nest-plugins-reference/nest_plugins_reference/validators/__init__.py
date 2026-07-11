@@ -36,6 +36,11 @@ from nest_plugins_reference.validators.privacy_validators import (
     check_stale_revocation_blocked,
     corrupt_proof,
 )
+from nest_plugins_reference.validators.revocation_propagation_validators import (
+    check_partition_liveness,
+    check_revocation_converges,
+    find_partition_ticks,
+)
 from nest_plugins_reference.validators.trust_gate_validators import (
     check_denial_receipt_auditable,
     check_gate_tamper_rejected,
@@ -59,9 +64,12 @@ __all__ = [
     "check_no_scope_escalation",
     "check_no_stale_ancestor_use",
     "check_partial_redaction_enforced",
+    "check_partition_liveness",
     "check_replay_rejected",
+    "check_revocation_converges",
     "check_stale_revocation_blocked",
     "corrupt_proof",
     "extract_delegation_audits",
+    "find_partition_ticks",
     "forge_tier_upgrade",
 ]
