@@ -108,6 +108,12 @@ class FailureConfig(BaseModel):
     byzantine_agents: float = 0.0
     network_partition: dict[str, Any] | None = None
     partition_heal_at_tick: int | None = None
+    # The ``_at_time`` variants gate on simulation time (what agents see as
+    # ``ctx.time``) rather than the count of processed events. Prefer them:
+    # event counts vary with message volume, so the same event number lands at
+    # a different simulated instant when a scenario's plugins chatter more.
+    partition_start_at_time: float | None = None
+    partition_heal_at_time: float | None = None
 
     @field_validator("message_drop", "byzantine_agents")
     @classmethod

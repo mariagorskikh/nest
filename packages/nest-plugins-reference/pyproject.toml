@@ -33,6 +33,9 @@ Repository = "https://github.com/projnanda/nandatown"
 # package. The PluginRegistry also keeps built-in defaults keyed by
 # (layer, name), but declaring the entry point here is the documented,
 # install-time discovery path described in CONTRIBUTING.md.
+[project.entry-points."nest.plugins.auth"]
+mesh_revocable = "nest_plugins_reference.auth.mesh_revocable:MeshRevocableAuth"
+
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"
 

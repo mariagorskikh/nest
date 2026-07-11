@@ -3,10 +3,11 @@
 """Unit tests for the agent_receipts trust plugin.
 
 Covers receipt verification, counterparty corroboration, Tarjan-SCC collusion
-severance (honest anchor vs isolated ring), the no-receipt fallback, and the
-Trust-protocol surface. The make-or-break invariant -- that the honest
-population is the *largest* SCC and only the ring is severed -- is asserted
-directly against the severance primitive.
+severance (shape-based: dense isolated rings and mutual-only pairs are severed
+regardless of component size — issue #97), the no-receipt fallback, and the
+Trust-protocol surface. The make-or-break invariant -- that an isolated
+collusion-shaped component is severed at *every* size ratio while the sparse
+honest cycle is spared -- is asserted directly against the severance primitive.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from nest_core.types import AgentId, Claim, Evidence
 from nest_plugins_reference.trust.agent_receipts import (
     AgentReceiptsTrust,
+    _collusion_shaped,
     _corroboration_graph,
     _normalize,
     _sccs,
@@ -134,6 +136,94 @@ class TestSeverance:
 
     def test_empty_graph_severs_nothing(self) -> None:
         assert _severed_dids({}) == set()
+
+    def _clique(self, names: list[str], *, tag: str) -> list[dict[str, object]]:
+        """All distinct ordered pairs, both directions — a dense isolated SCC."""
+        receipts: list[dict[str, object]] = []
+        for i, issuer in enumerate(names):
+            for j, cp in enumerate(names):
+                if i != j:
+                    receipts.append(_corroborated(issuer, cp, rid=f"{tag}{i}-{j}"))
+        return receipts
+
+    def _cycle_chord(self, names: list[str], *, tag: str) -> list[dict[str, object]]:
+        """Directed cycle + chord — one sparse SCC (density 2/(n-1), clean shape)."""
+        receipts: list[dict[str, object]] = []
+        n = len(names)
+        for i in range(n):
+            for step in (1, 2):
+                receipts.append(
+                    _corroborated(names[i], names[(i + step) % n], rid=f"{tag}{i}-{step}")
+                )
+        return receipts
+
+    def test_majority_ring_still_severed(self) -> None:
+        """Issue #97: a ring grown *larger* than the honest core is still severed.
+
+        Previously the largest SCC was exempt as the "honest anchor", so an
+        8-member wash ring facing a 5-member honest cycle became the anchor and
+        kept its manufactured reputation (severed == empty set). Severance is
+        now size-blind: the dense isolated ring is severed, the sparse honest
+        cycle is spared.
+        """
+        honest = [f"mh{i}" for i in range(5)]
+        ring = [f"mr{i}" for i in range(8)]
+        receipts = self._cycle_chord(honest, tag="mh") + self._clique(ring, tag="mr")
+        severed = _severed_dids(_corroboration_graph(receipts))
+        assert severed == {_did(r) for r in ring}
+
+    def test_issue_97_repro_ring_never_escapes(self) -> None:
+        """The exact issue #97 graph: two isolated cliques, ring the larger one.
+
+        The ring can no longer buy immunity with size. The evidence-free honest
+        3-clique is *also* severed: an isolated dense clique with zero external
+        corroboration is indistinguishable from a wash ring by graph shape, so
+        the plugin refuses to certify either (fail-safe) instead of guessing by
+        size (fail-open to the attacker).
+        """
+        honest = ["qh1", "qh2", "qh3"]
+        ring = ["qs1", "qs2", "qs3", "qs4", "qs5"]
+        receipts = self._clique(honest, tag="qh") + self._clique(ring, tag="qs")
+        severed = _severed_dids(_corroboration_graph(receipts))
+        assert {_did(r) for r in ring} <= severed
+        assert severed == {_did(a) for a in honest + ring}
+
+    def test_two_isolated_rings_both_severed(self) -> None:
+        """A suspect neighbor does not exonerate.
+
+        Two dense rings bridged only to each other (no contact with any clean
+        component) are both severed — exoneration requires a corroborated edge
+        to a *clean* component, not merely to another suspect.
+        """
+        honest = [f"th{i}" for i in range(8)]
+        ring_a = [f"ta{i}" for i in range(3)]
+        ring_b = [f"tb{i}" for i in range(3)]
+        receipts = (
+            self._cycle_chord(honest, tag="th")
+            + self._clique(ring_a, tag="ta")
+            + self._clique(ring_b, tag="tb")
+        )
+        receipts.append(_corroborated(ring_a[0], ring_b[0], rid="t-bridge"))
+        severed = _severed_dids(_corroboration_graph(receipts))
+        assert severed == {_did(a) for a in ring_a + ring_b}
+
+    def test_isolated_mutual_pair_still_severed(self) -> None:
+        """Edge-case pin: an isolated mutual-only pair is severed, as before."""
+        honest = [f"ph{i}" for i in range(5)]
+        receipts = self._cycle_chord(honest, tag="ph")
+        receipts.append(_corroborated("pp1", "pp2", rid="pair-1"))
+        receipts.append(_corroborated("pp2", "pp1", rid="pair-2"))
+        severed = _severed_dids(_corroboration_graph(receipts))
+        assert severed == {_did("pp1"), _did("pp2")}
+
+    def test_collusion_shape_classification(self) -> None:
+        """A sparse honest cycle is clean; a dense clique is collusion-shaped."""
+        honest = [f"ch{i}" for i in range(5)]
+        ring = [f"cr{i}" for i in range(4)]
+        receipts = self._cycle_chord(honest, tag="ch") + self._clique(ring, tag="cr")
+        graph = _corroboration_graph(receipts)
+        assert _collusion_shaped(graph, sorted(_did(r) for r in ring)) is True
+        assert _collusion_shaped(graph, sorted(_did(h) for h in honest)) is False
 
 
 class TestScore:

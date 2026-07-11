@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+# Delegated-auth partition scenario: revocation during a network split.
+# Every verifier owns its own auth replica; revocation knowledge travels
+# only by gossip. The coordinator revokes intermediary-1's grant WHILE the
+# mesh is partitioned: the far-side gateway keeps honoring that subtree
+# (partition liveness), then denies it mesh-wide within a bounded number
+# of gossip rounds after the heal (revocation convergence). Under
+# auth: mesh_revocable both validators pass; under per-replica
+# auth: delegatable convergence fails (see
+# nest_plugins_reference.validators.revocation_propagation_validators).
+#
+# The partition window is expressed in simulation time, so it is identical
+# whichever auth plugin is swapped in -- an event-count window would drift,
+# because a gossiping plugin processes far more events per simulated tick.
+
+name: delegated_auth_partition
+description: |
+  A coordinator delegates through 2 intermediaries to 6 leaves, which
+  present tokens to 2 independent verifiers. The mesh partitions; the
+  coordinator revokes the far-side subtree's grant during the split.
+  After the heal, gossiped revocation state must converge mesh-wide.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: coordinator
+      count: 1
+    - name: gateway
+      count: 1
+    - name: intermediary
+      count: 2
+    - name: leaf
+      count: 6
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: mesh_revocable
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: delegated_auth_partition
+  config:
+    revoke_tick: 20
+    gossip_interval: 5
+    gossip_until: 95
+    presents: 15
+    present_interval: 6
+
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+  network_partition:
+    groups:
+      - [coordinator-0, intermediary-0, leaf-0, leaf-1, leaf-2]
+      - [gateway-0, intermediary-1, leaf-3, leaf-4, leaf-5]
+  # Grants are delivered by t=2; revocation lands at t=20, inside the split.
+  partition_start_at_time: 10.0
+  partition_heal_at_time: 55.0
+
+duration: "ticks: 100000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/delegated_auth_partition.jsonl

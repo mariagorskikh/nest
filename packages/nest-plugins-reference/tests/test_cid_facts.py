@@ -89,6 +89,33 @@ class TestProtocolConformance:
         with pytest.raises(KeyError):
             await facts.fetch("df://sha256-doesnotexist")  # type: ignore[arg-type]
 
+    @pytest.mark.asyncio
+    async def test_fetch_returns_defensive_copy(self) -> None:
+        """Mutating a fetched dataset must not mutate the registry."""
+
+        ident = DidKeyIdentity(AgentId("a1"), seed=b"s")
+        facts = CidFacts(ident)
+
+        dataset = DatasetMetadata(
+            name="raw",
+            owner=AgentId("a1"),
+            description="original",
+            metadata={"key": "value"},
+        )
+
+        url = await facts.publish(dataset)
+
+        fetched = await facts.fetch(url)
+
+        # Attempt to mutate the returned object.
+        fetched.description = "tampered"
+        fetched.metadata["key"] = "changed"
+
+        fetched_again = await facts.fetch(url)
+
+        assert fetched_again.description == "original"
+        assert fetched_again.metadata["key"] == "value"
+
 
 # ---------------------------------------------------------------------------
 # Provenance

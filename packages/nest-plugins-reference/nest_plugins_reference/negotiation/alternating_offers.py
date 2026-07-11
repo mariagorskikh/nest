@@ -9,8 +9,6 @@ Example::
 
 from __future__ import annotations
 
-import uuid
-
 from nest_core.types import (
     AgentId,
     Agreement,
@@ -19,6 +17,8 @@ from nest_core.types import (
     NegotiationStatus,
     Terms,
 )
+
+from ._ids import derive_session_id
 
 
 class AlternatingOffers:
@@ -34,16 +34,23 @@ class AlternatingOffers:
         self._agent_id = agent_id
         self._patience = patience
         self._sessions: dict[str, NegotiationSession] = {}
+        self._session_seq = 0
 
     async def open(self, partner: AgentId, terms: Terms) -> NegotiationSession:
         """Open a negotiation with initial terms.
+
+        The session id is derived deterministically from the initiating agent,
+        the partner, and a monotonic per-initiator sequence number, so a seeded
+        run replays byte-for-byte (ADR-004) instead of drawing a fresh ``uuid4``
+        each run. See :func:`._ids.derive_session_id`.
 
         Example::
 
             session = await neg.open(AgentId("a2"), terms)
         """
+        self._session_seq += 1
         session = NegotiationSession(
-            id=str(uuid.uuid4()),
+            id=derive_session_id(self._agent_id, partner, self._session_seq),
             initiator=self._agent_id,
             partner=partner,
             status=NegotiationStatus.OPEN,
