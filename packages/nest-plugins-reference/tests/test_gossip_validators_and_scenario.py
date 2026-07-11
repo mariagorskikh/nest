@@ -260,6 +260,64 @@ def test_scenario_converges_via_bridge_under_partition(seed: int) -> None:
         assert conv_report.passed, f"seed={seed} divergence: {conv_report.detail}"
 
 
+@pytest.mark.parametrize("seed", [42, 7, 1337])
+def test_scenario_honors_partition_before_bridge_relay(seed: int) -> None:
+    """End-to-end: the real Simulator's partition drops actually isolate groups.
+
+    ``test_scenario_converges_via_bridge_under_partition`` above only checks
+    the *end* state (full convergence via the bridge) — it never asserts
+    ``check_no_partition_view_leak`` against a real mid-run snapshot, so a
+    regression that let ``GossipRegistry`` leak a card straight across the
+    partition (bypassing the bridge, e.g. by consulting a cached/global view)
+    would go uncaught: ``check_no_partition_view_leak`` itself is only ever
+    exercised against hand-rolled fake networks elsewhere in this file and in
+    ``test_gossip_registry.py``, never against the real ``_should_drop``
+    partition logic in ``nest_core.sim.simulator``.
+
+    Runs the real scenario for a truncated duration (``ticks: 200``) — long
+    enough that agents have already gossiped with peers inside their own
+    partition group (empirically confirmed: by tick 200 several agents' view
+    sizes exceed 1, i.e. this is checking real propagated data, not just each
+    agent's own ``on_start`` self-registration), but short enough that no
+    card has had time to relay across the bridge yet (`duration: "ticks:
+    10000"` caps *events*, not wall-clock time, and event-to-round timing is
+    seed-dependent — empirically, seeds 42/7/1337 all still pass at tick 250
+    but seed 42 starts failing legitimately by tick 300 once the bridge has
+    relayed a card, so 200 leaves comfortable margin either side).
+    """
+    if not SCENARIO_PATH.exists():
+        pytest.skip(f"scenario not found at {SCENARIO_PATH}")
+
+    config = ScenarioConfig.from_yaml(str(SCENARIO_PATH))
+    config = config.model_copy(update={"seed": seed, "duration": "ticks: 200"})
+
+    with tempfile.TemporaryDirectory() as tmp:
+        trace_path = Path(tmp) / f"gossip_partition_{seed}.jsonl"
+        config = config.model_copy(
+            update={"output": config.output.model_copy(update={"trace": str(trace_path)})}
+        )
+        runner = ScenarioRunner(config, registry=PluginRegistry())
+        asyncio.run(runner.run())
+
+        per_agent_regs = runner.resolved_plugins.get("_gossip_registries")
+        assert per_agent_regs is not None, "scenario factory should expose _gossip_registries"
+
+        views = {aid: reg.view_snapshot() for aid, reg in per_agent_regs.items()}
+        assert any(len(v) > 1 for v in views.values()), (
+            "expected at least one agent to have gossiped with a peer by tick 200 "
+            "(all views only contain self-registration -- test would be vacuous)"
+        )
+
+        peer_a = [AgentId(f"peer_a-{i}") for i in range(10)]
+        peer_b = [AgentId(f"peer_b-{i}") for i in range(10)]
+        report = check_no_partition_view_leak(
+            views=views,
+            partition_groups=[peer_a, peer_b],
+            bridge_agents={AgentId("bridge-0")},
+        )
+        assert report.passed, f"seed={seed}: {report.detail}"
+
+
 def test_scenario_deterministic_under_replay() -> None:
     """Two runs with seed=42 produce identical per-agent snapshots."""
     if not SCENARIO_PATH.exists():
