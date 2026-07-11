@@ -85,7 +85,9 @@ class TestDeriveSessionId:
         partner=st.text(min_size=1, max_size=16),
         seq=st.integers(min_value=0, max_value=1_000_000),
     )
-    def test_deterministic_over_arbitrary_inputs(self, initiator: str, partner: str, seq: int) -> None:
+    def test_deterministic_over_arbitrary_inputs(
+        self, initiator: str, partner: str, seq: int
+    ) -> None:
         assert derive_session_id(AgentId(initiator), AgentId(partner), seq) == derive_session_id(
             AgentId(initiator), AgentId(partner), seq
         )
