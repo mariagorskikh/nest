@@ -71,11 +71,14 @@ class ScoreAverageTrust:
         """Report evidence, updating the agent's score.
 
         Evidence kind 'positive' adds 1.0, 'negative' adds 0.0, 'byzantine' adds 0.0.
+        Self-reports, where the reporter is the agent being scored, are ignored.
 
         Example::
 
             await trust.report(AgentId("a1"), Evidence(reporter=..., subject=..., kind="negative"))
         """
+        if evidence.reporter == agent:
+            return
         score_val = 0.5
         if evidence.kind == "positive":
             score_val = 1.0

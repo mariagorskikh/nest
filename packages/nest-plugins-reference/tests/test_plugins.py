@@ -273,6 +273,33 @@ class TestScoreAverageTrust:
         score = await trust.score(AgentId("a1"))
         assert score.score == 0.5
 
+    @pytest.mark.asyncio
+    async def test_self_report_is_ignored(self) -> None:
+        from nest_plugins_reference.trust.score_average import ScoreAverageTrust
+
+        trust = ScoreAverageTrust()
+        ev = Evidence(reporter=AgentId("a1"), subject=AgentId("a1"), kind="positive")
+        for _ in range(10):
+            await trust.report(AgentId("a1"), ev)
+
+        score = await trust.score(AgentId("a1"))
+        assert score.score == 0.5
+        assert score.sample_count == 0
+
+    @pytest.mark.asyncio
+    async def test_self_report_does_not_dilute_others(self) -> None:
+        from nest_plugins_reference.trust.score_average import ScoreAverageTrust
+
+        trust = ScoreAverageTrust()
+        other = Evidence(reporter=AgentId("a2"), subject=AgentId("a1"), kind="negative")
+        selfie = Evidence(reporter=AgentId("a1"), subject=AgentId("a1"), kind="positive")
+        await trust.report(AgentId("a1"), other)
+        await trust.report(AgentId("a1"), selfie)
+
+        score = await trust.score(AgentId("a1"))
+        assert score.score == 0.0
+        assert score.sample_count == 1
+
 
 # ---------------------------------------------------------------------------
 # 7. Payments: prepaid_credits
