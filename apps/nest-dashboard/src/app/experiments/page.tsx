@@ -169,11 +169,19 @@ export default function ExperimentsPage() {
               <span className="italic text-ink-700">scenarios</span> to<br />
               probe behaviour.
             </h1>
-            <p className="animate-fade-in stagger-2 text-[1.1rem] leading-[1.6] text-ink-500 max-w-md">
-              Explore the scenarios that ship with Nanda Town. Each one ran with
-              the reference plugins &mdash; every metric here is reproducible
-              from the seed in the YAML.
-            </p>
+            <div className="animate-fade-in stagger-2">
+              <p className="text-[1.1rem] leading-[1.6] text-ink-500 max-w-md">
+                Explore the scenarios that ship with Nanda Town. Each one ran with
+                the reference plugins &mdash; every metric here is reproducible
+                from the seed in the YAML.
+              </p>
+              <Link
+                href="/experiments/gift-card-demo"
+                className="mt-6 inline-flex items-center rounded-full border border-rust/35 bg-rust/10 px-4 py-2 text-[0.82rem] font-semibold tracking-[0.01em] text-rust transition-colors hover:bg-rust/16"
+              >
+                Open mobile gift card demo &rarr;
+              </Link>
+            </div>
           </div>
         </div>
       </section>

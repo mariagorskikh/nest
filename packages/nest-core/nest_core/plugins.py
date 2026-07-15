@@ -55,6 +55,9 @@ _BUILTINS: dict[tuple[str, str], str] = {
     ("privacy", "trust_gated"): f"{_REF}.privacy.trust_gated:TrustGatedPrivacy",
     ("datafacts", "datafacts_v1"): f"{_REF}.datafacts.datafacts_v1:DataFactsV1",
     ("datafacts", "cid_facts"): f"{_REF}.datafacts.cid_facts:CidFacts",
+    ("datafacts", "gift_card_recommender"): (
+        f"{_REF}.datafacts.gift_card_recommender:GiftCardRecommenderFacts"
+    ),
     ("failure_detector", "heartbeat"): (
         f"{_REF}.failure_detection.heartbeat:HeartbeatFailureDetector"
     ),

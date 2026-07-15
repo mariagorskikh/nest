@@ -216,6 +216,77 @@ more agents, with a Byzantine fraction — the same flow.
 You can do this for any of the 12 layers. Trust, coordination, identity,
 auth — all of them follow the same recipe.
 
+### Scenario snippet: gift card recommender (DataFacts)
+
+Select the plugin in your scenario:
+
+```yaml
+name: gift_card_recommender_demo
+seed: 42
+
+agents:
+  count: 2
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 1
+    - name: seller
+      count: 1
+
+layers:
+  datafacts: gift_card_recommender
+
+task:
+  type: marketplace
+  config:
+    rounds: 2
+    catalog_size: 5
+```
+
+Minimal flow that demonstrates recommendation calls:
+
+```python
+from nest_sdk import AgentId, DataFactsUrl, DatasetMetadata
+
+async def demo_flow(datafacts) -> list[dict[str, object]]:
+    # Seller publishes a purchase-history table into DataFacts metadata.
+    url = await datafacts.publish(
+        DatasetMetadata(
+            name="gift-card-history",
+            owner=AgentId("seller-0"),
+            metadata={
+                "purchase_history_table": [
+                    {
+                        "customer_id": "c-001",
+                        "gift_card": "Steam",
+                        "merchant": "Steam",
+                        "category": "gaming",
+                        "amount": 50,
+                        "notes": "teen birthday",
+                    },
+                    {
+                        "customer_id": "c-002",
+                        "gift_card": "Nintendo",
+                        "merchant": "Nintendo",
+                        "category": "gaming",
+                        "amount": 40,
+                        "notes": "teen gift",
+                    },
+                ]
+            },
+        )
+    )
+
+    # Buyer searches historical rows, then asks for ranked recommendations.
+    await datafacts.request_access(url, AgentId("buyer-0"))
+    _rows = datafacts.search_purchase_history(url, "gaming teen")
+    recs = datafacts.recommend_gift_cards(url, "gaming teen", top_k=3)
+    return recs
+```
+
+Runnable example scenario file:
+`scenarios/gift_card_recommender_demo.yaml`
+
 ---
 
 ## Built-in scenarios

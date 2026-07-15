@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# Minimal demo: select the gift-card recommender DataFacts plugin.
+name: gift_card_recommender_demo
+description: "2-agent marketplace demo using gift_card_recommender for purchase-history search and recommendations."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 2
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 1
+    - name: seller
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: gift_card_recommender
+
+task:
+  type: marketplace
+  config:
+    rounds: 2
+    catalog_size: 5
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 500"
+
+metrics:
+  - success_rate
+  - mean_latency
+  - message_count
+
+output:
+  trace: ./traces/gift_card_recommender_demo.jsonl
