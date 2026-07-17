@@ -85,6 +85,33 @@ export async function getSkill(id: string): Promise<Skill | null> {
   return (rows as unknown as Skill[])[0] ?? null;
 }
 
+/**
+ * Look for an identical submission (same name + source) saved in the last
+ * few seconds. Guards against a client double-submit (e.g. a rapid double
+ * click, or a retried request) creating multiple identical rows.
+ */
+export async function findRecentDuplicate(
+  name: string,
+  sourceUrl: string | null,
+  content: string | null,
+  windowSeconds = 15,
+): Promise<Skill | null> {
+  await ensureSchema();
+  const db = sql();
+  const rows = await db`
+    select id, name, author, description, source_type, source_url,
+           content, endpoints, tags, reachable, created_at
+    from skills
+    where name = ${name}
+      and source_url is not distinct from ${sourceUrl}
+      and content is not distinct from ${content}
+      and created_at > now() - make_interval(secs => ${windowSeconds})
+    order by created_at asc
+    limit 1
+  `;
+  return (rows as unknown as Skill[])[0] ?? null;
+}
+
 export async function createSkill(input: NewSkill): Promise<Skill> {
   await ensureSchema();
   const db = sql();

@@ -2,7 +2,12 @@
 
 import { revalidatePath, revalidateTag } from "next/cache";
 import { headers } from "next/headers";
-import { createSkill, SKILLS_CACHE_TAG, type SkillSourceType } from "@/lib/skills";
+import {
+  createSkill,
+  findRecentDuplicate,
+  SKILLS_CACHE_TAG,
+  type SkillSourceType,
+} from "@/lib/skills";
 import { initialSubmitState, type SubmitState } from "./form-state";
 
 function str(value: FormDataEntryValue | null): string {
@@ -112,6 +117,23 @@ export async function submitSkill(
     return {
       ...initialSubmitState,
       error: "Paste the full SkillMD text — that looks too short.",
+    };
+  }
+
+  // --- Reject a near-simultaneous duplicate of the same submission --------
+  // Catches what the client-side submit guard can't: a genuine double POST
+  // (double click before the guard sets, a browser/network retry, etc.).
+  const existingDuplicate = await findRecentDuplicate(
+    name,
+    sourceType === "content" ? null : sourceUrl,
+    sourceType === "content" ? content : null,
+  );
+  if (existingDuplicate) {
+    return {
+      ok: true,
+      error: null,
+      createdId: existingDuplicate.id,
+      createdName: existingDuplicate.name,
     };
   }
 

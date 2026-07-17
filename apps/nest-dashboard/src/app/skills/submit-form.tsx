@@ -36,6 +36,11 @@ export function SubmitForm() {
     CHECKLIST.map(() => false),
   );
   const formRef = useRef<HTMLFormElement>(null);
+  // `pending` from useActionState only flips true after React commits a
+  // render, which lags a rapid double/triple click by at least one frame —
+  // that gap is what let one click create three identical skill rows. This
+  // ref blocks re-entrant submits synchronously, before that render happens.
+  const submittingRef = useRef(false);
 
   // Clear the fields after a successful save.
   useEffect(() => {
@@ -46,8 +51,25 @@ export function SubmitForm() {
     }
   }, [state.ok]);
 
+  // Release the guard once the action has actually resolved (success or
+  // error), so a legitimate resubmit after fixing a validation error works.
+  useEffect(() => {
+    if (!pending) submittingRef.current = false;
+  }, [pending]);
+
   return (
-    <form ref={formRef} action={formAction} className="space-y-7">
+    <form
+      ref={formRef}
+      action={formAction}
+      onSubmit={(e) => {
+        if (submittingRef.current) {
+          e.preventDefault();
+          return;
+        }
+        submittingRef.current = true;
+      }}
+      className="space-y-7"
+    >
       {/* Readiness checklist */}
       <div className="rounded-2xl border border-cream-400/70 bg-cream-100/70 p-5">
         <p className={labelClass}>Before you submit — the steps</p>
