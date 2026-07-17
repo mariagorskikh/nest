@@ -117,12 +117,20 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.comms_downgrade import comms_downgrade_factory
 
         register_scenario("comms_downgrade", comms_downgrade_factory)
-    elif name == "receipt_reputation":
+    elif name == "comms_replay":
+        from nest_core.scenarios_builtin.comms_replay import comms_replay_factory
+
+        register_scenario("comms_replay", comms_replay_factory)
+    elif name in ("receipt_reputation", "receipt_reputation_capsule"):
         from nest_core.scenarios_builtin.receipt_reputation import (
             receipt_reputation_factory,
         )
 
+        # receipt_reputation_capsule shares the task mechanics (ring/byzantine/
+        # auditor roles) but has its own validator set (adds the anchoring
+        # check) — see VALIDATORS in nest_core.validators.
         register_scenario("receipt_reputation", receipt_reputation_factory)
+        register_scenario("receipt_reputation_capsule", receipt_reputation_factory)
     elif name == "empic_payments":
         from nest_core.scenarios_builtin.empic_payments import empic_payments_factory
 
@@ -131,6 +139,12 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.delegated_auth import delegated_auth_factory
 
         register_scenario("delegated_auth", delegated_auth_factory)
+    elif name == "delegated_auth_partition":
+        from nest_core.scenarios_builtin.delegated_auth_partition import (
+            delegated_auth_partition_factory,
+        )
+
+        register_scenario("delegated_auth_partition", delegated_auth_partition_factory)
     elif name == "multi_attribute_market":
         from nest_core.scenarios_builtin.multi_attribute_market import (
             multi_attribute_market_factory,
@@ -159,6 +173,12 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("failure_detection", failure_detection_factory)
+    elif name == "failure_detection_forgery":
+        from nest_core.scenarios_builtin.failure_detection import (
+            failure_detection_factory,
+        )
+
+        register_scenario("failure_detection_forgery", failure_detection_factory)
     elif name == "parc_migration":
         from nest_core.scenarios_builtin.parc_migration import (
             parc_migration_factory,
@@ -175,3 +195,9 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.sybil_bond import sybil_bond_factory
 
         register_scenario("sybil_bond", sybil_bond_factory)
+    elif name == "capability_spoofing":
+        from nest_core.scenarios_builtin.capability_spoofing import (
+            capability_spoofing_factory,
+        )
+
+        register_scenario("capability_spoofing", capability_spoofing_factory)

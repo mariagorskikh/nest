@@ -7,8 +7,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-uv.lock
 traces/
+# Capsule ledger written to cwd by the capsule_emit trust/payments plugins.
+capsule_ledger.jsonl
 
 # Research-harness outputs (per-cell JSONLs, aggregated dataset, plots).
 data/hackathon-runs/*.jsonl

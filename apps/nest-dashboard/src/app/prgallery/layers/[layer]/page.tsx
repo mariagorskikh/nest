@@ -10,14 +10,8 @@ import { notFound } from "next/navigation";
 import { loadDataset, submissionsForLayer } from "@/lib/hackathon";
 import { LayerSubmissions } from "./layer-submissions";
 
-export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
-export async function generateStaticParams() {
-  // Pre-render every known layer at build time. Other slugs fall
-  // through to the dynamic path and 404 on first request.
-  const data = await loadDataset();
-  return data.layers.map((layer) => ({ layer: layer.key }));
-}
 
 export default async function LayerPage({
   params,
@@ -39,7 +33,7 @@ export default async function LayerPage({
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-16 pb-12">
           <div className="flex items-center gap-3 mb-8 animate-fade-in">
             <Link
-              href="/hackathon/layers"
+              href="/prgallery/layers"
               className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-300 hover:text-ink-900"
             >
               ← Layers
@@ -64,13 +58,9 @@ export default async function LayerPage({
                 </dd>
               </div>
               <div>
-                <dt>Top score</dt>
+                <dt>Merged</dt>
                 <dd className="mt-2 font-display text-[1.6rem] leading-none text-ink-900 tabular-nums">
-                  {meta.top_score !== null
-                    ? meta.top_score.toFixed(1)
-                    : subs.length === 0
-                      ? "—"
-                      : "unscored"}
+                  {subs.filter((s) => s.state === "merged").length}
                 </dd>
               </div>
             </dl>

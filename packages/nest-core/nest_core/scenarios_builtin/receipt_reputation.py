@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, cast
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -178,6 +178,12 @@ class AuditorAgent(StateMachineAgent):
     agent and emits a ``score:`` line per agent into the trace; the
     ``receipt_reputation`` validator reads those lines.
 
+    If the trust plugin exposes ``seal_events()`` (e.g. ``CapsuleEmitTrust``),
+    the auditor additionally broadcasts one ``seal:<seq>:<subject_digest>:<chain_hash>``
+    line per seal after all score lines. The ``receipt_reputation_capsule``
+    validator reads those seal lines to verify chain integrity and completeness
+    from the trace alone — no filesystem reads required.
+
     Example::
 
         auditor = AuditorAgent(AgentId("auditor-0"), roster)
@@ -236,7 +242,13 @@ class AuditorAgent(StateMachineAgent):
         )
 
     async def _finalize(self, ctx: AgentContext) -> None:
-        """Score every agent and emit one ``score:`` trace line per agent."""
+        """Score every agent and emit one ``score:`` trace line per agent.
+
+        If the trust plugin exposes ``seal_events()`` (e.g. ``CapsuleEmitTrust``),
+        also broadcasts one ``seal:<seq>:<subject_digest>:<chain_hash>`` line per
+        seal after all score lines, so the anchoring validator can grade the trace
+        without reading the filesystem.
+        """
         if self._trust is None:  # pragma: no cover - on_start always runs first
             return
         for agent in sorted(self._roster, key=str):
@@ -245,6 +257,21 @@ class AuditorAgent(StateMachineAgent):
             await ctx.broadcast(
                 f"score:{agent}:{rep.score:.6f}:{rep.confidence:.6f}:{role}".encode()
             )
+        seal_fn = getattr(self._trust, "seal_events", None)
+        if callable(seal_fn):
+            seals = cast("list[tuple[int, str, str]]", seal_fn())
+            for seq, subject_digest, chain_hash in seals:
+                await ctx.broadcast(f"seal:{seq}:{subject_digest}:{chain_hash}".encode())
+        # Anchoring evidence: pre-obtained confidential-ledger write receipts,
+        # one line per anchored receipt. Only these lines can satisfy the
+        # anchored validator — they carry the ledger service-identity signature
+        # the participant cannot forge. A plugin without the hook (or with an
+        # empty store) emits nothing and the anchored check fails closed.
+        ccf_fn = getattr(self._trust, "ccf_receipt_events", None)
+        if callable(ccf_fn):
+            pairs = cast("list[tuple[str, str]]", ccf_fn())
+            for subject_digest, receipt_hex in pairs:
+                await ctx.broadcast(f"ccfreceipt:{subject_digest}:{receipt_hex}".encode())
 
 
 def _partition(

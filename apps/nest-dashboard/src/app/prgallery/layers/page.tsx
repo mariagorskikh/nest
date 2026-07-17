@@ -1,22 +1,25 @@
 /**
- * /hackathon/layers — the 12-layer grid.
+ * /prgallery/layers — the 12-layer grid.
  *
  * One card per layer. Shows submission count, top score, and an
  * "open for submissions" affordance on empty layers.
  */
 
 import Link from "next/link";
-import { formatScore, loadDataset } from "@/lib/hackathon";
+import { loadDataset } from "@/lib/hackathon";
 
-export const revalidate = 300;
+// Render at request time; the GitHub data layer is cached by
+// unstable_cache, so this never re-fetches per request but also never bakes
+// an empty snapshot at build time when GitHub is unreachable.
+export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Hackathon layers — Nanda Town",
+  title: "PR Gallery layers — Nanda Town",
   description:
-    "Browse hackathon submissions by the 12 Nanda Town protocol layers.",
+    "Browse every pull request by the 12 Nanda Town protocol layers.",
 };
 
-export default async function HackathonLayersPage() {
+export default async function GalleryLayersPage() {
   const data = await loadDataset();
 
   return (
@@ -25,10 +28,10 @@ export default async function HackathonLayersPage() {
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-16 pb-12">
           <div className="flex items-center gap-3 mb-8 animate-fade-in">
             <Link
-              href="/hackathon"
+              href="/prgallery"
               className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-300 hover:text-ink-900"
             >
-              ← Hackathon
+              ← PR Gallery
             </Link>
           </div>
 
@@ -39,9 +42,10 @@ export default async function HackathonLayersPage() {
               <span className="italic text-ink-700">One stack.</span>
             </h1>
             <p className="animate-fade-in stagger-2 text-[1.05rem] leading-[1.6] text-ink-500 max-w-md">
-              Every Nanda Town scenario picks one plugin per layer. The grid below
-              shows which layers have hackathon submissions and which are
-              still open. Click any layer to see its entries.
+              Every Nanda Town scenario picks one plugin per layer. The grid
+              below syncs live from GitHub — merged and in-review PRs land in
+              their layer automatically, and builds beyond the twelve layers
+              collect under Other. Click any layer to see its entries.
             </p>
           </div>
         </div>
@@ -53,12 +57,12 @@ export default async function HackathonLayersPage() {
             {data.layers.map((layer, idx) => (
               <Link
                 key={layer.key}
-                href={`/hackathon/layers/${layer.key}`}
+                href={`/prgallery/layers/${layer.key}`}
                 className="group block rounded-2xl border border-cream-400/70 bg-cream-50 p-7 transition-colors hover:bg-cream-200/60"
               >
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-ink-300 tabular-nums">
-                    {String(idx + 1).padStart(2, "0")}
+                    {layer.key === "other" ? "＋" : String(idx + 1).padStart(2, "0")}
                   </span>
                   {layer.is_open ? (
                     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-[0.18em] border border-dashed border-cream-400 text-ink-400">
@@ -79,18 +83,6 @@ export default async function HackathonLayersPage() {
                   {layer.blurb}
                 </p>
 
-                <div className="mt-5 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-ink-400">
-                  <span>
-                    {layer.is_open ? "open for submissions" : "top score"}
-                  </span>
-                  <span className="tabular-nums text-ink-700">
-                    {layer.is_open
-                      ? "—"
-                      : layer.top_score !== null
-                        ? formatScore(layer.top_score)
-                        : "unscored"}
-                  </span>
-                </div>
               </Link>
             ))}
           </div>

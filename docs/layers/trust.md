@@ -30,14 +30,31 @@ malicious + 1 observer that samples cheat reports probabilistically.
 Derives reputation from **cross-signed receipts** of real interactions
 instead of self-asserted feedback. A receipt builds reputation only if
 its Ed25519 issuer signature verifies, a *distinct* counterparty
-co-signed the same interaction, and the receipt does not sit inside an
-isolated collusion component (Tarjan SCC severance over the
-corroboration graph) — so a wash-trading ring collapses to score ~0
-while honest agents keep their corroborated score.
+co-signed the same interaction, and the receipt does not sit inside a
+severed collusion component — so a wash-trading ring collapses to score
+~0 while honest agents keep their corroborated score.
+
+Severance judges every SCC of the corroboration graph by **evidence
+shape and external corroboration, never by size**: a component is
+severed iff it is collusion-shaped (a dense ring or a mutual-only pair)
+*and* has no corroborated edge to any clean component. Component size is
+free for a Sybil operator to manufacture, so a ring grown larger than
+the honest population buys no immunity
+([issue #97](https://github.com/projnanda/nandatown/issues/97)).
 
 Source: [`nest_plugins_reference/trust/agent_receipts.py`](../../packages/nest-plugins-reference/nest_plugins_reference/trust/agent_receipts.py).
-Scenario: `receipt_reputation` (honest anchor + isolated 4-agent ring +
-byzantine co-signers).
+Scenarios: `receipt_reputation` (honest majority + isolated 4-agent ring
++ byzantine co-signers) and `receipt_reputation_majority_ring` (the
+issue #97 red-team: an 8-agent ring *outnumbering* 5 honest agents —
+severed all the same):
+
+```bash
+nest run scenarios/receipt_reputation_majority_ring.yaml
+python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+    [print(('PASS' if r.passed else 'FAIL'), r.name, r.detail) \
+     for r in validate_trace(Path('traces/receipt_reputation_majority_ring.jsonl'), \
+                             'receipt_reputation_majority')]"
+```
 
 ## `parc` — portable reputation credentials
 

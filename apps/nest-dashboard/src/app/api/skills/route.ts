@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
-import { createSkill, listSkills, type SkillSourceType } from "@/lib/skills";
+import { revalidateTag } from "next/cache";
+import { createSkill, listSkillsCached, SKILLS_CACHE_TAG, type SkillSourceType } from "@/lib/skills";
 
 // This registry is read/written at request time, never prerendered.
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ function s(value: unknown): string {
  * discover which skills are available.
  */
 export async function GET() {
-  const skills = await listSkills();
+  const skills = await listSkillsCached();
   return Response.json({ count: skills.length, skills });
 }
 
@@ -80,6 +81,7 @@ export async function POST(request: NextRequest) {
       github_username: githubUsername || null,
       submitter_ip: submitterIp,
     });
+    revalidateTag(SKILLS_CACHE_TAG, "max");
     return Response.json({ skill }, { status: 201 });
   } catch (err) {
     console.error("POST /api/skills failed:", err);

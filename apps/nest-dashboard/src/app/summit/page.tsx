@@ -14,21 +14,26 @@ const SOVEREIGN_DOC =
 const DATAFACTS_POST =
   "https://www.linkedin.com/feed/update/urn:li:activity:7476851966506131456/";
 
-const MORNING: [string, string][] = [
-  ["9:30 am", "Opening Keynote by HCLTech and MIT Media Lab: Trustworthy Infrastructure for AI Agents (Jeff Turnham, Grace Davin, Jie Hui, Pradyumna Chari, Ramesh Raskar)"],
-  ["10:00 - 10:30 am", "Sovereign AI agents: Boston and India (Santiago Garces, CIO City of Boston and Ramesh Raskar, Prof. MIT)"],
-  ["10:30 - 11:00 am", "From Alexa to Agentic Commerce, panel discussion (Rohit Prasad, former head of Alexa)"],
-  ["11:00 - 11:30 am", "Venture Landscape in Agentic Web (Host: John Werner. Panelists: Marc Weber*, John Harthorne*, Habib Haddad*)"],
-  ["11:30 - 12:00 pm", "Agentic Systems (Abhishek Mehta, Tresata; Abhi Yadav, iCustomer; Rahul Todkar; Karan Bharadwaj; Maria Gorskikh, Maritime)"],
+const SUMMIT: [string, string][] = [
+  ["9:00 - 9:30 am", "Opening Keynote by HCLTech and MIT Media Lab: Trustworthy Infrastructure for AI Agents (Jeff Turnham, Grace Davin, Jie Hui, Pradyumna Chari, Ramesh Raskar)"],
+  ["9:30 - 10:00 am", "Civic Agents Across Four Global Hubs: helping residents access public services"],
+  ["10:00 - 11:30 am", "Civic Breakouts, four parallel sessions · Parallel: Hackathon Prep (videos/slides)"],
+  ["11:30 - 12:00 pm", "Future of Agentic Commerce (Rohit Prasad, former head of Alexa; Vivek F. Farias, MIT Sloan; David Herman, Glasswing Ventures)"],
   ["12:00 - 12:30 pm", "From Agents to Agentic Societies (Ayush Chopra, Pradyumna Chari)"],
-  ["12:30 - 1:00 pm", "Enterprise Agentic Web (Rob Lincourt, Dell)"],
+  ["12:30 - 1:00 pm", "Enterprise Agentic Web (Shankar Krishnan, Stripe; Pavan Pant, Fiddler AI)"],
+  ["1:00 - 2:00 pm", "Lunch break"],
+  ["2:00 - 3:00 pm", "Agentic Web Innovations presentations"],
+  ["3:00 - 4:00 pm", "Agentic Web Workshops · Parallel: Hackathon Project Showcase"],
+  ["4:00 - 4:30 pm", "Demos and presentations from the top 10 hackathon teams"],
+  ["4:30 - 5:00 pm", "Venture Landscape in Agentic Web"],
+  ["5:00 pm", "Hack Results and Closing"],
 ];
 
-const AFTERNOON: [string, string][] = [
-  ["2:00 - 2:15 pm", "Opening Keynote"],
-  ["2:15 - 2:30 pm", "NandaTown Introduction and Tutorials"],
-  ["2:30 - 4:30 pm", "Demos from top 10 teams"],
-  ["4:30 - 5:00 pm", "Demo Awards and Summary"],
+const HACKATHON: [string, string][] = [
+  ["9:00 am - 2:00 pm", "Phase 2 preparation"],
+  ["2:00 pm", "Final Phase 2 + video submissions due"],
+  ["4:00 - 4:30 pm", "Top 10 presentations"],
+  ["5:00 pm", "Hack results and awards"],
 ];
 
 function Ext({ href, children }: { href: string; children: React.ReactNode }) {
@@ -61,8 +66,8 @@ export default function SummitPage() {
         Join us for the Nanda Summit at MIT Media Lab.
       </p>
       <ul className="mt-3 list-disc space-y-2 pl-5 text-[1.02rem] leading-[1.7] text-ink-500">
-        <li>The morning session includes top industry and research leaders, along with working group discussions.</li>
-        <li>The afternoon includes tutorials, hackathon awards and interaction with our judges.</li>
+        <li>The morning brings top industry and research leaders: keynote, civic agents, agentic commerce, and enterprise sessions.</li>
+        <li>The afternoon features agentic web innovations and workshops, the hackathon showcase, top-10 team demos at 4 pm, and awards at 5 pm.</li>
       </ul>
       <div className="mt-7 flex flex-wrap gap-3">
         <a href={LUMA_URL} target="_blank" rel="noopener noreferrer" className="rounded-full bg-ink-900 px-6 py-3 text-[0.92rem] font-medium text-cream-100 transition-colors hover:bg-ink-700">
@@ -75,19 +80,19 @@ export default function SummitPage() {
 
       <Section title="Important note for hackathon participants">
         <ul className="list-disc space-y-3 pl-5">
-          <li>There will be <strong className="text-ink-900">no coding / building</strong> at the in person event; only demos and interaction with other builders and judges. You should build and submit your demo by Friday July 10th at Noon ET. <strong className="text-ink-900">ALL submissions are due on Friday July 10th.</strong></li>
+          <li><strong className="text-ink-900">Saturday July 11th, 2 pm ET</strong> — the one deadline that matters: your <strong className="text-ink-900">finalized SkillMD</strong> is due, along with a <strong className="text-ink-900">demo video</strong>. The video is required to be considered for scoring, but does not itself affect your score.</li>
           <li>The hackathon participants are <strong className="text-ink-900">not required to attend</strong> this event, and your <strong className="text-ink-900">score will not be impacted by not attending</strong>. You can still win without being at the event.</li>
           <li>You do NOT need to register on this Luma if you are participating virtually.</li>
-          <li>If you are participating for the hackathon judging sessions in person, each team member must register on this Luma <strong className="text-ink-900">individually</strong> as an acceptance to this event grants individual entry, not team entry.</li>
+          <li>If you are participating for the hackathon sessions in person, each team member must register on this Luma <strong className="text-ink-900">individually</strong> as an acceptance to this event grants individual entry, not team entry.</li>
         </ul>
         <p>
           Research and Startup <strong className="text-ink-900">Innovation Showcase</strong>: apply to present your demo, research or startup innovation via <Ext href={SHOWCASE_FORM}>this form</Ext>.
         </p>
       </Section>
 
-      <Section title="Summit Sessions (9:30 am - 1 pm)">
+      <Section title="Summit Schedule (9 am - 5 pm)">
         <ul className="space-y-3">
-          {MORNING.map(([time, what]) => (
+          {SUMMIT.map(([time, what]) => (
             <li key={time} className="flex gap-4">
               <span className="w-32 shrink-0 font-mono text-[0.8rem] uppercase tracking-wide text-ink-300">{time}</span>
               <span>{what}</span>
@@ -95,14 +100,14 @@ export default function SummitPage() {
           ))}
         </ul>
         <p>
-          The Sovereign AI agents session has a companion doc: <Ext href={SOVEREIGN_DOC}>AI Agents for MA working groups</Ext> (working groups meet at 1 pm, sign up at that link).
+          The Civic Agents track has a companion doc: <Ext href={SOVEREIGN_DOC}>AI Agents for MA working groups</Ext>.
         </p>
         <p>
-          1 pm: Showcase of your innovations (<Ext href={SHOWCASE_FORM}>apply here</Ext>) and Research Council Meetings (by invitation for MIT research council members).
+          Innovation Showcase (3 - 4 pm): apply to present your demo, research or startup innovation <Ext href={SHOWCASE_FORM}>here</Ext>.
         </p>
       </Section>
 
-      <Section title="NandaHack (2 pm - 5 pm)">
+      <Section title="NandaHack Schedule">
         <p>
           Details at <Ext href="https://nandahack.media.mit.edu">nandahack.media.mit.edu</Ext>.
         </p>
@@ -110,10 +115,10 @@ export default function SummitPage() {
           The NandaHack, by MIT Media Lab and HCLTech invites builders to create and demo real agentic applications inside NandaTown, a sandbox for the Internet of AI Agents. Teams will explore how autonomous agents can discover each other, coordinate tasks, exchange information, and work together across an open ecosystem. The hackathon will feature tutorials, demos from top teams, judges from AI and enterprise infrastructure, and awards for standout projects.
         </p>
         <p>
-          Join the virtual hackathon June 7th - July 10th at <Ext href="https://nandahack.media.mit.edu">nandahack.media.mit.edu</Ext>. Then (optionally) join us in person at MIT on July 11th. Judging for all teams: 9:30 am to Noon for selection of top 10 teams.
+          Join the virtual hackathon June 7th - July 10th at <Ext href="https://nandahack.media.mit.edu">nandahack.media.mit.edu</Ext>. Then (optionally) join us in person at MIT on July 11th.
         </p>
         <ul className="space-y-3">
-          {AFTERNOON.map(([time, what]) => (
+          {HACKATHON.map(([time, what]) => (
             <li key={time} className="flex gap-4">
               <span className="w-32 shrink-0 font-mono text-[0.8rem] uppercase tracking-wide text-ink-300">{time}</span>
               <span>{what}</span>

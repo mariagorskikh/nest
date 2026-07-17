@@ -245,3 +245,23 @@ def test_end_to_end_scenario_agents_under_both_plugins() -> None:
     assert check_no_scope_escalation(good_audits).passed
     assert check_no_stale_ancestor_use(good_audits).passed
     assert check_audience_binding(good_audits).passed
+
+
+def test_duplicate_revoke_keeps_earliest_revocation_tick() -> None:
+    # Adversarial: a redundant later revoke of the same tid must not raise
+    # the effective revocation time. The verify at tick 30 sits between the
+    # genuine revoke (20) and the redundant one (50) -- it must be flagged.
+    audits: list[AuditEvent] = [
+        {"type": "delegation_audit", "op": "revoke", "tid": "aa11", "tick": 20},
+        {"type": "delegation_audit", "op": "revoke", "tid": "aa11", "tick": 50},
+        {
+            "type": "delegation_audit",
+            "op": "verify",
+            "tick": 30,
+            "presenter": "leaf-0",
+            "audience": "leaf-0",
+            "chain_tids": ["root0", "aa11"],
+            "verified": True,
+        },
+    ]
+    assert not check_no_stale_ancestor_use(audits).passed

@@ -4,10 +4,9 @@ import { useMemo, useState } from "react";
 import { EmptyState, SubmissionCard } from "@/components/hackathon-card";
 import type { Submission } from "@/lib/hackathon-types";
 
-type SortField = "score" | "date" | "author";
+type SortField = "date" | "author";
 
 const SORTS: { field: SortField; label: string }[] = [
-  { field: "score", label: "Score" },
   { field: "date", label: "Date" },
   { field: "author", label: "Author" },
 ];
@@ -19,17 +18,13 @@ export function LayerSubmissions({
   submissions: Submission[];
   layerLabel: string;
 }) {
-  const [sort, setSort] = useState<SortField>("score");
+  const [sort, setSort] = useState<SortField>("date");
 
   const sorted = useMemo(() => {
     const xs = [...submissions];
     xs.sort((a, b) => {
-      if (sort === "score") {
-        const sa = a.score?.total ?? -1;
-        const sb = b.score?.total ?? -1;
-        if (sa !== sb) return sb - sa;
-        return (b.additions ?? 0) - (a.additions ?? 0);
-      }
+      // Merged PRs always lead — they're the showcased work.
+      if (a.state !== b.state) return a.state === "merged" ? -1 : 1;
       if (sort === "date") {
         return b.created_at.localeCompare(a.created_at);
       }
@@ -42,7 +37,7 @@ export function LayerSubmissions({
     return (
       <EmptyState
         title="Open for submissions."
-        body={`No hackathon PRs have landed on the ${layerLabel} layer yet — first contribution gets the page to itself.`}
+        body={`No PRs have landed on the ${layerLabel} layer yet — first contribution gets the page to itself.`}
       />
     );
   }

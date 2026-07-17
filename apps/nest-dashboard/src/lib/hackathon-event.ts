@@ -12,7 +12,7 @@ export const hackathonEvent = {
   repoUrl: "https://github.com/projnanda/nandatown",
   githubPRsUrl: "https://github.com/projnanda/nandatown/pulls",
   virtualWindow: "June 7 – July 10",
-  submissionDeadline: "Friday, July 10 · 12:00 PM ET",
+  submissionDeadline: "Saturday, July 11 · 2:00 PM ET",
   finale: "Saturday, July 11 · MIT Media Lab, Boston",
 } as const;
 
@@ -27,7 +27,7 @@ export const hackathonFaqs: FaqEntry[] = [
   {
     question: "When are submissions due?",
     answer:
-      "All submissions are due Friday, July 10 at 12:00 PM (noon) ET — no matter where you're building from.",
+      "Your finalized SkillMD plus a demo video are due Saturday, July 11 at 2:00 PM ET — no matter where you're building from. The video is required to be considered for judging, but it doesn't affect your score.",
   },
   {
     question: "Do I have to come to MIT for the finale?",
@@ -42,6 +42,6 @@ export const hackathonFaqs: FaqEntry[] = [
   {
     question: "How does judging work?",
     answer:
-      "A judge panel scores each submission on correctness, realism, design, and docs. On July 11, judging runs 9:30 AM to noon to select the top 10 teams, with demos and sessions from 2 to 5 PM.",
+      "A judge panel scores each submission on correctness, realism, design, and docs. On July 11, judging follows the 2 PM ET final deadline; the top 10 teams demo at 4 PM and results are announced at 5 PM.",
   },
 ];

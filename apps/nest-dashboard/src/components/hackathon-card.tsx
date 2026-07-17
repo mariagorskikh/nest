@@ -9,8 +9,6 @@ import Link from "next/link";
 import type { Submission } from "@/lib/hackathon-types";
 import {
   formatLinesAdded,
-  formatScore,
-  SCORE_TOTAL_MAX,
 } from "@/lib/hackathon-types";
 
 export function AuthorBadge({ submission }: { submission: Submission }) {
@@ -35,32 +33,38 @@ export function AuthorBadge({ submission }: { submission: Submission }) {
   );
 }
 
-export function ScoreBadge({ submission }: { submission: Submission }) {
-  const total = submission.score?.total ?? null;
+export function StatusBadge({ submission }: { submission: Submission }) {
+  const merged = submission.state === "merged";
   return (
     <span
       className={
         "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-[0.18em] border " +
-        (total !== null
-          ? "bg-cream-50 text-ink-900 border-cream-400/70"
+        (merged
+          ? "bg-sage/10 text-sage border-sage/40"
           : "bg-cream-200 text-ink-400 border-cream-400/40")
       }
       title={
-        total !== null
-          ? `Judge score: ${formatScore(total)} / ${SCORE_TOTAL_MAX}`
-          : "Unscored — judging in progress"
+        merged
+          ? `Merged ${submission.merged_at ? new Date(submission.merged_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}`
+          : "Open PR — in review"
       }
     >
-      <span className="text-ink-300">score</span>
-      <span className="tabular-nums text-ink-900">{formatScore(total)}</span>
+      <span
+        className={
+          "inline-block h-1.5 w-1.5 rounded-full " +
+          (merged ? "bg-sage" : "bg-ink-300")
+        }
+      />
+      {merged ? "merged" : "in review"}
     </span>
   );
 }
 
+
 export function SubmissionCard({ submission }: { submission: Submission }) {
   return (
     <Link
-      href={`/hackathon/submissions/${submission.id}`}
+      href={`/prgallery/submissions/${submission.id}`}
       className="group block rounded-2xl border border-cream-400/70 bg-cream-50 p-6 transition-colors hover:bg-cream-200/60"
     >
       <div className="flex items-start gap-4">
@@ -74,8 +78,8 @@ export function SubmissionCard({ submission }: { submission: Submission }) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge submission={submission} />
             <AuthorBadge submission={submission} />
-            <ScoreBadge submission={submission} />
             <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-300">
               {submission.layer}
             </span>
@@ -88,11 +92,15 @@ export function SubmissionCard({ submission }: { submission: Submission }) {
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-4 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-400">
             <span>@{submission.author.handle}</span>
-            <span>
-              +{formatLinesAdded(submission.additions ?? 0)} / −
-              {formatLinesAdded(submission.deletions ?? 0)}
-            </span>
-            <span>{submission.changed_files ?? 0} files</span>
+            {submission.additions !== null && (
+              <span>
+                +{formatLinesAdded(submission.additions)} / −
+                {formatLinesAdded(submission.deletions ?? 0)}
+              </span>
+            )}
+            {submission.changed_files !== null && (
+              <span>{submission.changed_files} files</span>
+            )}
             <span>PR #{submission.pr_number}</span>
           </div>
         </div>
