@@ -146,3 +146,84 @@ def test_alternating_offers_fails_pareto_validator(seed: int) -> None:
     pareto = next(r for r in results if r.name == "multi_attribute_pareto_optimal")
     assert not pareto.passed, f"seed={seed}: alternating_offers should be caught"
     assert "dominated by" in pareto.detail
+
+
+
+@pytest.mark.parametrize("seed", [42, 7, 1337])
+def test_directional_integer_passes_all_validators(seed: int) -> None:
+    """DirectionalIntegerNegotiation passes the market evaluation."""
+
+    if not SCENARIO_PATH.exists():
+        pytest.skip(f"scenario not found at {SCENARIO_PATH}")
+
+    results = _run_scenario(seed, "directional_integer")
+
+    assert results, "expected validators to run"
+
+    results_by_name = {result.name: result for result in results}
+
+    expected_validators = {
+        "multi_attribute_pareto_optimal",
+        "multi_attribute_individually_rational",
+    }
+
+    assert expected_validators <= results_by_name.keys(), (
+        f"seed={seed}: missing validators; "
+        f"received {sorted(results_by_name)}"
+    )
+
+    failures = [
+        (result.name, result.detail)
+        for result in results
+        if not result.passed
+    ]
+
+    assert not failures, f"seed={seed}: validator failures: {failures}"
+
+@pytest.mark.parametrize("seed", range(100))
+def test_directional_integer_robust_across_many_seeds(seed: int) -> None:
+    results = _run_scenario(seed, "directional_integer")
+
+    failures = [
+        (result.name, result.detail)
+        for result in results
+        if not result.passed
+    ]
+
+    assert not failures, f"seed={seed}: {failures}"
+
+@pytest.mark.parametrize("seed", [42, 7, 1337])
+def test_directional_integer_raw_weights_passes_all_validators(
+    seed: int,
+) -> None:
+    results = _run_scenario(
+        seed,
+        "directional_integer_raw_weights",
+    )
+
+    assert results, "expected validators to run"
+
+    failures = [
+        (result.name, result.detail)
+        for result in results
+        if not result.passed
+    ]
+
+    assert not failures, f"seed={seed}: {failures}"
+
+@pytest.mark.parametrize("seed", range(100))
+def test_directional_integer_raw_weights_robust_across_many_seeds(
+    seed: int,
+) -> None:
+    results = _run_scenario(
+        seed,
+        "directional_integer_raw_weights",
+    )
+
+    failures = [
+        (result.name, result.detail)
+        for result in results
+        if not result.passed
+    ]
+
+    assert not failures, f"seed={seed}: {failures}"
