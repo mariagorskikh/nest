@@ -15,19 +15,22 @@
 # (seed, pair_index); the bargaining loop runs synchronously in each buyer's
 # on_start, so the same seed yields a byte-identical trace.
 name: multi_attribute_market
-description: "10 buyer-seller pairs negotiating price + deadline toward Pareto efficiency."
+description: >
+  50 client-consultant pairs negotiate price/token-budget/quality tier for
+  AI consulting engagements.  Uses the pareto plugin (6 spec-equation
+  strategies).  Pairs 7 and 8 demonstrate breakdown paths.
 
 tier: 1
-seed: 42
+seed: 7
 
 agents:
-  count: 20
+  count: 100
   brain: state-machine
   roles:
-    - name: buyer
-      count: 10
-    - name: seller
-      count: 10
+    - name: client
+      count: 50
+    - name: consultant
+      count: 50
 
 layers:
   transport: in_memory
@@ -45,6 +48,9 @@ layers:
 
 task:
   type: multi_attribute_market
+  config:
+    rounds: 10
+    pairs: 50
 
 duration: "ticks: 10000"
 

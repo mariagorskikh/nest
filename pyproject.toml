@@ -66,8 +66,8 @@ members = [
     "packages/nest-marketplace",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "hypothesis>=6.100",
@@ -79,6 +79,8 @@ dev-dependencies = [
     # so the shim's smoke tests can import it.
     "nest-cli",
 ]
+
+[tool.uv]
 
 [tool.uv.sources]
 nest-core = { workspace = true }
@@ -93,6 +95,7 @@ nest-marketplace = { workspace = true }
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+exclude = [".claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH"]

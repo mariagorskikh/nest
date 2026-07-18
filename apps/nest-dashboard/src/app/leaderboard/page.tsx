@@ -14,6 +14,7 @@ const scenarios = [
   'Consensus',
   'Supply Chain',
   'Reputation',
+  'Negotiation',
 ] as const;
 
 const scenarioKeyMap: Record<string, string> = {
@@ -23,6 +24,7 @@ const scenarioKeyMap: Record<string, string> = {
   Consensus: 'consensus',
   'Supply Chain': 'supply_chain',
   Reputation: 'reputation',
+  Negotiation: 'multi_attribute_market',
 };
 
 const scenarioLabel: Record<string, string> = {
@@ -32,6 +34,7 @@ const scenarioLabel: Record<string, string> = {
   consensus: 'Consensus',
   supply_chain: 'Supply chain',
   reputation: 'Reputation',
+  multi_attribute_market: 'Negotiation',
 };
 
 export default function LeaderboardPage() {
