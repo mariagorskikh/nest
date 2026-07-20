@@ -24,6 +24,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from nest_core.canonical import (
+    SEAL_CHAIN_GENESIS,
+    jcs_digest,
+    seal_chain,
+    verify_receipt_signature,
+)
+from nest_core.ccf_receipt import PINNED_ACL_SERVICE_IDENTITY_PEM, verify_ccf_write_receipt
+
 
 class ValidationResult:
     """Result of a protocol validation check."""
@@ -5150,6 +5158,278 @@ def validate_attested_sybil_quarantined(
 
 
 # ---------------------------------------------------------------------------
+# Receipt-reputation anchoring (confidential-ledger root-of-trust) validator
+# ---------------------------------------------------------------------------
+#
+# The ``receipt_reputation`` scenario emits each interaction as a ``receipt:``
+# trace line carrying the full receipt JSON. The capsule-anchoring trust plugin
+# (``CapsuleEmitTrust``) seals every valid receipt into an in-process JCS
+# digest chain, and — via the ``AuditorAgent._finalize`` hook — the trace
+# additionally carries, per receipt, a pre-obtained CCF / Azure Confidential
+# Ledger write receipt as a ``ccfreceipt:<subject_digest>:<receipt_json_hex>``
+# line.
+#
+# THE ROOT OF TRUST: only the ``ccfreceipt:`` lines are anchoring evidence,
+# because only they carry a signature made with a key the participant does NOT
+# hold — the pinned, independent ledger service identity's. Everything else on
+# the trace (``receipt:`` content, ``seal:`` triples) is authored by the party
+# under test and is a pure function of plaintext trace content: any
+# non-anchoring party can recompute the JCS digests and refold the public hash
+# chain, so ``seal:`` lines alone can NEVER produce a PASS. They are retained
+# only as a tamper trip-wire (a broken chain is an immediate FAIL).
+#
+# This validator grades exclusively from trace events plus the pinned
+# service-identity constant. It reads no files, opens no sockets, consults no
+# environment variables, and reads no clock.
+#
+#   1. Collect all valid receipts from ``receipt:`` lines. None -> FAIL.
+#   2. If ``seal:`` lines are present, replay the chain; broken -> FAIL.
+#   3. Collect write receipts from ``ccfreceipt:`` lines. None -> FAIL
+#      (the trust layer does not anchor).
+#   4. No pinned service identity configured -> FAIL (fail-closed placeholder).
+#   5. For EVERY receipt: recompute its JCS digest from trace content and
+#      require a write receipt whose claim binds that digest and that verifies
+#      OFFLINE against the pinned service identity (Merkle inclusion proof +
+#      endorsed-node ECDSA signature over the tree head). Any receipt without
+#      one -> FAIL.
+#   6. PASS.
+#
+# A non-anchoring baseline (``agent_receipts`` / ``score_average``) emits no
+# ``ccfreceipt:`` lines, so step 3 fires. Fabricated seals or fabricated
+# receipt JSON carry no valid service-identity signature, so step 5 fires. A
+# receipt mutated after registration recomputes to a digest the ledger never
+# signed, so step 5 fires. Forging a PASS requires the ledger's private key.
+
+
+def _collect_receipts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse every ``receipt:`` line with a valid issuer signature into a receipt dict.
+
+    De-duplicates by JCS digest so duplicate lines (send + receive of the same
+    bytes) contribute only one receipt. Forged or unsigned lines are skipped.
+
+    Example::
+
+        receipts = _collect_receipts(events)
+    """
+    seen: set[str] = set()
+    receipts: list[dict[str, Any]] = []
+    for ev in events:
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("receipt:"):
+            continue
+        body = msg[len("receipt:") :]
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        receipt = cast("dict[str, Any]", parsed)
+        if not verify_receipt_signature(receipt):
+            continue
+        try:
+            digest = jcs_digest(receipt)
+        except (TypeError, ValueError):
+            continue
+        if digest in seen:
+            continue
+        seen.add(digest)
+        receipts.append(receipt)
+    return receipts
+
+
+def _collect_seals(events: list[dict[str, Any]]) -> list[tuple[int, str, str]]:
+    """Parse every ``seal:<seq>:<subject_digest>:<chain_hash>`` broadcast line.
+
+    Returns the triples in the order they appear in the trace. No filesystem or
+    environment access is performed: the seals live entirely on the trace.
+
+    Example::
+
+        seals = _collect_seals(events)
+    """
+    seen: set[tuple[int, str, str]] = set()
+    seals: list[tuple[int, str, str]] = []
+    for ev in events:
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("seal:"):
+            continue
+        parts = msg.split(":", 3)
+        if len(parts) < 4:
+            continue
+        try:
+            seq = int(parts[1])
+        except ValueError:
+            continue
+        triple = (seq, parts[2], parts[3])
+        # De-duplicate: a broadcast seal appears once as the emitter's broadcast
+        # event and again as a receive event on every other agent. Keep the first
+        # occurrence (seq order) so the chain replays exactly once per seal.
+        if triple in seen:
+            continue
+        seen.add(triple)
+        seals.append(triple)
+    return seals
+
+
+def _collect_ccf_receipts(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Parse every ``ccfreceipt:<subject_digest>:<receipt_json_hex>`` line.
+
+    Returns ``{subject_digest: [write_receipt_dict, …]}``. Lines that are not
+    parseable hex/JSON are skipped — they can only ever remove evidence, never
+    add it, because every write receipt must still verify against the pinned
+    service identity. No filesystem or environment access is performed.
+
+    Example::
+
+        by_digest = _collect_ccf_receipts(events)
+    """
+    seen: set[tuple[str, str]] = set()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for ev in events:
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("ccfreceipt:"):
+            continue
+        parts = msg.split(":", 2)
+        if len(parts) < 3:
+            continue
+        pair = (parts[1], parts[2])
+        # De-duplicate broadcast copies (one emitter event + one per receiver).
+        if pair in seen:
+            continue
+        seen.add(pair)
+        try:
+            parsed = json.loads(bytes.fromhex(parts[2]).decode("utf-8"))
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        out.setdefault(parts[1], []).append(cast("dict[str, Any]", parsed))
+    return out
+
+
+def validate_receipt_reputation_anchored(
+    events: list[dict[str, Any]],
+    *,
+    service_identity_pem: str | None = PINNED_ACL_SERVICE_IDENTITY_PEM,
+) -> list[ValidationResult]:
+    """Root-of-trust anchoring validator: only ledger-signed evidence can PASS.
+
+    The verdict derives from trace events plus ``service_identity_pem`` — the
+    pinned service identity of an independent CCF / Azure Confidential Ledger
+    transparency service whose private key the participant does not hold.
+    Zero network, zero filesystem, zero environment, zero clock.
+
+    * An honest anchoring run PASSES — every receipt's recomputed JCS digest is
+      bound by a write receipt that verifies offline against the pinned
+      service identity.
+    * A non-anchoring baseline (``agent_receipts`` / ``score_average``) FAILS —
+      no ``ccfreceipt:`` lines.
+    * Fabricated seals or fabricated receipt JSON forged from plaintext trace
+      content FAIL — they carry no valid service-identity signature.
+    * A receipt mutated after registration FAILS — its recomputed digest was
+      never signed by the ledger.
+    * With no pinned identity configured (``service_identity_pem is None``)
+      everything FAILS — the placeholder state is fail-closed by construction.
+
+    Tests inject the LOCAL TEST-ONLY identity via ``service_identity_pem``;
+    the graded registry path always uses the pinned production constant.
+
+    Example::
+
+        results = validate_receipt_reputation_anchored(events)
+    """
+    receipts = _collect_receipts(events)
+
+    if not receipts:
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                "no receipts observed on the wire",
+            )
+        ]
+
+    # Tamper trip-wire: seal lines are NOT anchoring evidence (they are a pure
+    # function of plaintext trace content), but a broken chain proves the trace
+    # was reordered or truncated after emission, so it fails immediately.
+    chain = SEAL_CHAIN_GENESIS
+    for seq, subject_digest, claimed_chain in _collect_seals(events):
+        expected_chain = seal_chain(chain, subject_digest)
+        if expected_chain != claimed_chain:
+            return [
+                ValidationResult(
+                    "receipt_reputation_anchored",
+                    False,
+                    f"seal chain tampered at seq={seq}: "
+                    f"expected chain={expected_chain[:16]}… got {claimed_chain[:16]}…",
+                )
+            ]
+        chain = expected_chain
+
+    ccf_receipts = _collect_ccf_receipts(events)
+    if not ccf_receipts:
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                f"{len(receipts)} receipts observed but no confidential-ledger "
+                "write receipts on the trace — the trust layer does not anchor",
+            )
+        ]
+
+    if service_identity_pem is None:
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                "no ledger service identity is pinned yet — anchoring evidence "
+                "cannot be verified, failing closed",
+            )
+        ]
+
+    # Root of trust: every receipt needs a write receipt binding its recomputed
+    # digest that verifies offline against the pinned service identity.
+    unanchored: list[dict[str, Any]] = []
+    verified = 0
+    for r in receipts:
+        try:
+            digest = jcs_digest(r)
+        except (ValueError, TypeError):
+            unanchored.append(r)
+            continue
+        candidates = ccf_receipts.get(digest, [])
+        if any(
+            verify_ccf_write_receipt(wr, bytes.fromhex(digest), service_identity_pem)
+            for wr in candidates
+        ):
+            verified += 1
+        else:
+            unanchored.append(r)
+
+    if unanchored:
+        sample = ", ".join(str(r.get("receipt_id", "?")) for r in unanchored[:5])
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                f"{len(unanchored)}/{len(receipts)} receipts carry no confidential-"
+                "ledger write receipt that verifies against the pinned service "
+                f"identity (unsigned, wrong key, or mutated after registration): {sample}",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "receipt_reputation_anchored",
+            True,
+            f"all {verified} receipts anchored — CCF write receipts verified "
+            "offline against the pinned ledger service identity",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
@@ -5406,6 +5686,16 @@ VALIDATORS: dict[str, list[Any]] = {
     "receipt_reputation": [
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
+    ],
+    # Capsule variant: the same ring-severance + honest-confidence checks as
+    # ``receipt_reputation``, plus the anchoring check that a non-anchoring
+    # trust layer (e.g. ``agent_receipts``) cannot satisfy. Scoped to its own
+    # scenario type so ``validate_receipt_reputation_anchored`` NEVER grades the
+    # stock ``receipt_reputation`` scenario (which has no capsule ledger).
+    "receipt_reputation_capsule": [
+        validate_receipt_reputation_ring_severed,
+        validate_receipt_reputation_honest_confidence,
+        validate_receipt_reputation_anchored,
     ],
     "receipt_reputation_majority": [
         validate_receipt_reputation_ring_severed,

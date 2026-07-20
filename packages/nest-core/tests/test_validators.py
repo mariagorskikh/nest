@@ -2137,6 +2137,7 @@ class TestValidatorRegistry:
             "comms_downgrade",
             "comms_replay",
             "receipt_reputation",
+            "receipt_reputation_capsule",
             "receipt_reputation_majority",
             "multi_attribute_market",
             "provenance_supply_chain",

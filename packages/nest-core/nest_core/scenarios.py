@@ -121,12 +121,16 @@ def _try_load_builtin(name: str) -> None:
         from nest_core.scenarios_builtin.comms_replay import comms_replay_factory
 
         register_scenario("comms_replay", comms_replay_factory)
-    elif name == "receipt_reputation":
+    elif name in ("receipt_reputation", "receipt_reputation_capsule"):
         from nest_core.scenarios_builtin.receipt_reputation import (
             receipt_reputation_factory,
         )
 
+        # receipt_reputation_capsule shares the task mechanics (ring/byzantine/
+        # auditor roles) but has its own validator set (adds the anchoring
+        # check) — see VALIDATORS in nest_core.validators.
         register_scenario("receipt_reputation", receipt_reputation_factory)
+        register_scenario("receipt_reputation_capsule", receipt_reputation_factory)
     elif name == "empic_payments":
         from nest_core.scenarios_builtin.empic_payments import empic_payments_factory
 

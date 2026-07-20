@@ -115,6 +115,12 @@ extraPaths = [
     ".",
 ]
 exclude = [
+    "examples/",
+    # Setting `exclude` replaces pyright's built-in defaults, so restore them —
+    # otherwise pyright analyzes the whole .venv (e.g. the large openai SDK) as
+    # project source and can hang. Third-party code is resolved via venvPath, not
+    # analyzed here.
+    "**/.venv",
     "**/node_modules",
     "**/__pycache__",
     "**/.*",

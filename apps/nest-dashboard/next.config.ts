@@ -17,6 +17,17 @@ const nextConfig: NextConfig = {
       destination: `/${p}/index.html`,
     }));
   },
+  // The PR gallery moved from /hackathon to /prgallery; keep old links alive.
+  async redirects() {
+    return [
+      { source: "/hackathon", destination: "/prgallery", permanent: true },
+      {
+        source: "/hackathon/:path*",
+        destination: "/prgallery/:path*",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

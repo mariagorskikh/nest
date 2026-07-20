@@ -368,7 +368,8 @@ def test_to_jsonable_round_trips_through_json() -> None:
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-APP_DIR = REPO_ROOT / "apps" / "nest-dashboard" / "src" / "app" / "hackathon"
+# The PR gallery lives at /prgallery (renamed from /hackathon; old paths 308-redirect).
+APP_DIR = REPO_ROOT / "apps" / "nest-dashboard" / "src" / "app" / "prgallery"
 
 ROUTE_FILES = (
     APP_DIR / "page.tsx",
@@ -380,7 +381,7 @@ ROUTE_FILES = (
 
 @pytest.mark.parametrize("route", ROUTE_FILES, ids=lambda p: str(p.relative_to(REPO_ROOT)))
 def test_route_file_exists_and_exports_default(route: Path) -> None:
-    """Each /hackathon route file must exist and export a default
+    """Each /prgallery route file must exist and export a default
     component — this is the file-system convention Next.js relies on
     to actually serve the route."""
 
@@ -389,7 +390,7 @@ def test_route_file_exists_and_exports_default(route: Path) -> None:
     assert "export default" in text, f"route {route} has no default export"
 
 
-def test_navbar_links_to_hackathon() -> None:
+def test_navbar_links_to_pr_gallery() -> None:
     navbar = REPO_ROOT / "apps" / "nest-dashboard" / "src" / "components" / "navbar.tsx"
     text = navbar.read_text(encoding="utf-8")
-    assert "/hackathon" in text, "navbar must link to /hackathon"
+    assert "/prgallery" in text, "navbar must link to /prgallery"

@@ -21,7 +21,7 @@ export type LayerKey =
   | "memory"
   | "privacy"
   | "datafacts"
-  | "unclassified";
+  | "other";
 
 export interface SubmissionAuthor {
   handle: string;
@@ -67,12 +67,15 @@ export interface Submission {
   deletions: number | null;
   changed_files: number | null;
   created_at: string;
+  /** ISO timestamp when the PR was merged, or null while still open. */
+  merged_at: string | null;
+  state: "open" | "merged";
   score: JudgeScore | null;
   tag: Tag;
 }
 
 export interface LayerStats {
-  key: Exclude<LayerKey, "unclassified">;
+  key: LayerKey;
   label: string;
   blurb: string;
   submission_count: number;
@@ -82,6 +85,7 @@ export interface LayerStats {
 
 export interface MarketplaceStats {
   total_submissions: number;
+  total_merged: number;
   unique_participants: number;
   layers_covered: number;
   layers_total: number;
@@ -98,6 +102,7 @@ export interface Dataset {
 
 export const EMPTY_STATS: MarketplaceStats = {
   total_submissions: 0,
+  total_merged: 0,
   unique_participants: 0,
   layers_covered: 0,
   layers_total: 12,

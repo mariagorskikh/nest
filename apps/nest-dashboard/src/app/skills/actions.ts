@@ -1,8 +1,8 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { headers } from "next/headers";
-import { createSkill, type SkillSourceType } from "@/lib/skills";
+import { createSkill, SKILLS_CACHE_TAG, type SkillSourceType } from "@/lib/skills";
 import { initialSubmitState, type SubmitState } from "./form-state";
 
 function str(value: FormDataEntryValue | null): string {
@@ -138,6 +138,7 @@ export async function submitSkill(
       github_username: githubUsername || null,
       submitter_ip: submitterIp,
     });
+    revalidateTag(SKILLS_CACHE_TAG, "max");
     revalidatePath("/skills");
     return { ok: true, error: null, createdId: skill.id, createdName: skill.name };
   } catch (err) {

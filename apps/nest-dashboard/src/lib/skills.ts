@@ -1,4 +1,8 @@
+import { unstable_cache } from "next/cache";
 import { ensureSchema, sql } from "./db";
+
+/** Bust with revalidateTag(SKILLS_CACHE_TAG) after any skill write. */
+export const SKILLS_CACHE_TAG = "skills-list";
 
 export type SkillSourceType = "url" | "github" | "content";
 
@@ -56,6 +60,18 @@ export async function listSkills(): Promise<Skill[]> {
   `;
   return rows as unknown as Skill[];
 }
+
+/**
+ * Cached read for the hot paths (/skills page, GET /api/skills). The full
+ * list carries every SkillMD's content, so serving it straight from Neon on
+ * each request burns the data-transfer quota — this took the site down
+ * during the submission rush. One Neon fetch per 30s worst case; skill
+ * writes bust the tag immediately.
+ */
+export const listSkillsCached = unstable_cache(listSkills, [SKILLS_CACHE_TAG], {
+  revalidate: 30,
+  tags: [SKILLS_CACHE_TAG],
+});
 
 export async function getSkill(id: string): Promise<Skill | null> {
   await ensureSchema();

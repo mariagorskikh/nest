@@ -28,7 +28,12 @@ let schemaReady: Promise<void> | null = null;
 
 export function ensureSchema(): Promise<void> {
   if (!schemaReady) {
-    schemaReady = migrate();
+    // Reset the memo on failure so a transient error (e.g. a Neon cold-start
+    // timeout right after boot) doesn't poison every later request.
+    schemaReady = migrate().catch((err) => {
+      schemaReady = null;
+      throw err;
+    });
   }
   return schemaReady;
 }
@@ -75,6 +80,20 @@ async function migrate(): Promise<void> {
       action     text not null check (action in ('created', 'updated')),
       snapshot   jsonb not null,
       created_at timestamptz not null default now()
+    )
+  `;
+
+  // Audience-choice likes. One row per (skill, signed-in account); the
+  // composite primary key is what makes double-voting impossible.
+  await db`
+    create table if not exists skill_likes (
+      skill_id    uuid not null references skills(id) on delete cascade,
+      user_sub    text not null,
+      user_name   text not null,
+      user_avatar text,
+      provider    text not null check (provider in ('google', 'github')),
+      created_at  timestamptz not null default now(),
+      primary key (skill_id, user_sub)
     )
   `;
 }
