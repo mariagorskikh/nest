@@ -19,6 +19,10 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "typer>=0.12",
+    # Used by the receipt_reputation_anchored validator to verify the Ed25519
+    # issuer signature on each receipt trace line (so the validator's "valid
+    # receipt" set matches what a trust plugin actually anchors).
+    "cryptography>=41.0",
 ]
 
 [project.optional-dependencies]

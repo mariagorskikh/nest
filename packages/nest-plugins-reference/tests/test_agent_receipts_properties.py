@@ -16,6 +16,9 @@ structural invariants over *generated* ledgers and receipt sets:
    score ~0 for every ring member.
 7. Anchor safety: bolting an isolated colluding ring onto the ledger never
    lowers an honest anchor agent's score.
+8. Size-blind severance (issue #97): the isolated dense ring is severed and
+   the sparse honest cycle spared at every size ratio, including ring larger
+   than or equal to the honest population.
 
 The plugin signs/verifies Ed25519 per receipt, so generated sizes are kept
 small and every property carries ``deadline=None`` to stay non-flaky on CI.
@@ -316,3 +319,29 @@ class TestAnchorSafety:
         after = await trust_poisoned.score(AgentId(honest[0]))
 
         assert after.score >= before.score
+
+
+# ---------------------------------------------------------------------------
+# 8. Size-blind severance (issue #97)
+# ---------------------------------------------------------------------------
+
+
+class TestSizeBlindSeverance:
+    @settings(max_examples=20, deadline=None)
+    @given(
+        honest_size=st.integers(min_value=5, max_value=12),
+        ring_size=st.integers(min_value=3, max_value=12),
+    )
+    def test_ring_severed_at_any_size_ratio(self, honest_size: int, ring_size: int) -> None:
+        """Severance is size-blind (issue #97).
+
+        For every size ratio — including ring > honest and ring == honest,
+        where the old largest-SCC anchor exemption inverted the property — the
+        isolated dense ring is severed exactly, and no member of the sparse
+        honest cycle (density 2/(n-1) < RING_MIN_DENSITY for n >= 5) is ever
+        severed.
+        """
+        _honest, anchor_receipts = _honest_anchor(honest_size)
+        ring, ring_receipts = _isolated_ring(ring_size)
+        severed = _severed_dids(_corroboration_graph(anchor_receipts + ring_receipts))
+        assert severed == {_did(r) for r in ring}
