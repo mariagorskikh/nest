@@ -35,6 +35,7 @@ Repository = "https://github.com/projnanda/nandatown"
 # install-time discovery path described in CONTRIBUTING.md.
 [project.entry-points."nest.plugins.auth"]
 mesh_revocable = "nest_plugins_reference.auth.mesh_revocable:MeshRevocableAuth"
+bounded_delegation = "nest_plugins_reference.auth.bounded_delegation:BoundedDelegationAuth"
 
 [project.entry-points."nest.plugins.comms"]
 authenticated = "nest_plugins_reference.comms.authenticated:AuthenticatedComms"

@@ -16,6 +16,13 @@ Example::
 
 from __future__ import annotations
 
+from nest_plugins_reference.validators.bounded_delegation_validators import (
+    check_chain_depth_bounded,
+    check_depth_attack_refused,
+    check_pruning_preserves_liveness,
+    check_revocations_pruned,
+    extract_bounded_audits,
+)
 from nest_plugins_reference.validators.delegation_validators import (
     check_audience_binding,
     check_no_scope_escalation,
@@ -54,8 +61,10 @@ __all__ = [
     "PartitionLeakError",
     "ValidatorReport",
     "check_audience_binding",
+    "check_chain_depth_bounded",
     "check_converged",
     "check_denial_receipt_auditable",
+    "check_depth_attack_refused",
     "check_eavesdropper_blocked",
     "check_field_injection_rejected",
     "check_gate_tamper_rejected",
@@ -65,10 +74,13 @@ __all__ = [
     "check_no_stale_ancestor_use",
     "check_partial_redaction_enforced",
     "check_partition_liveness",
+    "check_pruning_preserves_liveness",
     "check_replay_rejected",
     "check_revocation_converges",
+    "check_revocations_pruned",
     "check_stale_revocation_blocked",
     "corrupt_proof",
+    "extract_bounded_audits",
     "extract_delegation_audits",
     "find_partition_ticks",
     "forge_tier_upgrade",
