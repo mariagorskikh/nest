@@ -24,6 +24,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from nest_core.canonical import (
+    SEAL_CHAIN_GENESIS,
+    jcs_digest,
+    seal_chain,
+    verify_receipt_signature,
+)
+from nest_core.ccf_receipt import PINNED_ACL_SERVICE_IDENTITY_PEM, verify_ccf_write_receipt
+
 
 class ValidationResult:
     """Result of a protocol validation check."""
@@ -272,11 +280,30 @@ def validate_auction_winner_highest(
                 winners[item] = (bidder, amount)
 
     violations: list[str] = []
-    for item, (_winner, winning_amount) in winners.items():
-        for bidder, amount in bids.get(item, []):
-            if amount > winning_amount:
+    for item, (winner, winning_amount) in winners.items():
+        item_bids = bids.get(item, [])
+        # The invariant is about the winner's REAL bid, not the announced
+        # amount. Trusting the announced amount lets an auctioneer award a low
+        # bidder while announcing a figure inflated past every real bid, and the
+        # check would pass. A winner with NO observed bid cannot be the highest
+        # bidder either: bid send-events are recorded at send time and survive
+        # message loss (loss emits a separate "dropped" delivery event), so an
+        # absent winner bid means a fabricated/shill award — never fall back to
+        # the announced amount.
+        winner_bids = [amount for bidder, amount in item_bids if bidder == winner]
+        if not winner_bids:
+            if item_bids:
                 violations.append(
-                    f"item {item}: winner bid {winning_amount} but {bidder} bid {amount}"
+                    f"item {item}: winner {winner} announced {winning_amount} "
+                    f"but placed no observed bid"
+                )
+            continue
+        effective_winner_bid = max(winner_bids)
+        for bidder, amount in item_bids:
+            if amount > effective_winner_bid:
+                violations.append(
+                    f"item {item}: winner {winner} bid {effective_winner_bid} "
+                    f"but {bidder} bid {amount}"
                 )
                 break
 
@@ -374,9 +401,22 @@ def validate_auction_all_notified(
 def validate_voting_tally(
     events: list[dict[str, Any]],
 ) -> list[ValidationResult]:
-    """The announced result matches the actual vote count."""
-    # round -> list of votes
-    votes: dict[str, list[str]] = defaultdict(list)
+    """The announced result matches the actual vote count.
+
+    Votes are tallied per unique voter (first vote wins), using the same
+    voter-identity rule as ``validate_voting_no_double_vote``: the explicit
+    voter field when present (``vote:<round>:<vote>:<voter>``), otherwise the
+    sending agent. A duplicate vote therefore cannot inflate a tally into one
+    this validator certifies — previously a voter voting twice plus a
+    coordinator announcing the inflated count passed as "correct".
+
+    Example::
+
+        vote:1:yes:voter-0 (sent twice) + result:1:passed:2/2 -> FAIL;
+        the deduplicated tally is 1/1.
+    """
+    # round -> voter -> first vote cast
+    votes: dict[str, dict[str, str]] = defaultdict(dict)
     # round -> (result_str, yes_count, total)
     results: dict[str, tuple[str, int, int]] = {}
 
@@ -386,10 +426,17 @@ def validate_voting_tally(
         msg = _message_body(ev)
         if msg.startswith("vote:"):
             parts = msg.split(":")
-            if len(parts) >= 3:
+            if len(parts) >= 4:
                 rnd = parts[1]
                 vote = parts[2]
-                votes[rnd].append(vote)
+                voter = parts[3]
+            elif len(parts) >= 3:
+                rnd = parts[1]
+                vote = parts[2]
+                voter = ev.get("agent", "")
+            else:
+                continue
+            votes[rnd].setdefault(voter, vote)
         elif msg.startswith("result:"):
             parts = msg.split(":")
             if len(parts) >= 4:
@@ -406,9 +453,9 @@ def validate_voting_tally(
 
     mismatches: list[str] = []
     for rnd, (_result_str, reported_yes, reported_total) in results.items():
-        actual_votes = votes.get(rnd, [])
-        actual_yes = sum(1 for v in actual_votes if v == "yes")
-        actual_total = len(actual_votes)
+        per_voter = votes.get(rnd, {})
+        actual_yes = sum(1 for v in per_voter.values() if v == "yes")
+        actual_total = len(per_voter)
         if actual_yes != reported_yes or actual_total != reported_total:
             mismatches.append(
                 f"round {rnd}: reported {reported_yes}/{reported_total} "
@@ -1405,6 +1452,968 @@ def validate_streaming_no_overbill_on_partition(
 
 
 # ---------------------------------------------------------------------------
+# EMPIC escrow/streaming payments validators
+# ---------------------------------------------------------------------------
+
+
+def _event_tick(ev: dict[str, Any]) -> int:
+    raw = ev.get("tick", ev.get("ts", 0))
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    if isinstance(raw, str):
+        with contextlib.suppress(ValueError):
+            return int(float(raw))
+    return 0
+
+
+def _empic_audit_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(msg)
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            if body.get("type") == "empic_audit":
+                body.setdefault("tick", _event_tick(ev))
+                parsed.append(body)
+    return parsed
+
+
+def _empic_message_events(
+    events: list[dict[str, Any]],
+    msg_type: str,
+) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        msg = _message_body(ev)
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(msg)
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            if body.get("type") != msg_type:
+                continue
+            body.setdefault("tick", _event_tick(ev))
+            body.setdefault("_sender", str(ev.get("agent", "")))
+            body.setdefault("_receiver", str(ev.get("to", "")))
+            parsed.append(body)
+    return parsed
+
+
+def _empic_ref(ev: dict[str, Any]) -> str:
+    value = ev.get("payment_ref")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _empic_delivery_id(ev: dict[str, Any]) -> str:
+    value = ev.get("delivery_id")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _empic_amounts_by_ref(
+    audit: list[dict[str, Any]],
+    event_type: str,
+) -> dict[str, int]:
+    totals: dict[str, int] = defaultdict(int)
+    for ev in audit:
+        if ev.get("event_type") != event_type:
+            continue
+        ref = _empic_ref(ev)
+        if ref:
+            totals[ref] += _safe_amount(ev.get("amount"))
+    return totals
+
+
+def validate_empic_escrow_conservation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every escrowed credit is either released or refunded per payment.
+
+    This checks the EMPIC shadow ledger from audit messages by ``payment_ref``:
+    consumer debits into escrow must equal provider releases plus consumer
+    refunds for each funded payment, not only globally.
+
+    Example::
+
+        result = validate_empic_escrow_conservation(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    debited = _empic_amounts_by_ref(audit, "empic_escrow_debited")
+    released = _empic_amounts_by_ref(audit, "empic_escrow_released")
+    refunded = _empic_amounts_by_ref(audit, "empic_escrow_refunded")
+    refs = sorted(set(debited) | set(released) | set(refunded))
+    violations = [
+        f"{ref}: debited={debited.get(ref, 0)} released={released.get(ref, 0)} "
+        f"refunded={refunded.get(ref, 0)}"
+        for ref in refs
+        if debited.get(ref, 0) != released.get(ref, 0) + refunded.get(ref, 0)
+    ]
+    if violations:
+        return [
+            ValidationResult(
+                "empic_escrow_conservation",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    total_debited = sum(debited.values())
+    total_released = sum(released.values())
+    total_refunded = sum(refunded.values())
+    return [
+        ValidationResult(
+            "empic_escrow_conservation",
+            True,
+            f"{len(refs)} refs, debited={total_debited}, "
+            f"released={total_released}, refunded={total_refunded}",
+        )
+    ]
+
+
+def validate_empic_no_release_without_accepted_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Provider payment release requires accepted delivery evidence.
+
+    Example::
+
+        result = validate_empic_no_release_without_accepted_delivery(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    accepted_deliveries = {
+        (_empic_ref(ev), _empic_delivery_id(ev))
+        for ev in audit
+        if ev.get("event_type") == "empic_delivery_evaluated"
+        and ev.get("accepted") is True
+        and _empic_ref(ev)
+        and _empic_delivery_id(ev)
+    }
+    violations: list[str] = []
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = _empic_ref(ev)
+        delivery_id = _empic_delivery_id(ev)
+        if not ref or not delivery_id or (ref, delivery_id) not in accepted_deliveries:
+            violations.append(
+                f"release ref={ref or '<missing>'} delivery={delivery_id or '<missing>'}"
+            )
+
+    if violations:
+        return [
+            ValidationResult(
+                "empic_no_release_without_accepted_delivery",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_no_release_without_accepted_delivery",
+            True,
+            f"verified {len(accepted_deliveries)} accepted deliveries",
+        )
+    ]
+
+
+def validate_empic_invalid_delivery_not_paid(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Rejected delivery evidence must not be credited to a provider.
+
+    Example::
+
+        result = validate_empic_invalid_delivery_not_paid(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    rejected = {
+        (_empic_ref(ev), _empic_delivery_id(ev))
+        for ev in audit
+        if ev.get("event_type") == "empic_delivery_evaluated"
+        and ev.get("accepted") is False
+        and _empic_ref(ev)
+        and _empic_delivery_id(ev)
+    }
+    paid = {
+        (_empic_ref(ev), _empic_delivery_id(ev))
+        for ev in audit
+        if ev.get("event_type") == "empic_escrow_released"
+        and _empic_ref(ev)
+        and _empic_delivery_id(ev)
+    }
+    violations = sorted(rejected & paid)
+    if violations:
+        return [
+            ValidationResult(
+                "empic_invalid_delivery_not_paid",
+                False,
+                f"rejected deliveries were paid: {violations}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_invalid_delivery_not_paid",
+            True,
+            f"verified {len(rejected)} rejected deliveries",
+        )
+    ]
+
+
+def validate_empic_delivery_policy_integrity(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Consumer acceptance must match delivery payload and declared policy.
+
+    Example::
+
+        result = validate_empic_delivery_policy_integrity(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    deliveries = {
+        (_empic_ref(ev), _empic_delivery_id(ev)): ev
+        for ev in _empic_message_events(events, "empic_delivery")
+        if _empic_ref(ev) and _empic_delivery_id(ev)
+    }
+    policies = {
+        _empic_ref(ev): ev
+        for ev in audit
+        if ev.get("event_type") == "empic_acceptance_policy" and _empic_ref(ev)
+    }
+    checked = 0
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_delivery_evaluated":
+            continue
+        ref = _empic_ref(ev)
+        delivery_id = _empic_delivery_id(ev)
+        if not ref or not delivery_id:
+            violations.append("delivery evaluation missing payment_ref or delivery_id")
+            continue
+        delivery = deliveries.get((ref, delivery_id))
+        policy_event = policies.get(ref)
+        if delivery is None:
+            violations.append(f"{ref}/{delivery_id}: evaluated delivery not found")
+            continue
+        if policy_event is None:
+            violations.append(f"{ref}/{delivery_id}: acceptance policy not found")
+            continue
+
+        expected, reason = _empic_policy_accepts(delivery, policy_event, _event_tick(ev))
+        observed = ev.get("accepted") is True
+        checked += 1
+        if observed != expected:
+            violations.append(
+                f"{ref}/{delivery_id}: observed accepted={observed}, "
+                f"policy accepted={expected} ({reason})"
+            )
+
+    if violations:
+        return [ValidationResult("empic_delivery_policy_integrity", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_delivery_policy_integrity",
+            True,
+            f"checked {checked} delivery evaluations",
+        )
+    ]
+
+
+def validate_empic_pubsub_billing_caps(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Pubsub releases must respect rate-per-tick, max-total, and accepted evidence.
+
+    Example::
+
+        result = validate_empic_pubsub_billing_caps(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    stream_refs: set[str] = set()
+    streams: dict[str, tuple[int, int]] = {}
+    accepted: dict[str, set[str]] = defaultdict(set)
+    released: dict[str, int] = defaultdict(int)
+    violations: list[str] = []
+
+    for ev in audit:
+        event_type = ev.get("event_type")
+        ref = _empic_ref(ev)
+        if not ref:
+            continue
+        if event_type == "empic_stream_opened":
+            stream_refs.add(ref)
+            rate = _safe_amount(ev.get("rate_per_tick"))
+            max_total = _safe_amount(ev.get("max_total") or ev.get("amount"))
+            if rate <= 0 or max_total <= 0:
+                violations.append(f"{ref}: invalid stream terms rate={rate} max_total={max_total}")
+            else:
+                streams[ref] = (rate, max_total)
+            continue
+
+        is_pubsub_ref = ref in stream_refs or ev.get("mode") == "pubsub"
+        if (
+            event_type == "empic_delivery_evaluated"
+            and ev.get("accepted") is True
+            and is_pubsub_ref
+        ):
+            delivery_id = _empic_delivery_id(ev)
+            if delivery_id:
+                accepted[ref].add(delivery_id)
+        elif event_type == "empic_escrow_released" and is_pubsub_ref:
+            amount = _safe_amount(ev.get("amount"))
+            delivery_id = _empic_delivery_id(ev)
+            terms = streams.get(ref)
+            if terms is None:
+                violations.append(f"{ref}: pubsub release without stream_opened")
+                continue
+            rate, _max_total = terms
+            if amount > rate:
+                violations.append(
+                    f"{ref}/{delivery_id or '<missing>'}: release {amount} > rate {rate}"
+                )
+            released[ref] += amount
+
+    for ref, (rate, max_total) in streams.items():
+        released_total = released.get(ref, 0)
+        accepted_cap = rate * len(accepted.get(ref, set()))
+        if released_total > max_total:
+            violations.append(f"{ref}: released {released_total} > max_total {max_total}")
+        if released_total > accepted_cap:
+            violations.append(
+                f"{ref}: released {released_total} > accepted delivery cap {accepted_cap}"
+            )
+
+    if violations:
+        return [ValidationResult("empic_pubsub_billing_caps", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_pubsub_billing_caps",
+            True,
+            f"checked {len(streams)} pubsub streams",
+        )
+    ]
+
+
+def validate_empic_max_spend_enforced(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Funded escrow amount must not exceed the consumer's declared budget.
+
+    Example::
+
+        result = validate_empic_max_spend_enforced(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    max_spend_by_ref: dict[str, int] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_acceptance_policy":
+            continue
+        ref = _empic_ref(ev)
+        if not ref:
+            continue
+        max_spend = _optional_amount(ev.get("max_spend"))
+        policy_raw = ev.get("policy")
+        if max_spend is None and isinstance(policy_raw, dict):
+            max_spend = _optional_amount(cast("dict[str, Any]", policy_raw).get("max_spend"))
+        if max_spend is not None:
+            max_spend_by_ref[ref] = max_spend
+
+    for ev in audit:
+        event_type = ev.get("event_type")
+        if event_type not in {"empic_escrow_debited", "empic_stream_opened"}:
+            continue
+        ref = _empic_ref(ev)
+        max_spend = max_spend_by_ref.get(ref)
+        if not ref or max_spend is None:
+            continue
+        amount = _safe_amount(ev.get("max_total") or ev.get("amount"))
+        if amount > max_spend:
+            violations.append(f"{ref}: funded {amount} exceeds declared max_spend {max_spend}")
+
+    if violations:
+        return [ValidationResult("empic_max_spend_enforced", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_max_spend_enforced",
+            True,
+            f"checked {len(max_spend_by_ref)} consumer policies",
+        )
+    ]
+
+
+def validate_empic_all_escrows_terminal(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every funded escrow must finish with complete release/refund accounting.
+
+    Example::
+
+        result = validate_empic_all_escrows_terminal(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    debited = _empic_amounts_by_ref(audit, "empic_escrow_debited")
+    released = _empic_amounts_by_ref(audit, "empic_escrow_released")
+    refunded = _empic_amounts_by_ref(audit, "empic_escrow_refunded")
+    stream_refs = {
+        _empic_ref(ev)
+        for ev in audit
+        if ev.get("event_type") == "empic_stream_opened" and _empic_ref(ev)
+    }
+    closed_refs = {
+        _empic_ref(ev)
+        for ev in audit
+        if ev.get("event_type") == "empic_stream_closed" and _empic_ref(ev)
+    }
+    violations: list[str] = []
+
+    for ref, debit in sorted(debited.items()):
+        release = released.get(ref, 0)
+        refund = refunded.get(ref, 0)
+        if release + refund != debit:
+            violations.append(
+                f"{ref}: not terminal debited={debit} released={release} refunded={refund}"
+            )
+        if ref in stream_refs and refund > 0 and ref not in closed_refs:
+            violations.append(f"{ref}: pubsub refund without stream close")
+        if ref not in stream_refs and release == 0 and refund == 0:
+            violations.append(f"{ref}: pull escrow has no release or refund")
+
+    if violations:
+        return [ValidationResult("empic_all_escrows_terminal", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_all_escrows_terminal",
+            True,
+            f"verified {len(debited)} funded escrows",
+        )
+    ]
+
+
+def validate_empic_no_duplicate_settlement(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Payment refs and delivery evidence must not be replayed for settlement.
+
+    Example::
+
+        result = validate_empic_no_duplicate_settlement(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    debits: dict[str, int] = defaultdict(int)
+    releases: dict[tuple[str, str], int] = defaultdict(int)
+    refunds: dict[str, int] = defaultdict(int)
+    evaluations: dict[tuple[str, str], int] = defaultdict(int)
+    violations: list[str] = []
+
+    for ev in audit:
+        ref = _empic_ref(ev)
+        event_type = ev.get("event_type")
+        if event_type == "empic_escrow_debited":
+            if not ref:
+                violations.append("escrow debit missing payment_ref")
+            else:
+                debits[ref] += 1
+        elif event_type == "empic_escrow_released":
+            delivery_id = _empic_delivery_id(ev)
+            if ref and delivery_id:
+                releases[(ref, delivery_id)] += 1
+        elif event_type == "empic_escrow_refunded" and ref:
+            refunds[ref] += 1
+        elif event_type == "empic_delivery_evaluated":
+            delivery_id = _empic_delivery_id(ev)
+            if ref and delivery_id:
+                evaluations[(ref, delivery_id)] += 1
+
+    violations.extend(
+        f"{ref}: duplicate escrow debit" for ref, count in debits.items() if count > 1
+    )
+    violations.extend(
+        f"{ref}/{delivery_id}: duplicate release"
+        for (ref, delivery_id), count in releases.items()
+        if count > 1
+    )
+    violations.extend(f"{ref}: duplicate refund" for ref, count in refunds.items() if count > 1)
+    violations.extend(
+        f"{ref}/{delivery_id}: duplicate delivery evaluation"
+        for (ref, delivery_id), count in evaluations.items()
+        if count > 1
+    )
+
+    if violations:
+        return [ValidationResult("empic_no_duplicate_settlement", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_no_duplicate_settlement",
+            True,
+            f"checked {len(debits)} payment refs and {len(evaluations)} delivery evaluations",
+        )
+    ]
+
+
+def validate_empic_provider_service_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Payments and releases must bind to the provider registered for the service.
+
+    Example::
+
+        result = validate_empic_provider_service_binding(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    service_provider: dict[str, str] = {}
+    payment_binding: dict[str, tuple[str, str]] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_service_registered":
+            continue
+        service_id = _safe_text(ev.get("service_id"))
+        provider = _safe_text(ev.get("provider"))
+        if service_id and provider:
+            service_provider[service_id] = provider
+
+    for ev in audit:
+        if ev.get("event_type") not in {"empic_escrow_debited", "empic_stream_opened"}:
+            continue
+        ref = _empic_ref(ev)
+        service_id = _safe_text(ev.get("service_id"))
+        provider = _safe_text(ev.get("provider"))
+        if not ref or not service_id or not provider:
+            violations.append(f"{ref or '<missing>'}: debit missing service/provider binding")
+            continue
+        registered = service_provider.get(service_id)
+        if registered is None:
+            violations.append(f"{ref}: service {service_id} was not registered")
+        elif registered != provider:
+            violations.append(
+                f"{ref}: debit provider {provider} does not match registered {registered}"
+            )
+        old = payment_binding.get(ref)
+        if old is not None and old != (service_id, provider):
+            violations.append(
+                f"{ref}: inconsistent payment binding {old} vs {(service_id, provider)}"
+            )
+        payment_binding[ref] = (service_id, provider)
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = _empic_ref(ev)
+        service_id = _safe_text(ev.get("service_id"))
+        provider = _safe_text(ev.get("provider"))
+        expected = payment_binding.get(ref)
+        if expected is None:
+            violations.append(f"{ref or '<missing>'}: release without payment binding")
+            continue
+        if (service_id, provider) != expected:
+            violations.append(
+                f"{ref}: release binding {(service_id, provider)} does not match {expected}"
+            )
+
+    if violations:
+        return [ValidationResult("empic_provider_service_binding", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_provider_service_binding",
+            True,
+            f"verified {len(payment_binding)} payment bindings",
+        )
+    ]
+
+
+def validate_empic_payment_participant_binding(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Payment refs must not change consumer, provider, service, or mode.
+
+    Example::
+
+        result = validate_empic_payment_participant_binding(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    tracked_types = {
+        "empic_acceptance_policy",
+        "empic_escrow_debited",
+        "empic_stream_opened",
+        "empic_delivery_evaluated",
+        "empic_escrow_released",
+        "empic_escrow_refunded",
+        "empic_stream_closed",
+    }
+    context_by_ref: dict[str, dict[str, str]] = defaultdict(dict)
+    checked_refs: set[str] = set()
+    violations: list[str] = []
+
+    for ev in audit:
+        event_type = str(ev.get("event_type") or "")
+        if event_type not in tracked_types:
+            continue
+        ref = _empic_ref(ev)
+        if not ref:
+            violations.append(f"{event_type}: missing payment_ref")
+            continue
+        checked_refs.add(ref)
+
+        payer = _safe_text(ev.get("payer"))
+        consumer_id = _safe_text(ev.get("consumer_id"))
+        if payer and consumer_id and payer != consumer_id:
+            violations.append(f"{ref}: payer {payer} does not match consumer_id {consumer_id}")
+        if payer and not consumer_id:
+            consumer_id = payer
+        if consumer_id and not payer:
+            payer = consumer_id
+
+        observed = {
+            "service_id": _safe_text(ev.get("service_id")),
+            "payer": payer,
+            "consumer_id": consumer_id,
+            "provider": _safe_text(ev.get("provider")),
+            "mode": _safe_text(ev.get("mode")),
+        }
+        if event_type in {
+            "empic_acceptance_policy",
+            "empic_escrow_debited",
+            "empic_stream_opened",
+            "empic_escrow_released",
+            "empic_escrow_refunded",
+            "empic_stream_closed",
+        }:
+            missing = [field for field, value in observed.items() if not value]
+            if missing:
+                violations.append(f"{ref}: {event_type} missing {missing}")
+
+        context = context_by_ref[ref]
+        for field, value in observed.items():
+            if not value:
+                continue
+            existing = context.get(field)
+            if existing is not None and existing != value:
+                violations.append(f"{ref}: {field} changed from {existing} to {value}")
+            else:
+                context[field] = value
+
+    if violations:
+        return [
+            ValidationResult(
+                "empic_payment_participant_binding",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_payment_participant_binding",
+            True,
+            f"verified {len(checked_refs)} payment participant bindings",
+        )
+    ]
+
+
+_EMPIC_FORBIDDEN_SECRET_KEYS = {
+    "api_key",
+    "api_key_secret",
+    "bearer_token",
+    "coinbase_secret",
+    "password",
+    "private_key",
+    "secret",
+    "secret_key",
+    "service_api_key",
+    "stripe_secret_key",
+    "wallet_auth_token",
+    "wallet_secret",
+}
+
+_PRIVATE_KEY_SENTINEL = "-----begin " + "private key-----"
+_PAYMENT_SECRET_PREFIXES = ("sk_" + "live_", "sk_" + "test_")
+
+
+def validate_empic_no_secret_material(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """EMPIC traces must contain only replay-safe public metadata.
+
+    Example::
+
+        result = validate_empic_no_secret_material(events)[0]
+    """
+    violations: list[str] = []
+    checked = 0
+
+    for ev in events:
+        if ev.get("kind") != "send":
+            continue
+        with contextlib.suppress(json.JSONDecodeError):
+            body_raw: object = json.loads(_message_body(ev))
+            if not isinstance(body_raw, dict):
+                continue
+            body = cast("dict[str, Any]", body_raw)
+            msg_type = str(body.get("type") or "")
+            if not msg_type.startswith("empic_"):
+                continue
+            checked += 1
+            violations.extend(_empic_secret_violations(body, path=msg_type))
+
+    if violations:
+        return [
+            ValidationResult(
+                "empic_no_secret_material",
+                False,
+                "; ".join(violations),
+            )
+        ]
+    return [
+        ValidationResult(
+            "empic_no_secret_material",
+            True,
+            f"checked {checked} EMPIC trace messages",
+        )
+    ]
+
+
+def validate_empic_no_drain_after_close(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Pubsub streams must not release funds after close.
+
+    Example::
+
+        result = validate_empic_no_drain_after_close(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    close_tick: dict[str, int] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") == "empic_stream_closed":
+            ref = str(ev.get("payment_ref", ""))
+            if ref:
+                close_tick[ref] = _event_tick(ev)
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = str(ev.get("payment_ref", ""))
+        closed_at = close_tick.get(ref)
+        if closed_at is not None and _event_tick(ev) > closed_at:
+            violations.append(f"{ref} released at {_event_tick(ev)} after close at {closed_at}")
+
+    if violations:
+        return [ValidationResult("empic_no_drain_after_close", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_no_drain_after_close",
+            True,
+            f"verified {len(close_tick)} closed pubsub streams",
+        )
+    ]
+
+
+def validate_empic_no_overbill_on_partition(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Pubsub streams must not release funds after a partitioned delivery edge.
+
+    Example::
+
+        result = validate_empic_no_overbill_on_partition(events)[0]
+    """
+    audit = _empic_audit_events(events)
+    stream_parties: dict[str, tuple[str, str]] = {}
+    partition_start: dict[tuple[str, str], int] = {}
+    violations: list[str] = []
+
+    for ev in audit:
+        if ev.get("event_type") == "empic_stream_opened":
+            ref = str(ev.get("payment_ref", ""))
+            payer = str(ev.get("payer", ""))
+            provider = str(ev.get("provider", ""))
+            if ref and payer and provider:
+                stream_parties[ref] = (payer, provider)
+
+    for ev in events:
+        if ev.get("kind") != "dropped":
+            continue
+        sender = str(ev.get("from", ""))
+        receiver = str(ev.get("agent", ""))
+        if not sender or not receiver:
+            continue
+        tick = _event_tick(ev)
+        for edge in ((sender, receiver), (receiver, sender)):
+            old = partition_start.get(edge)
+            if old is None or tick < old:
+                partition_start[edge] = tick
+
+    for ev in audit:
+        if ev.get("event_type") != "empic_escrow_released":
+            continue
+        ref = str(ev.get("payment_ref", ""))
+        parties = stream_parties.get(ref)
+        if parties is None:
+            continue
+        payer, provider = parties
+        drop_tick = partition_start.get((payer, provider))
+        if drop_tick is not None and _event_tick(ev) >= drop_tick:
+            violations.append(
+                f"{ref} released at {_event_tick(ev)} after {payer}<->{provider} "
+                f"partition at {drop_tick}"
+            )
+
+    if violations:
+        return [ValidationResult("empic_no_overbill_on_partition", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "empic_no_overbill_on_partition",
+            True,
+            f"verified {len(stream_parties)} pubsub streams",
+        )
+    ]
+
+
+def _empic_policy_accepts(
+    delivery: dict[str, Any],
+    policy_event: dict[str, Any],
+    current_tick: int,
+) -> tuple[bool, str]:
+    data_raw = delivery.get("data")
+    if not isinstance(data_raw, dict):
+        return False, "missing data object"
+    data = cast("dict[str, Any]", data_raw)
+
+    policy_raw = policy_event.get("policy")
+    policy = cast("dict[str, Any]", policy_raw) if isinstance(policy_raw, dict) else {}
+
+    if _policy_flag(policy, "bind_service_id") and _safe_text(
+        delivery.get("service_id")
+    ) != _safe_text(policy_event.get("service_id")):
+        return False, "service_id mismatch"
+    if _policy_flag(policy, "bind_provider_id") and _safe_text(
+        delivery.get("provider_id")
+    ) != _safe_text(policy_event.get("provider")):
+        return False, "provider_id mismatch"
+    if _policy_flag(policy, "bind_consumer_id"):
+        expected_consumer = _safe_text(policy_event.get("consumer_id")) or _safe_text(
+            policy_event.get("payer")
+        )
+        if _safe_text(delivery.get("consumer_id")) != expected_consumer:
+            return False, "consumer_id mismatch"
+    if _policy_flag(policy, "bind_request_params"):
+        expected_params = policy_event.get("request_params")
+        if delivery.get("request_params") != expected_params:
+            return False, "request_params mismatch"
+
+    required = policy.get("required_fields", [])
+    if isinstance(required, list):
+        for field in cast("list[object]", required):
+            if isinstance(field, str) and field not in data:
+                return False, f"missing field {field}"
+
+    ranges = policy.get("numeric_ranges", {})
+    if isinstance(ranges, dict):
+        for field_raw, bounds_raw in cast("dict[object, object]", ranges).items():
+            if not isinstance(field_raw, str) or not isinstance(bounds_raw, dict):
+                continue
+            bounds = cast("dict[str, object]", bounds_raw)
+            value = _safe_float(data.get(field_raw))
+            if value is None:
+                return False, f"{field_raw} is not numeric"
+            min_value = _safe_float(bounds.get("min"))
+            max_value = _safe_float(bounds.get("max"))
+            if min_value is not None and value < min_value:
+                return False, f"{field_raw} below minimum"
+            if max_value is not None and value > max_value:
+                return False, f"{field_raw} above maximum"
+
+    max_age = _safe_amount(policy.get("max_age_ticks"))
+    data_tick = _safe_amount(data.get("tick"))
+    if data_tick > current_tick:
+        return False, "delivery tick is in the future"
+    if max_age >= 0 and current_tick - data_tick > max_age:
+        return False, "delivery stale"
+
+    return True, "accepted"
+
+
+def _policy_flag(policy: dict[str, Any], key: str) -> bool:
+    value = policy.get(key, True)
+    return value if isinstance(value, bool) else True
+
+
+def _empic_secret_violations(value: object, *, path: str) -> list[str]:
+    violations: list[str] = []
+    if isinstance(value, dict):
+        for key_raw, child in cast("dict[object, object]", value).items():
+            key = str(key_raw)
+            normalized = key.lower().replace("-", "_")
+            child_path = f"{path}.{key}"
+            if normalized in _EMPIC_FORBIDDEN_SECRET_KEYS or normalized.endswith("_secret"):
+                violations.append(f"{child_path}: forbidden secret field")
+            violations.extend(_empic_secret_violations(child, path=child_path))
+    elif isinstance(value, list):
+        for index, item in enumerate(cast("list[object]", value)):
+            violations.extend(_empic_secret_violations(item, path=f"{path}[{index}]"))
+    elif isinstance(value, str):
+        lowered = value.lower()
+        if _PRIVATE_KEY_SENTINEL in lowered:
+            violations.append(f"{path}: private key material")
+        elif lowered.startswith("bearer "):
+            violations.append(f"{path}: bearer token material")
+        elif value.startswith(_PAYMENT_SECRET_PREFIXES):
+            violations.append(f"{path}: payment provider secret key material")
+    return violations
+
+
+def _safe_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _safe_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return float(value)
+    return None
+
+
+def _optional_amount(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return int(value)
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return int(float(value))
+    return None
+
+
+def _safe_amount(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return int(value)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Comms schema-versioning validators (adversarial)
 # ---------------------------------------------------------------------------
 
@@ -1663,6 +2672,282 @@ def validate_comms_no_silent_drop(
             "comms_no_silent_drop",
             True,
             f"{checked} forward-compat envelope(s) preserved all unknown fields",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Comms downgrade-attack validator (adversarial)
+# ---------------------------------------------------------------------------
+# Ground truth for "was this envelope tampered?" is recomputed from the bytes a
+# receiver actually saw, independent of the decoder under test: an envelope that
+# carries an ``auth_tag`` is authentic iff that tag still covers its canonical
+# content. A comms layer passes iff it *rejects* every envelope whose tag no
+# longer verifies (rollback / field-strip) while still *accepting* the authentic
+# ones. ``versioned`` and ``nest_native`` have no tag concept, so they accept the
+# tampered copies and fail; ``authenticated`` rejects them and passes.
+
+
+def _collect_downgrade_wire(
+    events: list[dict[str, Any]],
+) -> dict[str, bool]:
+    """Map each delivered tagged envelope id to whether its ``auth_tag`` verifies.
+
+    Only envelopes that actually carry a tag are judged; untagged legacy traffic
+    is out of scope for this check. ``True`` means authentic (tag matches the
+    recomputed value), ``False`` means tampered.
+
+    Example::
+
+        authentic_by_id = _collect_downgrade_wire(events)
+    """
+    from nest_plugins_reference.comms.authenticated import (
+        AUTH_TAG_FIELD,
+        expected_auth_tag,
+    )
+
+    authentic: dict[str, bool] = {}
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        env = _parse_comms_envelope(str(ev.get("msg", "")))
+        if env is None or AUTH_TAG_FIELD not in env:
+            continue
+        mid = str(env.get("id"))
+        carried = str(env.get(AUTH_TAG_FIELD))
+        authentic[mid] = carried == expected_auth_tag(env)
+    return authentic
+
+
+def validate_comms_downgrade_resistance(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must reject envelopes whose authentication tag no longer covers them.
+
+    Catches the *silent-downgrade* attack: an on-path adversary rewrites an
+    authentic envelope (rolls ``schema_version`` back, or strips a field) and
+    leaves the stale tag in place. ``authenticated`` recomputes the tag and
+    refuses the forgery; ``versioned``/``nest_native`` have no tag and accept it.
+
+    Example::
+
+        results = validate_comms_downgrade_resistance(events)
+    """
+    authentic = _collect_downgrade_wire(events)
+    acks = _collect_comms_acks(events)
+    if not authentic:
+        return [
+            ValidationResult("comms_downgrade_resistance", False, "no tagged envelopes in trace")
+        ]
+    violations: list[str] = []
+    tampered_checked = 0
+    for mid, is_authentic in authentic.items():
+        if is_authentic:
+            continue
+        tampered_checked += 1
+        status = acks.get(mid)
+        outcome = status[0] if status is not None else "no ack"
+        if not outcome.startswith("rejected"):
+            violations.append(f"{mid}: tampered envelope not rejected (got {outcome})")
+    if violations:
+        return [ValidationResult("comms_downgrade_resistance", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_downgrade_resistance",
+            True,
+            f"{tampered_checked} tampered envelope(s) correctly rejected",
+        )
+    ]
+
+
+def validate_comms_authentic_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Receivers must still accept *authentic* envelopes (no false positives).
+
+    The liveness counterpart to
+    :func:`validate_comms_downgrade_resistance`: a plugin must not "pass" the
+    security check by rejecting everything. Every delivered envelope whose tag
+    verifies has to be accepted, so tamper-evidence does not break the honest
+    rolling-upgrade traffic it rides alongside.
+
+    Example::
+
+        results = validate_comms_authentic_delivery(events)
+    """
+    authentic = _collect_downgrade_wire(events)
+    acks = _collect_comms_acks(events)
+    if not authentic:
+        return [ValidationResult("comms_authentic_delivery", False, "no tagged envelopes in trace")]
+    violations: list[str] = []
+    honest_checked = 0
+    for mid, is_authentic in authentic.items():
+        if not is_authentic:
+            continue
+        honest_checked += 1
+        status = acks.get(mid)
+        outcome = status[0] if status is not None else "no ack"
+        if outcome != "accepted":
+            violations.append(f"{mid}: authentic envelope not accepted (got {outcome})")
+    if violations:
+        return [ValidationResult("comms_authentic_delivery", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_authentic_delivery",
+            True,
+            f"{honest_checked} authentic envelope(s) correctly accepted",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Comms replay-attack validator (adversarial)
+# ---------------------------------------------------------------------------
+# Ground truth for "was this id replayed?" is the wire itself: how many times a
+# given envelope id was actually delivered to the receiver, independent of the
+# decoder under test. An id delivered more than once means an attacker (or a
+# faithfully-replaying relay) captured a genuine envelope and re-sent it. A
+# comms layer passes iff it accepts the *first* delivery of every id and
+# rejects every delivery after that. ``versioned`` and ``authenticated`` have
+# no replay memory -- a captured, byte-identical envelope re-verifies every
+# time -- so they accept the duplicate and fail; ``replay_safe`` remembers
+# accepted ids per sender and rejects the repeat.
+
+
+def _collect_comms_wire_sequence(
+    events: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Map each envelope id to *every* delivery it received, in trace order.
+
+    Unlike :func:`_collect_comms_wire` (which keeps only the last delivery per
+    id), this keeps the full sequence so a second delivery of the same id --
+    the replay itself -- is visible rather than overwritten.
+
+    Example::
+
+        deliveries = _collect_comms_wire_sequence(events)
+        assert len(deliveries["m-0-replayed"]) == 2
+    """
+    wire: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        env = _parse_comms_envelope(str(ev.get("msg", "")))
+        if env is None:
+            continue
+        mid = str(env.get("id"))
+        version = str(env.get("schema_version", "1.0"))
+        wire[mid].append({"version": version, "major": _comms_major(version)})
+    return wire
+
+
+def _collect_comms_ack_sequence(events: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Map each envelope id to the ordered list of ack statuses it received.
+
+    Unlike :func:`_collect_comms_acks` (last ack wins), this preserves every
+    ack in emission order so the first (genuine) delivery's outcome can be
+    checked separately from the replay's.
+
+    Example::
+
+        acks = _collect_comms_ack_sequence(events)
+        assert acks["m-0-replayed"] == ["accepted", "rejected_replay"]
+    """
+    acks: dict[str, list[str]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("ack:"):
+            continue
+        parts = msg.split(":", 3)
+        if len(parts) < 3:
+            continue
+        mid, status = parts[1], parts[2]
+        acks[mid].append(status)
+    return acks
+
+
+def validate_comms_replay_resistance(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every delivery of an id after the first must be rejected as a replay.
+
+    Catches the *replay* attack: an on-path attacker (or relay) captures a
+    genuinely-tagged envelope and re-sends it verbatim. Nothing was rewritten,
+    so tamper-evidence alone (``authenticated``) still verifies it; only a
+    plugin that remembers accepted ids (``replay_safe``) can tell the second
+    delivery apart from the first.
+
+    Example::
+
+        results = validate_comms_replay_resistance(events)
+    """
+    wire = _collect_comms_wire_sequence(events)
+    acks = _collect_comms_ack_sequence(events)
+    replayed = {mid: deliveries for mid, deliveries in wire.items() if len(deliveries) > 1}
+    if not replayed:
+        return [
+            ValidationResult("comms_replay_resistance", False, "no replayed envelopes in trace")
+        ]
+    violations: list[str] = []
+    for mid, deliveries in replayed.items():
+        statuses = acks.get(mid, [])
+        if len(statuses) < len(deliveries):
+            violations.append(
+                f"{mid}: {len(deliveries)} deliveries but only {len(statuses)} ack(s)"
+            )
+            continue
+        for i, status in enumerate(statuses[1 : len(deliveries)], start=2):
+            if not status.startswith("rejected"):
+                violations.append(f"{mid}: replay delivery #{i} not rejected (got {status})")
+    if violations:
+        return [ValidationResult("comms_replay_resistance", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_replay_resistance",
+            True,
+            f"{len(replayed)} replayed envelope(s) correctly rejected after first delivery",
+        )
+    ]
+
+
+def validate_comms_replay_honest_delivery(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The first delivery of every id must still be accepted (no false positives).
+
+    The liveness counterpart to :func:`validate_comms_replay_resistance`: a
+    plugin cannot pass the replay check by refusing all traffic. Every id's
+    first delivery -- replayed later or not -- must be accepted.
+
+    Example::
+
+        results = validate_comms_replay_honest_delivery(events)
+    """
+    wire = _collect_comms_wire_sequence(events)
+    acks = _collect_comms_ack_sequence(events)
+    if not wire:
+        return [
+            ValidationResult(
+                "comms_replay_honest_delivery", False, "no delivered envelopes in trace"
+            )
+        ]
+    violations: list[str] = []
+    for mid in wire:
+        statuses = acks.get(mid, [])
+        if not statuses:
+            violations.append(f"{mid}: delivered but no ack")
+            continue
+        if statuses[0] != "accepted":
+            violations.append(f"{mid}: first delivery not accepted (got {statuses[0]})")
+    if violations:
+        return [ValidationResult("comms_replay_honest_delivery", False, "; ".join(violations))]
+    return [
+        ValidationResult(
+            "comms_replay_honest_delivery",
+            True,
+            f"{len(wire)} first-time delivery(ies) correctly accepted",
         )
     ]
 
@@ -2076,6 +3361,265 @@ def validate_receipt_reputation_honest_confidence(
             "receipt_reputation_honest_confidence",
             True,
             f"{len(honest_conf)} honest corroborated, {len(ring_conf)} ring collapsed to 0",
+        )
+    ]
+
+
+def validate_receipt_reputation_ring_majority(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The scored collusion ring strictly outnumbers the scored honest agents.
+
+    This is the enforcement-liveness check for the majority-ring red-team
+    (issue #97): it proves the trace actually exercised the attack the other
+    two validators defend against — a ring *larger* than the honest population,
+    which the old largest-SCC anchor exemption would have crowned as the honest
+    anchor. Without this check, a scenario quietly shrunk back to a minority
+    ring would pass ``ring_severed`` without ever testing the inversion.
+
+    PASSes iff both populations were scored and ring count > honest count.
+    FAILs on missing populations or a non-majority ring — without crashing.
+
+    Example::
+
+        results = validate_receipt_reputation_ring_majority(events)
+    """
+    scores = _collect_scores(events)
+    ring_count = sum(1 for (_s, _c, role) in scores.values() if role == "ring")
+    honest_count = sum(1 for (_s, _c, role) in scores.values() if role == "honest")
+
+    if ring_count == 0 or honest_count == 0:
+        return [
+            ValidationResult(
+                "receipt_reputation_ring_majority",
+                False,
+                f"missing populations: {ring_count} ring, {honest_count} honest scored",
+            )
+        ]
+    if ring_count <= honest_count:
+        return [
+            ValidationResult(
+                "receipt_reputation_ring_majority",
+                False,
+                f"ring is not a majority: {ring_count} ring <= {honest_count} honest — "
+                "the trace never exercised the issue #97 inversion",
+            )
+        ]
+    return [
+        ValidationResult(
+            "receipt_reputation_ring_majority",
+            True,
+            f"attack precondition held: {ring_count} ring > {honest_count} honest",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Rogue-trusted-agent (pre-action permit gate) validators
+#
+# The rogue_trusted_agent scenario broadcasts ``:``-delimited lines (see
+# nest_core.scenarios_builtin.rogue_trusted_agent). A veteran with a strong
+# in-policy record makes one out-of-policy attempt; the trace self-declares it
+# with a ``rogue_attempt:`` line so these validators need no policy table. Under
+# a plugin with a pre-action gate the attempt is refused (``permit:...:denied``
+# + ``blocked:``) and never runs; under a plugin with no gate it ``exec:``s.
+# ---------------------------------------------------------------------------
+
+# The veteran must have executed at least this many in-policy actions before the
+# rogue attempt, so "a high-reputation agent is still refused" is grounded.
+_ROGUE_MIN_REPUTATION = 3
+
+
+def _rogue_declaration(events: list[dict[str, Any]]) -> tuple[str, str, str] | None:
+    """Return the first declared rogue ``(agent, verb, resource)``, or ``None``.
+
+    Example::
+
+        pair = _rogue_declaration(events)
+    """
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("rogue_attempt:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 4:
+            return parts[1], parts[2], parts[3]
+    return None
+
+
+def _rogue_triples(events: list[dict[str, Any]], prefix: str) -> list[tuple[str, str, str]]:
+    """Collect ``(agent, verb, resource)`` triples from lines with ``prefix``.
+
+    Preserves trace order. Used for ``exec:`` and ``blocked:`` lines and, with a
+    trailing field trimmed, for the ``permit:`` lines.
+
+    Example::
+
+        execs = _rogue_triples(events, "exec:")
+    """
+    out: list[tuple[str, str, str]] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith(prefix):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 4:
+            out.append((parts[1], parts[2], parts[3]))
+    return out
+
+
+def _rogue_permits(events: list[dict[str, Any]]) -> list[tuple[str, str, str, str]]:
+    """Collect ``(agent, verb, resource, outcome)`` from ``permit:`` lines.
+
+    ``permit_env:`` lines are excluded — their prefix is not ``permit:``.
+
+    Example::
+
+        decisions = _rogue_permits(events)
+    """
+    out: list[tuple[str, str, str, str]] = []
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("permit:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 5:
+            out.append((parts[1], parts[2], parts[3], parts[4]))
+    return out
+
+
+def validate_rogue_trusted_agent_blocked(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """The declared out-of-policy attempt is refused and never executes.
+
+    Reads the trace the scenario emits — never a policy table — and holds iff:
+
+    * a ``rogue_attempt:`` line declares the veteran's out-of-policy pair,
+    * **no** ``exec:`` line runs that pair (it did not execute), and
+    * a ``permit:...:denied`` line refused that exact pair.
+
+    ``score_average`` FAILS this: with no pre-action gate the veteran acts
+    unconditionally, so an ``exec:`` line for the rogue pair is present.
+    ``aae_permit_gate`` PASSES: it returns a signed denial and the action is
+    blocked. A trace that never declared a rogue attempt also fails — without
+    crashing on either layer.
+
+    Example::
+
+        results = validate_rogue_trusted_agent_blocked(events)
+    """
+    rogue = _rogue_declaration(events)
+    if rogue is None:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                "no rogue_attempt declared in trace",
+            )
+        ]
+    agent, verb, resource = rogue
+    executed = rogue in _rogue_triples(events, "exec:")
+    denied = any(
+        (a, v, r) == rogue and outcome == "denied" for a, v, r, outcome in _rogue_permits(events)
+    )
+
+    if executed:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                f"rogue action executed: {agent} ran {verb} on {resource} "
+                "(no pre-action gate refused it)",
+            )
+        ]
+    if not denied:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_blocked",
+                False,
+                f"rogue action neither executed nor refused: {agent} {verb} {resource} "
+                "has no signed denial",
+            )
+        ]
+    return [
+        ValidationResult(
+            "rogue_trusted_agent_blocked",
+            True,
+            f"rogue action refused and blocked: {agent} denied {verb} on {resource}",
+        )
+    ]
+
+
+def validate_rogue_trusted_agent_reputation(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Reputation was earned first, and no in-policy action was refused.
+
+    Two defense-in-depth invariants that ground the demonstration:
+
+    * the veteran executed at least ``_ROGUE_MIN_REPUTATION`` in-policy actions
+      *before* its rogue attempt — so "a high-reputation agent is still refused"
+      is real, not asserted, and
+    * every refusal in the trace names the declared rogue pair — a permit gate
+      that spuriously denied an in-policy action would be caught here.
+
+    Holds under both layers (it does not depend on the rogue being blocked), so
+    it corroborates the primary check rather than duplicating it. Never crashes.
+
+    Example::
+
+        results = validate_rogue_trusted_agent_reputation(events)
+    """
+    rogue = _rogue_declaration(events)
+    if rogue is None:
+        return [
+            ValidationResult(
+                "rogue_trusted_agent_reputation",
+                False,
+                "no rogue_attempt declared in trace",
+            )
+        ]
+    veteran, _verb, _resource = rogue
+
+    # In-policy executions by the veteran, in trace order, before the rogue pair.
+    prior = 0
+    for a, v, r in _rogue_triples(events, "exec:"):
+        if (a, v, r) == rogue:
+            break
+        if a == veteran:
+            prior += 1
+
+    problems: list[str] = []
+    if prior < _ROGUE_MIN_REPUTATION:
+        problems.append(
+            f"veteran executed only {prior} in-policy action(s) before the rogue attempt "
+            f"(need >= {_ROGUE_MIN_REPUTATION} to prove reputation is irrelevant)"
+        )
+    spurious = [
+        (a, v, r)
+        for a, v, r, outcome in _rogue_permits(events)
+        if outcome == "denied" and (a, v, r) != rogue
+    ]
+    if spurious:
+        problems.append(
+            "in-policy actions spuriously denied: "
+            + ", ".join(f"{a}:{v}:{r}" for a, v, r in sorted(set(spurious)))
+        )
+
+    if problems:
+        return [ValidationResult("rogue_trusted_agent_reputation", False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            "rogue_trusted_agent_reputation",
+            True,
+            f"veteran earned {prior} in-policy actions; every refusal was the declared rogue pair",
         )
     ]
 
@@ -2771,14 +4315,1268 @@ def validate_bft_no_stuck_view(
 
 
 # ---------------------------------------------------------------------------
+# Failure-detection validators
+# ---------------------------------------------------------------------------
+
+
+_GAP_MARGIN = 2.0
+"""Safety margin added to ``hb_max`` when deriving the plausible-gap bound.
+
+Heartbeats are jittered on ``uniform(hb_min, hb_max)`` with zero message drop,
+so consecutive observer receipts from a living peer are at most ``hb_max``
+apart; the margin absorbs event-queue rounding.  If the observer received a
+heartbeat within ``hb_max + _GAP_MARGIN``, the peer was provably alive and any
+suspicion of it is a false positive.
+"""
+
+_MAX_PLAUSIBLE_GAP = 22.0
+"""Fallback plausible-gap bound for traces without an ``fd:config`` marker.
+
+Current scenario runs carry their heartbeat bound in an ``fd:config`` marker
+and :func:`_fd_max_plausible_gap` derives the bound from it, so re-running with
+different ``hb_max`` values cannot silently invalidate the accuracy check.
+This constant (the default ``hb_max == 20`` plus the margin) applies only to
+traces recorded before the marker existed.
+"""
+
+_ACCURACY_WARMUP = 100.0
+"""Logical time before which suspicions are ignored for the accuracy check.
+
+An accrual detector needs a handful of inter-arrival samples before its score
+is meaningful; this window lets every detector populate its history before its
+verdicts are held against it.
+"""
+
+
+def _parse_fd_record(ev: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the decoded JSON dict if *ev* is an ``fd:*`` broadcast, else ``None``.
+
+    Example::
+
+        rec = _parse_fd_record(event)
+    """
+    if ev.get("kind") != "broadcast":
+        return None
+    msg = str(ev.get("msg", ""))
+    if '"fd"' not in msg:
+        return None
+    try:
+        obj = json.loads(msg)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return cast("dict[str, Any]", obj)
+
+
+def _fd_max_plausible_gap(events: list[dict[str, Any]], observer_ids: set[str]) -> float:
+    """Derive the live-peer plausible-gap bound from the trace itself.
+
+    The observer broadcasts one ``fd:config`` marker carrying the scenario's
+    ``hb_max``; the bound is ``hb_max + _GAP_MARGIN``.  Only a marker emitted by
+    an observer (an agent that also publishes ``fd:status`` verdicts) is
+    trusted, so a Byzantine emitter cannot broadcast a spoofed ``fd:config`` to
+    inflate the bound.  Traces without a trusted marker fall back to
+    :data:`_MAX_PLAUSIBLE_GAP`.
+
+    Example::
+
+        gap = _fd_max_plausible_gap(events, _fd_observer_ids(events))
+    """
+    for ev in events:
+        if ev.get("agent") not in observer_ids:
+            continue
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "config":
+            continue
+        hb_max = rec.get("hb_max")
+        if isinstance(hb_max, (int, float)):
+            return float(hb_max) + _GAP_MARGIN
+    return _MAX_PLAUSIBLE_GAP
+
+
+def _fd_observer_ids(events: list[dict[str, Any]]) -> set[str]:
+    """Return the set of agent ids that emit ``fd:status`` broadcasts."""
+    observers: set[str] = set()
+    for ev in events:
+        rec = _parse_fd_record(ev)
+        if rec is not None and rec.get("fd") == "status":
+            agent = ev.get("agent")
+            if isinstance(agent, str):
+                observers.add(agent)
+    return observers
+
+
+def _fd_statuses(events: list[dict[str, Any]]) -> dict[str, list[tuple[float, bool]]]:
+    """Return peer -> sorted ``(ts, suspected)`` from ``fd:status`` broadcasts."""
+    statuses: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+    for ev in events:
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "status":
+            continue
+        peer = rec.get("peer")
+        suspected = rec.get("suspected")
+        ts = ev.get("ts")
+        if isinstance(peer, str) and isinstance(suspected, bool) and isinstance(ts, (int, float)):
+            statuses[peer].append((float(ts), suspected))
+    for peer in statuses:
+        statuses[peer].sort(key=lambda item: item[0])
+    return statuses
+
+
+def _fd_transitions(
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, list[tuple[float, bool]]], float]:
+    """Return (peer -> sorted ``(ts, reachable)`` markers, max ts over all events)."""
+    transitions: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+    last_ts = 0.0
+    for ev in events:
+        ts = ev.get("ts")
+        if isinstance(ts, (int, float)):
+            last_ts = max(last_ts, float(ts))
+        rec = _parse_fd_record(ev)
+        if rec is None or rec.get("fd") != "phase":
+            continue
+        peer = rec.get("peer")
+        reachable = rec.get("reachable")
+        if isinstance(peer, str) and isinstance(reachable, bool) and isinstance(ts, (int, float)):
+            transitions[peer].append((float(ts), reachable))
+    for peer in transitions:
+        transitions[peer].sort(key=lambda item: item[0])
+    return transitions, last_ts
+
+
+def _fd_hb_receipts(events: list[dict[str, Any]], observer_ids: set[str]) -> dict[str, list[float]]:
+    """Return peer -> sorted receipt timestamps of that peer's heartbeats at an observer."""
+    receipts: dict[str, list[float]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive":
+            continue
+        agent = ev.get("agent")
+        if agent not in observer_ids:
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("FDHB|"):
+            continue
+        sender = ev.get("from")
+        ts = ev.get("ts")
+        if isinstance(sender, str) and isinstance(ts, (int, float)):
+            receipts[sender].append(float(ts))
+    for peer in receipts:
+        receipts[peer].sort()
+    return receipts
+
+
+def _segments_for_peer(
+    transitions: list[tuple[float, bool]], last_ts: float
+) -> list[tuple[float, float, bool]]:
+    """Expand reachability markers into ``(start, end, reachable)`` segments."""
+    if not transitions:
+        return []
+    segments: list[tuple[float, float, bool]] = []
+    for idx, (ts, reachable) in enumerate(transitions):
+        end = transitions[idx + 1][0] if idx + 1 < len(transitions) else last_ts
+        segments.append((ts, end, reachable))
+    return segments
+
+
+def _in_any_interval(t: float, intervals: list[tuple[float, float]]) -> bool:
+    """Return whether *t* falls within any ``[start, end]`` interval."""
+    return any(start <= t <= end for start, end in intervals)
+
+
+def _last_leq(sorted_ts: list[float], t: float) -> float | None:
+    """Return the largest timestamp ``<= t`` in *sorted_ts*, or ``None``."""
+    found: float | None = None
+    for ts in sorted_ts:
+        if ts <= t:
+            found = ts
+        else:
+            break
+    return found
+
+
+def validate_failure_detection_completeness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Every peer that truly goes silent is eventually -- and still -- suspected.
+
+    For each unreachable segment in the ground-truth ``fd:phase`` markers, the
+    detector must report the peer suspected at some status update inside the
+    segment and still have it suspected at the last in-segment update.  A trace
+    with no unreachable segment at all is a scenario setup failure.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+
+    outage_segments: dict[str, list[tuple[float, float]]] = {}
+    for peer, peer_transitions in transitions.items():
+        downs = [
+            (start, end)
+            for start, end, reachable in _segments_for_peer(peer_transitions, last_ts)
+            if not reachable
+        ]
+        if downs:
+            outage_segments[peer] = downs
+
+    if not outage_segments:
+        return [
+            ValidationResult(
+                "failure_detection_completeness",
+                False,
+                "no unreachable fd:phase segment found in trace",
+            )
+        ]
+
+    failures: list[str] = []
+    checked = 0
+    for peer, downs in outage_segments.items():
+        peer_statuses = statuses.get(peer, [])
+        for u_start, u_end in downs:
+            checked += 1
+            in_window = [(t, s) for (t, s) in peer_statuses if u_start < t <= u_end]
+            if not in_window:
+                failures.append(f"{peer}: no status during outage [{u_start}, {u_end}]")
+                continue
+            if not any(s for _, s in in_window):
+                failures.append(f"{peer}: never suspected during outage [{u_start}, {u_end}]")
+                continue
+            if not in_window[-1][1]:
+                failures.append(f"{peer}: not suspected at outage end [{u_start}, {u_end}]")
+
+    if failures:
+        return [ValidationResult("failure_detection_completeness", False, "; ".join(failures))]
+    return [
+        ValidationResult(
+            "failure_detection_completeness",
+            True,
+            f"all {checked} outage segment(s) detected and still suspected at end",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Portable-reputation (PARC) migration validators
+#
+# The parc_migration scenario broadcasts one ``admit:<agent>:<decision>:
+# <reason>:<role>`` line per border decision. The six checks below each pin
+# one attack class the naive signature-trusting gate would miss (or one
+# retention property a degenerate deny-everything gate would break). Together
+# they prove the headline invariant: a valid signature is not admission.
+# ---------------------------------------------------------------------------
+
+
+def _collect_admissions(
+    events: list[dict[str, Any]],
+) -> dict[str, tuple[bool, str, str]]:
+    """Parse ``admit:<agent>:<granted|denied>:<reason>:<role>`` trace lines.
+
+    Returns ``agent -> (admitted, reason, role)`` using the last decision per
+    agent. Decisions come from the live gate against the configured trust
+    plugin, so this dict is what lets the validators discriminate between a
+    recomputing gate and a naive one.
+
+    Example::
+
+        admissions = _collect_admissions(events)
+    """
+    admissions: dict[str, tuple[bool, str, str]] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("admit:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) < 5:
+            continue
+        agent, decision, reason, role = parts[1], parts[2], parts[3], parts[4]
+        admissions[agent] = (decision == "granted", reason, role)
+    return admissions
+
+
+def _admissions_for_role(
+    events: list[dict[str, Any]],
+    role: str,
+) -> dict[str, tuple[bool, str]]:
+    """The ``agent -> (admitted, reason)`` decisions for one population role.
+
+    Example::
+
+        ring = _admissions_for_role(events, "ring")
+    """
+    return {
+        agent: (admitted, reason)
+        for agent, (admitted, reason, r) in _collect_admissions(events).items()
+        if r == role
+    }
+
+
+def _validate_role_denied(
+    events: list[dict[str, Any]],
+    *,
+    name: str,
+    role: str,
+    expected_reason: str,
+) -> list[ValidationResult]:
+    """Shared check: every agent of ``role`` is denied with ``expected_reason``.
+
+    Fails when the population was never exercised (no decisions observed for
+    the role — a gate that crashes or stays silent must not pass), when any
+    member was admitted, or when the denial carries the wrong reason (a gate
+    that denies for an accidental reason is not demonstrating the defense the
+    validator is named for).
+
+    Example::
+
+        results = _validate_role_denied(events, name="parc_forgery_rejected",
+                                        role="forged",
+                                        expected_reason="proof_invalid")
+    """
+    decisions = _admissions_for_role(events, role)
+    if not decisions:
+        return [ValidationResult(name, False, f"no admission decisions observed for role {role!r}")]
+    problems: list[str] = []
+    for agent, (admitted, reason) in sorted(decisions.items()):
+        if admitted:
+            problems.append(f"{agent} was admitted")
+        elif reason != expected_reason:
+            problems.append(f"{agent} denied with {reason!r}, expected {expected_reason!r}")
+    if problems:
+        return [ValidationResult(name, False, "; ".join(problems))]
+    return [
+        ValidationResult(
+            name,
+            True,
+            f"{len(decisions)} {role} agent(s) denied with {expected_reason!r}",
+        )
+    ]
+
+
+def validate_failure_detection_accuracy(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Live peers are not falsely suspected; recovered peers are cleared.
+
+    Accuracy: after a warm-up, while a peer is provably reachable -- it is inside
+    a reachable ``fd:phase`` segment *and* the observer received a heartbeat from
+    it no longer than the plausible-gap bound ago (derived from the trace's
+    ``fd:config`` marker by :func:`_fd_max_plausible_gap`) -- the detector must
+    not suspect it.  A tight fixed timeout violates this on the upper tail of
+    normal heartbeat jitter; an accrual detector does not.
+
+    Recovery: a peer that genuinely went down and came back must end its final
+    reachable segment un-suspected.
+
+    Returns two results: ``failure_detection_accuracy`` and
+    ``failure_detection_recovery``.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+    observer_ids = _fd_observer_ids(events)
+    receipts = _fd_hb_receipts(events, observer_ids)
+    max_gap = _fd_max_plausible_gap(events, observer_ids)
+    watched = sorted(statuses.keys())
+
+    # ----- accuracy: no false suspicion of a provably-live peer -----
+    reachable_intervals: dict[str, list[tuple[float, float]]] = {}
+    for peer in watched:
+        segments = _segments_for_peer(transitions.get(peer, []), last_ts)
+        if segments:
+            reachable_intervals[peer] = [
+                (start, end) for start, end, reachable in segments if reachable
+            ]
+        else:
+            reachable_intervals[peer] = [(0.0, last_ts)]
+
+    false_positives: list[str] = []
+    for peer in watched:
+        intervals = reachable_intervals[peer]
+        peer_receipts = receipts.get(peer, [])
+        for t, suspected in statuses.get(peer, []):
+            if not suspected or t < _ACCURACY_WARMUP:
+                continue
+            if not _in_any_interval(t, intervals):
+                continue
+            recent = _last_leq(peer_receipts, t)
+            if recent is not None and (t - recent) <= max_gap:
+                false_positives.append(
+                    f"{peer}: suspected at t={t} but a heartbeat arrived {round(t - recent, 3)} ago"
+                )
+
+    if false_positives:
+        accuracy = ValidationResult("failure_detection_accuracy", False, "; ".join(false_positives))
+    else:
+        accuracy = ValidationResult(
+            "failure_detection_accuracy",
+            True,
+            f"no false suspicion of a provably-live peer across {len(watched)} peer(s)",
+        )
+
+    # ----- recovery: a healed peer ends un-suspected -----
+    recovery_failures: list[str] = []
+    recovered_peers = 0
+    for peer in watched:
+        segments = _segments_for_peer(transitions.get(peer, []), last_ts)
+        if not any(not reachable for _, _, reachable in segments):
+            continue
+        final_reachable: tuple[float, float] | None = None
+        seen_down = False
+        for start, end, reachable in segments:
+            if not reachable:
+                seen_down = True
+                final_reachable = None
+            elif seen_down:
+                final_reachable = (start, end)
+        if final_reachable is None:
+            recovery_failures.append(f"{peer}: no reachable segment after final outage")
+            continue
+        recovered_peers += 1
+        r_start, r_end = final_reachable
+        in_window = [(t, s) for (t, s) in statuses.get(peer, []) if r_start <= t <= r_end]
+        if not in_window:
+            recovery_failures.append(f"{peer}: no status after recovery [{r_start}, {r_end}]")
+            continue
+        if in_window[-1][1]:
+            recovery_failures.append(f"{peer}: still suspected at end of recovery segment")
+
+    if recovery_failures:
+        recovery = ValidationResult(
+            "failure_detection_recovery", False, "; ".join(recovery_failures)
+        )
+    elif recovered_peers == 0:
+        recovery = ValidationResult(
+            "failure_detection_recovery",
+            False,
+            "no peer recovered from an outage in trace",
+        )
+    else:
+        recovery = ValidationResult(
+            "failure_detection_recovery",
+            True,
+            f"all {recovered_peers} recovered peer(s) cleared by end",
+        )
+
+    return [accuracy, recovery]
+
+
+def validate_failure_detection_no_forged_liveness(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Forged heartbeats must not keep a genuinely dead peer looking alive.
+
+    The attack: while a peer is inside an unreachable ground-truth segment, a
+    Byzantine agent keeps broadcasting heartbeats that *claim* the dead peer's
+    id.  A forged receipt is any observer-received ``FDHB|`` payload whose
+    claimed id differs from the transport-level sender.  For every outage
+    segment during which such forgeries arrived, the detector must still have
+    the peer suspected at the last in-segment status update -- forged liveness
+    must not mask the crash.
+
+    A trace with no forged receipt at all, or whose forgeries never overlap an
+    outage, is a scenario setup failure: this validator is only registered for
+    the forgery scenario, whose entire point is that the attack fires.
+    """
+    transitions, last_ts = _fd_transitions(events)
+    statuses = _fd_statuses(events)
+    observer_ids = _fd_observer_ids(events)
+
+    forged: dict[str, list[float]] = defaultdict(list)
+    for ev in events:
+        if ev.get("kind") != "receive" or ev.get("agent") not in observer_ids:
+            continue
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("FDHB|"):
+            continue
+        claimed = msg[len("FDHB|") :].split("|", 1)[0]
+        sender = ev.get("from")
+        ts = ev.get("ts")
+        if not claimed or not isinstance(sender, str) or not isinstance(ts, (int, float)):
+            continue
+        if claimed != sender:
+            forged[claimed].append(float(ts))
+
+    if not forged:
+        return [
+            ValidationResult(
+                "failure_detection_no_forged_liveness",
+                False,
+                "no forged heartbeat received in trace",
+            )
+        ]
+
+    failures: list[str] = []
+    checked = 0
+    for victim in sorted(forged):
+        forged_ts = forged[victim]
+        downs = [
+            (start, end)
+            for start, end, reachable in _segments_for_peer(transitions.get(victim, []), last_ts)
+            if not reachable
+        ]
+        victim_statuses = statuses.get(victim, [])
+        for u_start, u_end in downs:
+            if not any(u_start < t <= u_end for t in forged_ts):
+                continue
+            checked += 1
+            in_window = [(t, s) for (t, s) in victim_statuses if u_start < t <= u_end]
+            if not in_window:
+                failures.append(f"{victim}: no status during attacked outage [{u_start}, {u_end}]")
+            elif not in_window[-1][1]:
+                failures.append(
+                    f"{victim}: forged heartbeats masked the outage [{u_start}, {u_end}] "
+                    "(not suspected at segment end)"
+                )
+
+    if checked == 0:
+        return [
+            ValidationResult(
+                "failure_detection_no_forged_liveness",
+                False,
+                "forged heartbeats never overlapped an outage segment",
+            )
+        ]
+    if failures:
+        return [
+            ValidationResult("failure_detection_no_forged_liveness", False, "; ".join(failures))
+        ]
+    return [
+        ValidationResult(
+            "failure_detection_no_forged_liveness",
+            True,
+            f"forged liveness rejected across {checked} attacked outage segment(s)",
+        )
+    ]
+
+
+def validate_parc_honest_admitted(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Every honest migrant is admitted — the gate retains genuine reputation.
+
+    Guards against the degenerate defense: a gate that denies everything
+    trivially "catches" every attack. Portability only holds if honest
+    credentials actually cross the border.
+
+    Example::
+
+        results = validate_parc_honest_admitted(events)
+    """
+    decisions = _admissions_for_role(events, "honest")
+    if not decisions:
+        return [
+            ValidationResult(
+                "parc_honest_admitted", False, "no admission decisions observed for role 'honest'"
+            )
+        ]
+    denied = {a: reason for a, (admitted, reason) in decisions.items() if not admitted}
+    if denied:
+        detail = ", ".join(f"{a} ({reason})" for a, reason in sorted(denied.items()))
+        return [ValidationResult("parc_honest_admitted", False, f"honest denied: {detail}")]
+    return [
+        ValidationResult("parc_honest_admitted", True, f"{len(decisions)} honest agent(s) admitted")
+    ]
+
+
+def validate_parc_forgery_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A credential with tampered proof bytes is denied as ``proof_invalid``.
+
+    The naive gate never checks the proof against the recomputed canonical
+    payload, so the forged credential sails through it.
+
+    Example::
+
+        results = validate_parc_forgery_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_forgery_rejected",
+        role="forged",
+        expected_reason="proof_invalid",
+    )
+
+
+def validate_parc_inflation_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """An inflated score from a *trusted* issuer is denied as ``score_mismatch``.
+
+    The headline property: the credential's signature is genuine and its
+    issuer is trusted, yet recomputing the nanda-rep/0.2 scores from the
+    carried receipts exposes the inflated claim. A gate that trusts signed
+    claims (the naive baseline) admits it and FAILS this validator.
+
+    Example::
+
+        results = validate_parc_inflation_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_inflation_rejected",
+        role="inflated",
+        expected_reason="score_mismatch",
+    )
+
+
+def validate_parc_ring_severed(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """Wash-ring members are denied via whole-graph severance at the border.
+
+    Each ring member's *inline* credential is individually corroborated (a
+    single-subject ledger is a star and cannot show the ring), so inline
+    recomputation alone admits it. Only re-running collusion severance over
+    the originating domain's published ledger reveals the isolated dense
+    component — the reason must therefore be ``severed_below_threshold``.
+
+    Example::
+
+        results = validate_parc_ring_severed(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_ring_severed",
+        role="ring",
+        expected_reason="severed_below_threshold",
+    )
+
+
+def validate_parc_replay_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A stolen (genuine) credential presented by a non-subject is denied.
+
+    The credential itself verifies — it was honestly issued to someone else.
+    Admission must bind the presenter to ``credentialSubject.id``
+    (``replay_presenter_mismatch``), or any bystander can borrow reputation.
+
+    Example::
+
+        results = validate_parc_replay_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_replay_rejected",
+        role="replay",
+        expected_reason="replay_presenter_mismatch",
+    )
+
+
+def validate_parc_stale_key_rejected(events: list[dict[str, Any]]) -> list[ValidationResult]:
+    """A credential signed with a rotated-out issuer key is denied as ``stale_key``.
+
+    The signature bytes are cryptographically valid under the old key; what
+    fails is the identity layer's key-rotation window as-of the credential's
+    ``validFrom`` tick. This is the cross-layer check a trust plugin that
+    ignores the identity layer cannot perform.
+
+    Example::
+
+        results = validate_parc_stale_key_rejected(events)
+    """
+    return _validate_role_denied(
+        events,
+        name="parc_stale_key_rejected",
+        role="stale",
+        expected_reason="stale_key",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attested-peering trust validators
+# ---------------------------------------------------------------------------
+
+
+def _attested_observer_lines(events: list[dict[str, Any]]) -> list[str]:
+    """Return the observer's audit-line message bodies (deduped send events).
+
+    The observer emits ``verdict:``/``report:``/``repscore:`` lines by sending
+    them to the victim sink, so each line appears once as a ``send`` and once
+    as a ``receive``; we read only the authoritative ``send`` events.
+
+    Example::
+
+        lines = _attested_observer_lines(events)
+    """
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("kind") != "send" or ev.get("agent") != "observer":
+            continue
+        lines.append(str(ev.get("msg", "")))
+    return lines
+
+
+def _attested_verdicts(lines: list[str]) -> dict[str, tuple[str, bool, bool, bool]]:
+    """Parse ``verdict:`` lines into ``reporter -> (decision, foe, data, work)``.
+
+    Example::
+
+        verdicts = _attested_verdicts(_attested_observer_lines(events))
+    """
+    verdicts: dict[str, tuple[str, bool, bool, bool]] = {}
+    for line in lines:
+        if not line.startswith("verdict:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 7:
+            continue
+        _, reporter, _claimed, decision, foe, data, work = parts
+        verdicts[reporter] = (decision, foe == "1", data == "1", work == "1")
+    return verdicts
+
+
+def validate_attested_no_denied_admitted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No peer with a failed (DENY) verdict ever has its evidence admitted.
+
+    The core safety invariant of the attested-peering gate: admission implies
+    an ALLOW verdict, and every ALLOW verdict has all three checks green
+    (friend-or-foe, trust-my-data, who-you-work-for). A trace with no verdict
+    lines (a baseline trust plugin that runs no handshake) cannot violate this
+    and passes vacuously.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+    verdicts = _attested_verdicts(lines)
+
+    if not verdicts:
+        return [
+            ValidationResult(
+                "attested_no_denied_admitted",
+                True,
+                "no attested-peering verdicts in trace (baseline plugin, nothing to gate)",
+            )
+        ]
+
+    violations: list[str] = []
+    for decision, foe, data, work in verdicts.values():
+        if decision == "ALLOW" and not (foe and data and work):
+            violations.append("ALLOW verdict with a failed check (inconsistent gate)")
+            break
+
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        entry = verdicts.get(reporter)
+        if entry is None:
+            violations.append(f"{reporter}: admitted with no verdict")
+        elif entry[0] != "ALLOW":
+            violations.append(f"{reporter}: admitted despite {entry[0]} verdict")
+
+    if violations:
+        return [ValidationResult("attested_no_denied_admitted", False, "; ".join(violations))]
+    allowed = sum(1 for v in verdicts.values() if v[0] == "ALLOW")
+    return [
+        ValidationResult(
+            "attested_no_denied_admitted",
+            True,
+            f"{allowed}/{len(verdicts)} peers admitted, all with an ALLOW verdict",
+        )
+    ]
+
+
+def validate_attested_sybil_quarantined(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """An unauthenticated Sybil swarm cannot defame the honest victim.
+
+    Honest reporters file positive evidence, so an ungamed reputation sits at
+    or above the neutral prior (``0.5``); only *admitted* negative evidence can
+    push it below. The attested-peering gate quarantines every unattested
+    reporter, so the victim's score stays high. Under a baseline plugin with no
+    gate (``trust: score_average``) the Sybil swarm's negatives are admitted and
+    the score collapses below ``0.5`` — this validator FAILs there and PASSes
+    under ``trust: attested_peering``.
+
+    Example::
+
+        results = validate_trace(Path("traces/attested_peering.jsonl"), "attested_peering")
+    """
+    lines = _attested_observer_lines(events)
+
+    score: float | None = None
+    samples: int | None = None
+    for line in lines:
+        if not line.startswith("repscore:"):
+            continue
+        parts = line.split(":")
+        if len(parts) == 4 and parts[1] == "victim":
+            score = float(parts[2])
+            samples = int(parts[3])
+    if score is None or samples is None:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "no repscore:victim line found in trace (scenario setup failure)",
+            )
+        ]
+
+    verdicts = _attested_verdicts(lines)
+    admitted_attackers: list[str] = []
+    for line in lines:
+        if not line.startswith("report:"):
+            continue
+        parts = line.split(":")
+        if len(parts) != 5 or parts[4] != "admitted":
+            continue
+        reporter = parts[1]
+        if not reporter.startswith("honest-"):
+            admitted_attackers.append(reporter)
+
+    if score < 0.5:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                (
+                    f"victim reputation {score:.3f} < 0.5 over {samples} admitted report(s) — "
+                    "an unauthenticated swarm manufactured a negative consensus (gate absent)"
+                ),
+            )
+        ]
+    if admitted_attackers:
+        return [
+            ValidationResult(
+                "attested_sybil_quarantined",
+                False,
+                "non-honest reporters admitted despite the gate: "
+                f"{sorted(set(admitted_attackers))}",
+            )
+        ]
+    return [
+        ValidationResult(
+            "attested_sybil_quarantined",
+            True,
+            (
+                f"victim reputation {score:.3f} from {samples} attested report(s); "
+                f"{len([v for v in verdicts.values() if v[0] == 'DENY'])} unattested peer(s) "
+                "quarantined"
+            ),
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Receipt-reputation anchoring (confidential-ledger root-of-trust) validator
+# ---------------------------------------------------------------------------
+#
+# The ``receipt_reputation`` scenario emits each interaction as a ``receipt:``
+# trace line carrying the full receipt JSON. The capsule-anchoring trust plugin
+# (``CapsuleEmitTrust``) seals every valid receipt into an in-process JCS
+# digest chain, and — via the ``AuditorAgent._finalize`` hook — the trace
+# additionally carries, per receipt, a pre-obtained CCF / Azure Confidential
+# Ledger write receipt as a ``ccfreceipt:<subject_digest>:<receipt_json_hex>``
+# line.
+#
+# THE ROOT OF TRUST: only the ``ccfreceipt:`` lines are anchoring evidence,
+# because only they carry a signature made with a key the participant does NOT
+# hold — the pinned, independent ledger service identity's. Everything else on
+# the trace (``receipt:`` content, ``seal:`` triples) is authored by the party
+# under test and is a pure function of plaintext trace content: any
+# non-anchoring party can recompute the JCS digests and refold the public hash
+# chain, so ``seal:`` lines alone can NEVER produce a PASS. They are retained
+# only as a tamper trip-wire (a broken chain is an immediate FAIL).
+#
+# This validator grades exclusively from trace events plus the pinned
+# service-identity constant. It reads no files, opens no sockets, consults no
+# environment variables, and reads no clock.
+#
+#   1. Collect all valid receipts from ``receipt:`` lines. None -> FAIL.
+#   2. If ``seal:`` lines are present, replay the chain; broken -> FAIL.
+#   3. Collect write receipts from ``ccfreceipt:`` lines. None -> FAIL
+#      (the trust layer does not anchor).
+#   4. No pinned service identity configured -> FAIL (fail-closed placeholder).
+#   5. For EVERY receipt: recompute its JCS digest from trace content and
+#      require a write receipt whose claim binds that digest and that verifies
+#      OFFLINE against the pinned service identity (Merkle inclusion proof +
+#      endorsed-node ECDSA signature over the tree head). Any receipt without
+#      one -> FAIL.
+#   6. PASS.
+#
+# A non-anchoring baseline (``agent_receipts`` / ``score_average``) emits no
+# ``ccfreceipt:`` lines, so step 3 fires. Fabricated seals or fabricated
+# receipt JSON carry no valid service-identity signature, so step 5 fires. A
+# receipt mutated after registration recomputes to a digest the ledger never
+# signed, so step 5 fires. Forging a PASS requires the ledger's private key.
+
+
+def _collect_receipts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse every ``receipt:`` line with a valid issuer signature into a receipt dict.
+
+    De-duplicates by JCS digest so duplicate lines (send + receive of the same
+    bytes) contribute only one receipt. Forged or unsigned lines are skipped.
+
+    Example::
+
+        receipts = _collect_receipts(events)
+    """
+    seen: set[str] = set()
+    receipts: list[dict[str, Any]] = []
+    for ev in events:
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("receipt:"):
+            continue
+        body = msg[len("receipt:") :]
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        receipt = cast("dict[str, Any]", parsed)
+        if not verify_receipt_signature(receipt):
+            continue
+        try:
+            digest = jcs_digest(receipt)
+        except (TypeError, ValueError):
+            continue
+        if digest in seen:
+            continue
+        seen.add(digest)
+        receipts.append(receipt)
+    return receipts
+
+
+def _collect_seals(events: list[dict[str, Any]]) -> list[tuple[int, str, str]]:
+    """Parse every ``seal:<seq>:<subject_digest>:<chain_hash>`` broadcast line.
+
+    Returns the triples in the order they appear in the trace. No filesystem or
+    environment access is performed: the seals live entirely on the trace.
+
+    Example::
+
+        seals = _collect_seals(events)
+    """
+    seen: set[tuple[int, str, str]] = set()
+    seals: list[tuple[int, str, str]] = []
+    for ev in events:
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("seal:"):
+            continue
+        parts = msg.split(":", 3)
+        if len(parts) < 4:
+            continue
+        try:
+            seq = int(parts[1])
+        except ValueError:
+            continue
+        triple = (seq, parts[2], parts[3])
+        # De-duplicate: a broadcast seal appears once as the emitter's broadcast
+        # event and again as a receive event on every other agent. Keep the first
+        # occurrence (seq order) so the chain replays exactly once per seal.
+        if triple in seen:
+            continue
+        seen.add(triple)
+        seals.append(triple)
+    return seals
+
+
+def _collect_ccf_receipts(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Parse every ``ccfreceipt:<subject_digest>:<receipt_json_hex>`` line.
+
+    Returns ``{subject_digest: [write_receipt_dict, …]}``. Lines that are not
+    parseable hex/JSON are skipped — they can only ever remove evidence, never
+    add it, because every write receipt must still verify against the pinned
+    service identity. No filesystem or environment access is performed.
+
+    Example::
+
+        by_digest = _collect_ccf_receipts(events)
+    """
+    seen: set[tuple[str, str]] = set()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for ev in events:
+        msg = str(ev.get("msg", ""))
+        if not msg.startswith("ccfreceipt:"):
+            continue
+        parts = msg.split(":", 2)
+        if len(parts) < 3:
+            continue
+        pair = (parts[1], parts[2])
+        # De-duplicate broadcast copies (one emitter event + one per receiver).
+        if pair in seen:
+            continue
+        seen.add(pair)
+        try:
+            parsed = json.loads(bytes.fromhex(parts[2]).decode("utf-8"))
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        out.setdefault(parts[1], []).append(cast("dict[str, Any]", parsed))
+    return out
+
+
+def validate_receipt_reputation_anchored(
+    events: list[dict[str, Any]],
+    *,
+    service_identity_pem: str | None = PINNED_ACL_SERVICE_IDENTITY_PEM,
+) -> list[ValidationResult]:
+    """Root-of-trust anchoring validator: only ledger-signed evidence can PASS.
+
+    The verdict derives from trace events plus ``service_identity_pem`` — the
+    pinned service identity of an independent CCF / Azure Confidential Ledger
+    transparency service whose private key the participant does not hold.
+    Zero network, zero filesystem, zero environment, zero clock.
+
+    * An honest anchoring run PASSES — every receipt's recomputed JCS digest is
+      bound by a write receipt that verifies offline against the pinned
+      service identity.
+    * A non-anchoring baseline (``agent_receipts`` / ``score_average``) FAILS —
+      no ``ccfreceipt:`` lines.
+    * Fabricated seals or fabricated receipt JSON forged from plaintext trace
+      content FAIL — they carry no valid service-identity signature.
+    * A receipt mutated after registration FAILS — its recomputed digest was
+      never signed by the ledger.
+    * With no pinned identity configured (``service_identity_pem is None``)
+      everything FAILS — the placeholder state is fail-closed by construction.
+
+    Tests inject the LOCAL TEST-ONLY identity via ``service_identity_pem``;
+    the graded registry path always uses the pinned production constant.
+
+    Example::
+
+        results = validate_receipt_reputation_anchored(events)
+    """
+    receipts = _collect_receipts(events)
+
+    if not receipts:
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                "no receipts observed on the wire",
+            )
+        ]
+
+    # Tamper trip-wire: seal lines are NOT anchoring evidence (they are a pure
+    # function of plaintext trace content), but a broken chain proves the trace
+    # was reordered or truncated after emission, so it fails immediately.
+    chain = SEAL_CHAIN_GENESIS
+    for seq, subject_digest, claimed_chain in _collect_seals(events):
+        expected_chain = seal_chain(chain, subject_digest)
+        if expected_chain != claimed_chain:
+            return [
+                ValidationResult(
+                    "receipt_reputation_anchored",
+                    False,
+                    f"seal chain tampered at seq={seq}: "
+                    f"expected chain={expected_chain[:16]}… got {claimed_chain[:16]}…",
+                )
+            ]
+        chain = expected_chain
+
+    ccf_receipts = _collect_ccf_receipts(events)
+    if not ccf_receipts:
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                f"{len(receipts)} receipts observed but no confidential-ledger "
+                "write receipts on the trace — the trust layer does not anchor",
+            )
+        ]
+
+    if service_identity_pem is None:
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                "no ledger service identity is pinned yet — anchoring evidence "
+                "cannot be verified, failing closed",
+            )
+        ]
+
+    # Root of trust: every receipt needs a write receipt binding its recomputed
+    # digest that verifies offline against the pinned service identity.
+    unanchored: list[dict[str, Any]] = []
+    verified = 0
+    for r in receipts:
+        try:
+            digest = jcs_digest(r)
+        except (ValueError, TypeError):
+            unanchored.append(r)
+            continue
+        candidates = ccf_receipts.get(digest, [])
+        if any(
+            verify_ccf_write_receipt(wr, bytes.fromhex(digest), service_identity_pem)
+            for wr in candidates
+        ):
+            verified += 1
+        else:
+            unanchored.append(r)
+
+    if unanchored:
+        sample = ", ".join(str(r.get("receipt_id", "?")) for r in unanchored[:5])
+        return [
+            ValidationResult(
+                "receipt_reputation_anchored",
+                False,
+                f"{len(unanchored)}/{len(receipts)} receipts carry no confidential-"
+                "ledger write receipt that verifies against the pinned service "
+                f"identity (unsigned, wrong key, or mutated after registration): {sample}",
+            )
+        ]
+
+    return [
+        ValidationResult(
+            "receipt_reputation_anchored",
+            True,
+            f"all {verified} receipts anchored — CCF write receipts verified "
+            "offline against the pinned ledger service identity",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Validator registry
 # ---------------------------------------------------------------------------
 
 
+_SYBIL_FLOOR = 0.0
+"""Untrusted-floor score an unbonded identity may not exceed."""
+
+
+def _trustscores(events: list[dict[str, Any]]) -> dict[str, float]:
+    """Extract ``{agent: score}`` from ``trustscore:<agent>:<score>`` events.
+
+    The ``sybil_bond`` observer broadcasts one such event per agent after driving
+    the configured trust plugin, so these scores are the plugin's own verdict.
+    """
+    scores: dict[str, float] = {}
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        msg = _message_body(ev)
+        if not msg.startswith("trustscore:"):
+            continue
+        parts = msg.split(":")
+        if len(parts) >= 3:
+            try:
+                scores[parts[1]] = float(parts[2])
+            except ValueError:
+                continue
+    return scores
+
+
+def validate_sybil_bond_no_free_trust(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """No unbonded Sybil identity obtains trust above the untrusted floor.
+
+    FAILs on ``score_average`` (the clique's mutual endorsements promote it) and
+    PASSes on ``bonded_trust`` (free-minted identities stay inert).
+
+    Example::
+
+        results = validate_sybil_bond_no_free_trust(events)
+    """
+    scores = _trustscores(events)
+    escaped = {a: s for a, s in scores.items() if a.startswith("sybil-") and s > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils bought trust without bonding: {escaped}"
+        return [ValidationResult("sybil_bond_no_free_trust", False, detail)]
+    n_sybil = sum(1 for a in scores if a.startswith("sybil-"))
+    return [
+        ValidationResult(
+            "sybil_bond_no_free_trust",
+            True,
+            f"all {n_sybil} Sybils pinned at the untrusted floor",
+        )
+    ]
+
+
+def validate_sybil_bond_honest_trusted(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Bonded honest traders rank strictly above every Sybil.
+
+    Guards against a degenerate trust layer that trivially passes the first check
+    by scoring *everyone* at the floor: honest bonded traders must actually rise.
+
+    Example::
+
+        results = validate_sybil_bond_honest_trusted(events)
+    """
+    scores = _trustscores(events)
+    honest = {a: s for a, s in scores.items() if a.startswith("honest-")}
+    if not honest:
+        return [ValidationResult("sybil_bond_honest_trusted", False, "no honest scores in trace")]
+    max_sybil = max((s for a, s in scores.items() if a.startswith("sybil-")), default=0.0)
+    laggards = {a: s for a, s in honest.items() if s <= max_sybil}
+    if laggards:
+        detail = f"honest traders not above Sybil ceiling {max_sybil}: {laggards}"
+        return [ValidationResult("sybil_bond_honest_trusted", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_honest_trusted",
+            True,
+            f"{len(honest)} honest traders trusted above Sybil ceiling {max_sybil}",
+        )
+    ]
+
+
+def validate_sybil_bond_attempts_rejected(
+    events: list[dict[str, Any]],
+) -> list[ValidationResult]:
+    """Sybils *bid* for a bond yet stay at the floor — the ledger rejected them.
+
+    This is the enforcement check: it proves the defense is active (bond requests
+    denied), not merely assumed (Sybils declining to bond). It requires the trace
+    to contain Sybil ``bond:`` attempts, and that none of those bidders escaped
+    the untrusted floor.
+
+    Example::
+
+        results = validate_sybil_bond_attempts_rejected(events)
+    """
+    scores = _trustscores(events)
+    bidders: set[str] = set()
+    for ev in events:
+        if ev.get("kind") not in ("send", "broadcast"):
+            continue
+        agent = str(ev.get("agent", ""))
+        if agent.startswith("sybil-") and _message_body(ev).startswith("bond:"):
+            bidders.add(agent)
+    if not bidders:
+        return [
+            ValidationResult(
+                "sybil_bond_attempts_rejected",
+                False,
+                "no Sybil bond attempts in trace — cannot prove enforcement",
+            )
+        ]
+    escaped = {a: scores.get(a, 0.0) for a in bidders if scores.get(a, 0.0) > _SYBIL_FLOOR}
+    if escaped:
+        detail = f"Sybils that bid for a bond escaped the floor: {escaped}"
+        return [ValidationResult("sybil_bond_attempts_rejected", False, detail)]
+    return [
+        ValidationResult(
+            "sybil_bond_attempts_rejected",
+            True,
+            f"{len(bidders)} Sybils bid for a bond and were all rejected to the floor",
+        )
+    ]
+
+
 VALIDATORS: dict[str, list[Any]] = {
+    "sybil_bond": [
+        validate_sybil_bond_no_free_trust,
+        validate_sybil_bond_honest_trusted,
+        validate_sybil_bond_attempts_rejected,
+    ],
     "comms_versioning": [
         validate_comms_reject_unknown_major,
         validate_comms_no_silent_drop,
+    ],
+    "comms_downgrade": [
+        validate_comms_downgrade_resistance,
+        validate_comms_authentic_delivery,
+    ],
+    "comms_replay": [
+        validate_comms_replay_resistance,
+        validate_comms_replay_honest_delivery,
     ],
     "marketplace": [
         validate_marketplace_no_double_sell,
@@ -2812,6 +5610,10 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_identity_rotation_occurred,
         validate_identity_rotation_signatures,
     ],
+    "attested_peering": [
+        validate_attested_no_denied_admitted,
+        validate_attested_sybil_quarantined,
+    ],
     "memory_concurrent_writers": [
         validate_memory_convergence,
         validate_memory_liveness,
@@ -2821,9 +5623,39 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_streaming_no_drain_after_close,
         validate_streaming_no_overbill_on_partition,
     ],
+    "empic_payments": [
+        validate_empic_escrow_conservation,
+        validate_empic_no_release_without_accepted_delivery,
+        validate_empic_invalid_delivery_not_paid,
+        validate_empic_delivery_policy_integrity,
+        validate_empic_pubsub_billing_caps,
+        validate_empic_max_spend_enforced,
+        validate_empic_all_escrows_terminal,
+        validate_empic_no_duplicate_settlement,
+        validate_empic_provider_service_binding,
+        validate_empic_payment_participant_binding,
+        validate_empic_no_secret_material,
+        validate_empic_no_drain_after_close,
+        validate_empic_no_overbill_on_partition,
+    ],
     "receipt_reputation": [
         validate_receipt_reputation_ring_severed,
         validate_receipt_reputation_honest_confidence,
+    ],
+    # Capsule variant: the same ring-severance + honest-confidence checks as
+    # ``receipt_reputation``, plus the anchoring check that a non-anchoring
+    # trust layer (e.g. ``agent_receipts``) cannot satisfy. Scoped to its own
+    # scenario type so ``validate_receipt_reputation_anchored`` NEVER grades the
+    # stock ``receipt_reputation`` scenario (which has no capsule ledger).
+    "receipt_reputation_capsule": [
+        validate_receipt_reputation_ring_severed,
+        validate_receipt_reputation_honest_confidence,
+        validate_receipt_reputation_anchored,
+    ],
+    "receipt_reputation_majority": [
+        validate_receipt_reputation_ring_severed,
+        validate_receipt_reputation_honest_confidence,
+        validate_receipt_reputation_ring_majority,
     ],
     "multi_attribute_market": [
         validate_multi_attribute_pareto_optimal,
@@ -2846,6 +5678,27 @@ VALIDATORS: dict[str, list[Any]] = {
         validate_escrow_role_binding,
         validate_escrow_bps_in_range,
         validate_escrow_no_payout_without_delivery,
+    ],
+    "failure_detection": [
+        validate_failure_detection_completeness,
+        validate_failure_detection_accuracy,
+    ],
+    "failure_detection_forgery": [
+        validate_failure_detection_completeness,
+        validate_failure_detection_accuracy,
+        validate_failure_detection_no_forged_liveness,
+    ],
+    "parc_migration": [
+        validate_parc_honest_admitted,
+        validate_parc_forgery_rejected,
+        validate_parc_inflation_rejected,
+        validate_parc_ring_severed,
+        validate_parc_replay_rejected,
+        validate_parc_stale_key_rejected,
+    ],
+    "rogue_trusted_agent": [
+        validate_rogue_trusted_agent_blocked,
+        validate_rogue_trusted_agent_reputation,
     ],
 }
 

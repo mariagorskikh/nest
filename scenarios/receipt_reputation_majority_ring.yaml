@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# Majority-Sybil-ring red-team of the agent_receipts trust plugin (issue #97).
+#
+# The wash-trading ring (8 agents) OUTNUMBERS the honest population (5 agents).
+# Under the old severance rule the largest SCC was exempt as the "honest
+# anchor", so the majority ring became the anchor and kept its manufactured
+# reputation. Severance now judges every component by evidence shape and
+# external corroboration — never by size — so the ring is severed to score ~0
+# at any size ratio while the sparse honest cycle is retained.
+#
+# Validate the trace (all three checks PASS under `trust: agent_receipts`;
+# swap to `trust: score_average` and ring_severed FAILS — the discriminator):
+#
+#     nest run scenarios/receipt_reputation_majority_ring.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print(('PASS' if r.passed else 'FAIL'), r.name, r.detail) \
+#          for r in validate_trace(Path('traces/receipt_reputation_majority_ring.jsonl'), \
+#                                  'receipt_reputation_majority')]"
+name: receipt_reputation_majority_ring
+description: "5 honest receipt issuers vs an 8-agent majority collusion ring, 1 byzantine, 1 auditor."
+
+tier: 1
+seed: 42
+
+agents:
+  # 5 honest + 8 ring + 1 byzantine + 1 auditor = 15
+  count: 15
+  brain: state-machine
+  roles:
+    - name: honest
+      count: 5
+    - name: ring
+      count: 8
+    - name: byzantine
+      count: 1
+    - name: auditor
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  # The point of the red-team: agent_receipts severs the ring even when the
+  # ring is the LARGEST component. Switch to `score_average` to watch the
+  # receipt_reputation_ring_severed validator fail on the majority ring.
+  trust: agent_receipts
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: receipt_reputation
+  config:
+    ring_size: 8
+    byzantine_fraction: 0.10
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/receipt_reputation_majority_ring.jsonl

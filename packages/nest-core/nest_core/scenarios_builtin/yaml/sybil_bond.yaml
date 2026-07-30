@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Sybil-bond: a free-minted swarm attacks a stake-bonded trust root.
+#
+# Swap `trust:` between `score_average` and `bonded_trust` and re-run: the
+# `validate_sybil_bond_*` validators FAIL on the baseline (the Sybil clique
+# promotes itself) and PASS on bonded_trust (unbonded identities stay inert).
+name: sybil_bond
+description: "20 unbonded Sybils cross-endorse against 5 stake-bonded honest traders."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 26
+  brain: state-machine
+  roles:
+    - name: honest
+      count: 5
+    - name: sybil
+      count: 20
+    - name: observer
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: bonded_trust
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: sybil_bond
+  config:
+    honest_bond: 100
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/sybil_bond.jsonl

@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
-import { createSkill, listSkills, type SkillSourceType } from "@/lib/skills";
+import { revalidateTag } from "next/cache";
+import { createSkill, listSkillsCached, SKILLS_CACHE_TAG, type SkillSourceType } from "@/lib/skills";
 
 // This registry is read/written at request time, never prerendered.
 export const dynamic = "force-dynamic";
@@ -10,11 +11,11 @@ function s(value: unknown): string {
 
 /**
  * GET /api/skills
- * Returns every submitted SkillMD as JSON. An OpenClaw agent can call this to
+ * Returns every submitted SkillMD as JSON. An agent can call this to
  * discover which skills are available.
  */
 export async function GET() {
-  const skills = await listSkills();
+  const skills = await listSkillsCached();
   return Response.json({ count: skills.length, skills });
 }
 
@@ -36,6 +37,12 @@ export async function POST(request: NextRequest) {
   const sourceType = s(body.source_type) as SkillSourceType;
   const sourceUrl = s(body.source_url);
   const content = typeof body.content === "string" ? body.content : "";
+  const email = s(body.email);
+  const githubUsername = s(body.github_username).replace(/^@/, "");
+  const forwarded = request.headers.get("x-forwarded-for");
+  const submitterIp = forwarded
+    ? forwarded.split(",")[0].trim() || null
+    : request.headers.get("x-real-ip");
 
   if (!name) {
     return Response.json({ error: "name is required" }, { status: 400 });
@@ -70,7 +77,11 @@ export async function POST(request: NextRequest) {
       endpoints: s(body.endpoints) || null,
       tags: s(body.tags) || null,
       reachable: null,
+      email: email || null,
+      github_username: githubUsername || null,
+      submitter_ip: submitterIp,
     });
+    revalidateTag(SKILLS_CACHE_TAG, "max");
     return Response.json({ skill }, { status: 201 });
   } catch (err) {
     console.error("POST /api/skills failed:", err);

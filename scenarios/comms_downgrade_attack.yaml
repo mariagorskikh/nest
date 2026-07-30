@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Comms downgrade-attack scenario: an on-path adversary rewrites authentic bytes.
+#
+# 6 honest peers each authenticate an envelope with an HMAC `auth_tag`, but a
+# man-in-the-middle tampers with a copy in flight — one rolls `schema_version`
+# 1.1 -> 1.0, one strips the newer peer's `x-trace-id` — leaving the stale tag.
+# The auditor decodes every copy with the configured comms plugin.
+#
+#   * comms: authenticated -> recomputes the tag, rejects the forgeries -> PASS
+#   * comms: versioned      -> no tag concept, accepts the forgeries      -> FAIL
+#
+# Verify::
+#
+#     nest run scenarios/comms_downgrade_attack.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/comms_downgrade_attack.jsonl'), 'comms_downgrade')]"
+#
+# Swap `comms: authenticated` for `comms: versioned` to watch the same trace fail.
+name: comms_downgrade_attack
+description: "6 honest peers, an on-path attacker rolls back / strips their envelopes; authenticated comms rejects the forgeries."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 7
+  brain: state-machine
+  roles:
+    - name: peer
+      count: 6
+    - name: auditor
+      count: 1
+
+layers:
+  comms: authenticated
+
+task:
+  type: comms_downgrade
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/comms_downgrade_attack.jsonl

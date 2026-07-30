@@ -84,21 +84,17 @@ export default function LeaderboardPage() {
       {/* Header */}
       <section className="paper-texture border-b border-cream-400/70">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-16">
-          <div className="flex items-center gap-3 mb-10 animate-fade-in">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-rust" />
-            <span className="eyebrow">Tier 1 reference benchmarks</span>
-          </div>
-
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.6rem,6vw,5rem)] leading-[1.02] tracking-tight text-ink-900">
-              Reproducible<br />
-              <span className="italic text-ink-700">rankings</span> by<br />
+              Reference<br />
+              <span className="italic text-ink-700">benchmark runs</span> by<br />
               scenario.
             </h1>
             <p className="animate-fade-in stagger-2 text-[1.1rem] leading-[1.6] text-ink-500 max-w-md">
-              Side-by-side metrics, no composite weighting, no hidden tie-breakers.
-              Each entry can be re-run with the same seed and will produce the
-              same result under Tier 1 conditions.
+              Side-by-side metrics from the core team&rsquo;s reference runs, listed
+              newest first. Compare entries within the same scenario. Runs are
+              deterministic, so a scenario re-run with its recorded seed produces
+              the same result under Tier 1 conditions.
             </p>
           </div>
         </div>
@@ -135,7 +131,7 @@ export default function LeaderboardPage() {
           </span>
           {(
             [
-              ['rank', 'Rank'],
+              ['rank', 'Run'],
               ['deliveryRate', 'Delivery'],
               ['dealRate', 'Deal'],
               ['latency', 'Latency'],
@@ -170,7 +166,7 @@ export default function LeaderboardPage() {
               <thead>
                 <tr className="border-b border-cream-400/70 bg-cream-200">
                   {[
-                    'Rank',
+                    'Run',
                     'Name',
                     'Scenario',
                     'Agents',
@@ -295,18 +291,11 @@ export default function LeaderboardPage() {
                 <p className="eyebrow">Methodology</p>
                 <h2 className="font-display mt-4 text-[2rem] leading-[1.1] text-ink-900">
                   About these<br />
-                  <span className="italic text-ink-700">rankings.</span>
+                  <span className="italic text-ink-700">runs.</span>
                 </h2>
               </div>
               <div>
-                <p className="text-[1rem] leading-[1.65] text-ink-500">
-                  Rankings come from Tier 1 reference runs. Re-run with the same
-                  seed and you get the same numbers. Tier 1 uses virtual
-                  tick-based time with no transport failures, so delivery rates
-                  are expected to be near 100%.
-                </p>
-
-                <div className="mt-8 grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2">
+                <div className="grid gap-px bg-cream-400/40 border border-cream-400/40 rounded-2xl overflow-hidden sm:grid-cols-2">
                   {[
                     {
                       label: 'Delivery rate',

@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# Rogue-trusted-agent scenario: a veteran resident earns a spotless in-policy
+# record, then reaches for the one action it was never entitled to -- spending
+# the town treasury.
+#
+# Under `trust: aae_permit_gate` (this submission's plugin) every request is
+# decided BEFORE it runs. Reputation is not an input to the verdict: the policy
+# row for `spend town/treasury` is a refusal, so the gate returns a signed
+# `denied` envelope and the action never executes -- the rogue_trusted_agent
+# validator PASSES. Swap to `trust: score_average` (see the comment on the
+# `trust:` line below) and there is no pre-action gate, so the veteran's
+# reputation buys it the treasury: the action executes and the same validator
+# FAILS. That contrast is the whole point.
+name: rogue_trusted_agent
+description: "A high-reputation veteran is refused one out-of-policy action; ordinary residents act only in-policy."
+
+tier: 1
+seed: 42
+
+agents:
+  # 1 veteran + 5 residents = 6
+  count: 6
+  brain: state-machine
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  # The whole point: aae_permit_gate refuses the out-of-policy reach before it
+  # runs. Switch this to `score_average` to watch the rogue action execute and
+  # the rogue_trusted_agent validator fail.
+  trust: aae_permit_gate
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: rogue_trusted_agent
+  config:
+    # How many in-policy actions the veteran performs before its rogue attempt,
+    # and how many each resident performs. Reputation must genuinely accrue.
+    veteran_warmup: 8
+    resident_actions: 3
+    default_role: resident
+    default_effect: denied
+    # Ed25519 signing seed for the permit gate (hex bytes). Deterministic.
+    key_seed: "6e616e64612d726f6775652d746f776e"
+    # The veteran is documented here; every other agent defaults to `resident`.
+    roles:
+      veteran: resident
+    # Deny-by-default policy, first match wins. Residents are authorized for
+    # benign town verbs; the treasury spend is the single explicit refusal.
+    policy:
+      - role: resident
+        verb: read
+        resource: "town/*"
+        effect: authorized
+      - role: resident
+        verb: post
+        resource: "board/*"
+        effect: authorized
+      - role: resident
+        verb: greet
+        resource: "neighbor/*"
+        effect: authorized
+      - role: resident
+        verb: spend
+        resource: "town/treasury"
+        effect: denied
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/rogue_trusted_agent.jsonl

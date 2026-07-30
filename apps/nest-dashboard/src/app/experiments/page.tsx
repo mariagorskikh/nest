@@ -163,11 +163,6 @@ export default function ExperimentsPage() {
       {/* Header */}
       <section className="paper-texture border-b border-cream-400/70">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-16">
-          <div className="flex items-center gap-3 mb-10 animate-fade-in">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-rust" />
-            <span className="eyebrow">Experiments &middot; reference scenarios</span>
-          </div>
-
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.6rem,6vw,5rem)] leading-[1.02] tracking-tight text-ink-900">
               Pre-built<br />
@@ -175,7 +170,7 @@ export default function ExperimentsPage() {
               probe behaviour.
             </h1>
             <p className="animate-fade-in stagger-2 text-[1.1rem] leading-[1.6] text-ink-500 max-w-md">
-              Explore the scenarios that ship with Nanda Town. Each one ran with
+              Explore a selection of the scenarios that ship with Nanda Town. Each one ran with
               the reference plugins &mdash; every metric here is reproducible
               from the seed in the YAML.
             </p>

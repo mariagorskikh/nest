@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# Comms replay-attack scenario: a relay re-sends a captured, genuine envelope.
+#
+# 8 honest peers each authenticate a "solo" envelope (sent once) and a second
+# envelope that a relay captures and re-sends verbatim a second time -- no
+# tampering, byte-for-byte identical, so its HMAC tag is perfectly valid. The
+# auditor decodes every delivery with the configured comms plugin.
+#
+#   * comms: replay_safe   -> remembers the accepted id, rejects the replay -> PASS
+#   * comms: authenticated -> no replay memory, accepts the duplicate       -> FAIL
+#   * comms: versioned     -> same gap, plus no tag concept at all          -> FAIL
+#
+# Verify::
+#
+#     nest run scenarios/comms_replay.yaml
+#     python -c "from pathlib import Path; from nest_core.validators import validate_trace; \
+#         [print('PASS' if r.passed else 'FAIL', r.name, '-', r.detail) \
+#          for r in validate_trace(Path('traces/comms_replay.jsonl'), 'comms_replay')]"
+#
+# Swap `comms: replay_safe` for `comms: authenticated` to watch the same trace fail.
+name: comms_replay
+description: "8 honest peers, a relay replays one captured envelope per peer; replay_safe comms rejects the duplicate."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 9
+  brain: state-machine
+  roles:
+    - name: peer
+      count: 8
+    - name: auditor
+      count: 1
+
+layers:
+  comms: replay_safe
+
+task:
+  type: comms_replay
+  config: {}
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 1000"
+
+metrics:
+  - message_count
+
+output:
+  trace: ./traces/comms_replay.jsonl

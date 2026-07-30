@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# Identical to receipt_reputation.yaml but with trust: capsule_emit.
+#
+# Demonstrates that CapsuleEmitTrust (from capsule-emit-nanda) produces identical
+# ring-severance results to agent_receipts while also writing a verifiable
+# capsule ledger:
+#
+#   nest run scenarios/receipt_reputation_capsule.yaml
+#   agent-action-capsule verify --store capsule_ledger.jsonl   # exit 0
+#
+# See examples/capsule-trust/ for the full walkthrough.
+name: receipt_reputation_capsule
+description: "receipt_reputation scenario with trust: capsule_emit — anchored ledger, same validators."
+
+tier: 1
+seed: 42
+
+agents:
+  count: 14
+  brain: state-machine
+  roles:
+    - name: honest
+      count: 8
+    - name: ring
+      count: 4
+    - name: byzantine
+      count: 1
+    - name: auditor
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: capsule_emit        # CapsuleEmitTrust — swap to agent_receipts to compare
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  # Own scenario type so the anchoring validator grades ONLY this capsule
+  # scenario, never the stock receipt_reputation scenario. The task mechanics
+  # are identical to receipt_reputation (ring/byzantine/auditor roles).
+  type: receipt_reputation_capsule
+  config:
+    ring_size: 4
+    byzantine_fraction: 0.10
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 10000"
+
+metrics:
+  - success_rate
+  - message_count
+  - agent_count
+
+output:
+  trace: ./traces/receipt_reputation_capsule.jsonl

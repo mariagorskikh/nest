@@ -1,11 +1,12 @@
 import Image from "next/image";
 import Link from "next/link";
+import { hackathonEvent } from "@/lib/hackathon-event";
 
 export function Footer() {
   return (
     <footer className="border-t border-cream-400/70 bg-cream-100">
       <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-12">
-        <div className="grid gap-12 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
+        <div className="grid gap-12 lg:grid-cols-[1.5fr_1fr_1fr_1fr_1fr]">
           <div>
             <Link
               href="/"
@@ -42,11 +43,19 @@ export function Footer() {
           </div>
 
           <FooterColumn title="Platform">
-            <FooterLink href="/agents">Agents</FooterLink>
+            <FooterLink href="/prgallery">Protocols + Plugins (PRs)</FooterLink>
             <FooterLink href="/experiments">Experiments</FooterLink>
             <FooterLink href="/leaderboard">Leaderboard</FooterLink>
             <FooterLink href="/visualizer">Visualizer</FooterLink>
-            <FooterLink href="/skills">Skills</FooterLink>
+            <FooterLink href="/agents">Agents</FooterLink>
+          </FooterColumn>
+
+          <FooterColumn title="NandaHack x HCLTech">
+            <FooterLink href="/skills">Skills Registry</FooterLink>
+            <FooterLink href="/skills">Vote on SkillMDs</FooterLink>
+            <FooterLink href={hackathonEvent.officialUrl} external>
+              Official site
+            </FooterLink>
           </FooterColumn>
 
           <FooterColumn title="Resources">

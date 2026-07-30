@@ -69,7 +69,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     rank: 2,
     name: "Auction with dynamic pricing",
     scenario: "auction",
-    agents: 50,
+    agents: 20,
     deliveryRate: 100,
     dealRate: 56.0,
     latency: 1.8,
@@ -78,9 +78,9 @@ export const leaderboardData: LeaderboardEntry[] = [
   },
   {
     rank: 3,
-    name: "Quorum Consensus (7 nodes)",
+    name: "Quorum Consensus (20 nodes)",
     scenario: "consensus",
-    agents: 7,
+    agents: 20,
     deliveryRate: 100,
     dealRate: null,
     latency: 1.0,
@@ -100,9 +100,9 @@ export const leaderboardData: LeaderboardEntry[] = [
   },
   {
     rank: 5,
-    name: "Voting with 20 voters",
+    name: "Voting with 18 voters",
     scenario: "voting",
-    agents: 22,
+    agents: 20,
     deliveryRate: 100,
     dealRate: null,
     latency: 1.2,
@@ -111,9 +111,9 @@ export const leaderboardData: LeaderboardEntry[] = [
   },
   {
     rank: 6,
-    name: "Reputation (20% malicious)",
+    name: "Reputation (4 of 21 malicious)",
     scenario: "reputation",
-    agents: 10,
+    agents: 21,
     deliveryRate: 100,
     dealRate: null,
     latency: 2.4,
@@ -124,7 +124,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     rank: 7,
     name: "Marketplace baseline",
     scenario: "marketplace",
-    agents: 20,
+    agents: 100,
     deliveryRate: 100,
     dealRate: 52.1,
     latency: 2.8,
@@ -135,7 +135,7 @@ export const leaderboardData: LeaderboardEntry[] = [
     rank: 8,
     name: "Consensus under partition",
     scenario: "consensus",
-    agents: 5,
+    agents: 20,
     deliveryRate: 95.2,
     dealRate: null,
     latency: 6.3,
@@ -166,11 +166,11 @@ export const experiments: Experiment[] = [
   },
   {
     id: "auction-50",
-    name: "Auction: 50 Bidders",
+    name: "Auction: 19 Bidders",
     description:
-      "An auctioneer posts items; 49 bidders compete. The highest bid wins each round. Tests whether agents settle on fair prices through competition.",
+      "An auctioneer posts items; 19 bidders compete. The highest bid wins each round. Tests whether agents settle on fair prices through competition.",
     scenario: "auction",
-    agents: 50,
+    agents: 20,
     tier: 1,
     status: "completed",
     metrics: {
@@ -187,9 +187,9 @@ export const experiments: Experiment[] = [
     id: "voting-22",
     name: "Voting: Proposal & Election",
     description:
-      "A proposer submits topics, 20 voters cast yes/no ballots, and a coordinator counts the results. Tests simple group decision-making.",
+      "A proposer submits topics, 18 voters cast yes/no ballots, and a coordinator counts the results. Tests simple group decision-making.",
     scenario: "voting",
-    agents: 22,
+    agents: 20,
     tier: 1,
     status: "completed",
     metrics: {
@@ -204,11 +204,11 @@ export const experiments: Experiment[] = [
   },
   {
     id: "consensus-7",
-    name: "Quorum Consensus: 7 Nodes",
+    name: "Quorum Consensus: 20 Nodes",
     description:
       "A leader proposes values; followers vote to commit or abort. The value is committed when enough votes agree. Tests leader-based consensus with adjustable quorum sizes.",
     scenario: "consensus",
-    agents: 7,
+    agents: 20,
     tier: 1,
     status: "completed",
     metrics: {
@@ -244,9 +244,9 @@ export const experiments: Experiment[] = [
     id: "reputation-10",
     name: "Reputation: Trust & Betrayal",
     description:
-      "8 traders (6 honest, 2 cheaters) interact while an observer tracks their reputation scores. Tests whether the system correctly flags bad actors over time.",
+      "20 traders (16 honest, 4 malicious) interact while an observer tracks their reputation scores. Tests whether the system correctly flags bad actors over time.",
     scenario: "reputation",
-    agents: 10,
+    agents: 21,
     tier: 1,
     status: "completed",
     metrics: {
