@@ -1,0 +1,41 @@
+{
+  "name": "prava-payments",
+  "version": "1.0.0",
+  "description": "Secure payment processing plugin for NANDA marketplace using Prava API",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint .",
+    "dev": "node index.js"
+  },
+  "keywords": [
+    "prava",
+    "payments",
+    "nanda",
+    "marketplace",
+    "payment-processing",
+    "plugin"
+  ],
+  "author": "Munira (TripPilot)",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "eslint": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Munira001/nandatown"
+  },
+  "bugs": {
+    "url": "https://github.com/Munira001/nandatown/issues"
+  },
+  "homepage": "https://github.com/Munira001/nandatown#readme"
+}
