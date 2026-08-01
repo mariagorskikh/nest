@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nanda-prava-payments"
+version = "0.1.0"
+description = "A Prava payments-layer adapter for NANDA Town"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = ["nest-core"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.3.0",
+    "pyright==1.1.408",
+    "ruff==0.14.14",
+]
+
+[project.entry-points."nest.plugins.payments"]
+prava = "nanda_prava_adapter.plugin:PravaPayments"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nanda_prava_adapter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = ["-m", "not live"]
+markers = ["live: interactive test that calls the real Prava sandbox"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+include = ["src", "tests"]
