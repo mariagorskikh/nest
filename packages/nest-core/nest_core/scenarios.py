@@ -47,6 +47,10 @@ def get_scenario_factory(name: str) -> ScenarioFactory:
 
 
 def _try_load_builtin(name: str) -> None:
+    if name == "policy_commerce":
+        from nest_plugin_prava.scenario import policy_commerce_factory
+
+        register_scenario("policy_commerce", policy_commerce_factory)
     if name == "marketplace":
         from nest_core.scenarios_builtin.marketplace import marketplace_factory
 

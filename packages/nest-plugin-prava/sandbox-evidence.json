@@ -1,0 +1,48 @@
+{
+  "failure_case": {
+    "error_code": "POLICY_NEEDS_HUMAN",
+    "error_message": "amount $70.50 exceeds cap $47.00",
+    "failing_clause_path": "root.all_of[3]",
+    "mandate_id": "qm_mdt_policy_v2",
+    "payment_ref": "nanda-fail-0d9344149e",
+    "prava_transactions_consumed": 0,
+    "quoted_cents": 7050,
+    "service": "gpu-compute-xl"
+  },
+  "happy_path": {
+    "amount_cents": 1800,
+    "currency": "USD",
+    "envelope_id": "env_a_1785693994048",
+    "environment": "SANDBOX",
+    "merchant_ref": "ord_781e1da2-ab9",
+    "payment_ref": "nanda-ok-73f1aeb573",
+    "prava_transaction_id": "txn_01KZ1TGNA0VPNE1BSYCK5C7B9T",
+    "prava_transactions_consumed": 1,
+    "pricing_rule": "ceil(2h x 900c/GPU-h) = 1800c",
+    "quote_id": "qt_ef3bfa4a-e20",
+    "run_id": "nanda_1785694016614_fhauf3",
+    "service": "gpu-compute-small"
+  },
+  "scenario_run": {
+    "buyer_0": {
+      "amount_cents": 1800,
+      "envelope_id": "env_a_1785695413265",
+      "ledger_autonomous": 1,
+      "merchant_ref": "ord_02d56bb3-930",
+      "outcome": "settled",
+      "prava_transaction_id": "txn_01KZ1VWC3YVWG94VFDX1H89PK7",
+      "service": "gpu-compute-small"
+    },
+    "buyer_1": {
+      "error_code": "POLICY_NEEDS_HUMAN",
+      "error_message": "amount $70.50 exceeds cap $47.00",
+      "failing_clause_path": "root.all_of[3]",
+      "outcome": "refused",
+      "prava_transactions_consumed": 0,
+      "service": "gpu-compute-xl"
+    },
+    "factory": "policy_commerce",
+    "scenario": "scenarios/prava_marketplace.yaml",
+    "trace_events": 16
+  }
+}

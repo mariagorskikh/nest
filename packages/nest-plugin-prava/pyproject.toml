@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+[project]
+name = "nest-plugin-prava"
+version = "0.1.0"
+description = "Nanda Town payments plugin: real Prava sandbox settlement bounded by a human-granted policy mandate"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "nest-core",
+    # Async HTTP to the Quartermaster console, which owns the mandate
+    # arbiter, the envelope router and the append-only ledger.
+    "httpx>=0.27",
+]
+
+[project.urls]
+Homepage = "https://github.com/projnanda/nandatown"
+Repository = "https://github.com/projnanda/nandatown"
+
+# Discoverable via the documented entry-point path (CONTRIBUTING.md).
+[project.entry-points."nest.plugins.payments"]
+prava = "nest_plugin_prava.plugin:PravaPayments"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nest_plugin_prava"]
