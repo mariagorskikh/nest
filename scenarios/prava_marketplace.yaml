@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# Prava payments adapter scenario — marketplace with payments: prava
+name: prava_marketplace
+description: |
+  Small marketplace run that exercises the Prava payments adapter
+  (quote/pay/verify) under mock or hybrid mode. Demonstrates agent
+  commerce with a real payments-layer plugin instead of prepaid_credits.
+
+tier: 1
+seed: 42
+
+agents:
+  count: 10
+  brain: state-machine
+  roles:
+    - name: buyer
+      count: 5
+    - name: seller
+      count: 5
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prava
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: marketplace
+  config:
+    catalog_size: 20
+    rounds: 3
+
+failures:
+  message_drop: 0.0
+
+duration: "ticks: 2000"
+
+metrics:
+  - success_rate
+  - mean_latency
+  - message_count
+
+output:
+  trace: ./traces/prava_marketplace.jsonl

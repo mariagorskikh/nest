@@ -22,6 +22,7 @@ dependencies = [
     "nest-scenarios",
     "nest-shell",
     "nest-plugins-reference",
+    "nest-plugins-prava",
     "nest-marketplace",
 ]
 
@@ -63,6 +64,7 @@ members = [
     "packages/nest-scenarios",
     "packages/nest-shell",
     "packages/nest-plugins-reference",
+    "packages/nest-plugins-prava",
     "packages/nest-marketplace",
 ]
 
@@ -88,6 +90,7 @@ nest-mocks = { workspace = true }
 nest-scenarios = { workspace = true }
 nest-shell = { workspace = true }
 nest-plugins-reference = { workspace = true }
+nest-plugins-prava = { workspace = true }
 nest-marketplace = { workspace = true }
 
 [tool.ruff]
@@ -111,6 +114,7 @@ extraPaths = [
     "packages/nest-scenarios",
     "packages/nest-shell",
     "packages/nest-plugins-reference",
+    "packages/nest-plugins-prava",
     "packages/nest-marketplace",
     ".",
 ]
