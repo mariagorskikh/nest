@@ -64,6 +64,7 @@ members = [
     "packages/nest-shell",
     "packages/nest-plugins-reference",
     "packages/nest-marketplace",
+    "packages/nest-payments-prava",
 ]
 
 [tool.uv]
@@ -78,6 +79,8 @@ dev-dependencies = [
     # nest-cli is a deprecated shim — only installed for the dev test suite
     # so the shim's smoke tests can import it.
     "nest-cli",
+    # HTTP mock library used by nest-payments-prava test suite.
+    "respx>=0.21",
 ]
 
 [tool.uv.sources]
@@ -89,6 +92,7 @@ nest-scenarios = { workspace = true }
 nest-shell = { workspace = true }
 nest-plugins-reference = { workspace = true }
 nest-marketplace = { workspace = true }
+nest-payments-prava = { workspace = true }
 
 [tool.ruff]
 target-version = "py312"
