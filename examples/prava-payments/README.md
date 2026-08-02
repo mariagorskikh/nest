@@ -70,6 +70,13 @@ python -m prava_payments.validator <trace.jsonl> <verified_did> [<verified_did> 
 # prava           -> PASS: no_unverified_settlement - no value moved to an unverified payee
 ```
 
+### What the failure looks like
+
+A faithful render of `traces/prava_failure.jsonl` -- the same event counts
+`nest inspect` reports, including `trust_refused` x 1:
+
+![Prava trust-gate failure, visualized from the Nanda trace](docs/trust-gate-failure.png)
+
 ## Determinism
 
 Tier-1 clean: no wall-clock, no unseeded RNG. The Prava client returns a
