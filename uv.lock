@@ -4,6 +4,7 @@ requires-python = ">=3.12"
 
 [manifest]
 members = [
+    "nanda-town-prava-group",
     "nest-cli",
     "nest-core",
     "nest-marketplace",
@@ -1329,6 +1330,28 @@ wheels = [
 ]
 
 [[package]]
+name = "nanda-town-prava-group"
+version = "0.1.0"
+source = { editable = "packages/nest-plugins-prava-group" }
+dependencies = [
+    { name = "nest-sdk" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "nest-sdk", editable = "packages/nest-sdk" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "nest-cli"
 version = "0.1.1"
 source = { editable = "packages/nest-cli" }
@@ -1477,6 +1500,7 @@ name = "nest-workspace"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "nanda-town-prava-group" },
     { name = "nest-core" },
     { name = "nest-marketplace" },
     { name = "nest-mocks" },
@@ -1514,6 +1538,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'judge'", specifier = ">=0.30" },
     { name = "cryptography", marker = "extra == 'plugins'", specifier = ">=42.0" },
     { name = "matplotlib", marker = "extra == 'harness'", specifier = ">=3.8" },
+    { name = "nanda-town-prava-group", editable = "packages/nest-plugins-prava-group" },
     { name = "nest-core", editable = "packages/nest-core" },
     { name = "nest-marketplace", editable = "packages/nest-marketplace" },
     { name = "nest-mocks", editable = "packages/nest-mocks" },

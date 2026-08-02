@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# The control run for town.yaml: the exact same task type, the exact same
+# factory (nanda_town_prava's own — nothing about the scenario changes),
+# with only `layers.payments` swapped to the bundled `prepaid_credits`.
+#
+# This is what the $1,000 prize is actually asking a judge to compare. Run
+# both and diff the two consoles:
+#
+#   .venv/Scripts/python.exe scenarios/run_town.py town.yaml
+#   .venv/Scripts/python.exe scenarios/run_town.py scenarios/town_prepaid_control.yaml
+#
+# What happens here, verified by running, not asserted: prepaid_credits has
+# no pay_group — `hasattr(payments, "pay_group")` is False and calling it
+# raises a real AttributeError, printed verbatim. The organizer's only
+# remaining tool is repeated pay(): every other principal pays the organizer
+# directly, pooling the whole cart into the organizer's own simulator
+# balance — the exact thing PravaMandates.conservation_report()
+# ["no_pooled_funds"] exists to forbid. There is no decline, no backstop, no
+# atomic all-or-nothing outcome to show, because a pooled ledger has no
+# consent ceremony for any of those to happen inside.
+name: town_group_purchase
+description: >-
+  Control: the same town_group_purchase task type against the bundled
+  prepaid_credits plugin instead of prava_mandates. Shows what a pooled
+  ledger can and cannot express for a group purchase.
+
+tier: 1
+seed: 7
+
+agents:
+  count: 4
+  brain: state-machine
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits # <- the only change from town.yaml
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: town_group_purchase
+  config:
+    principals: [Soham, Maya, Dev, Arsh]
+    declines: [Dev] # ignored on this rail — prepaid_credits has no ceremony to decline from
+    backstop: Maya # ignored on this rail — no role concept in a pooled ledger
+    backstop_cap: 6000
+    policy: { type: quorum, m: 2 } # ignored on this rail — no commit policy either
+    cart_amount: 18600
+    merchant: velvet-tickets
+    ref: friday-night-tickets
+
+duration: "ticks: 1000"
+
+output:
+  # Relative to the CWD the script is run from (nanda-town-prava/), matching
+  # town.yaml's own convention — nest_core.runner.ScenarioRunner resolves
+  # output.trace against the process CWD, not the YAML file's location.
+  trace: ./traces/town_prepaid_control.jsonl
