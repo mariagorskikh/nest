@@ -201,3 +201,7 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("capability_spoofing", capability_spoofing_factory)
+    elif name == "agent_heist":
+        from nest_core.scenarios_builtin.agent_heist import agent_heist_factory
+
+        register_scenario("agent_heist", agent_heist_factory)

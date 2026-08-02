@@ -1,0 +1,71 @@
+{
+  "scenario": "agent_heist",
+  "version": "1.0",
+  "created_at": "",
+  "mandates": [
+    {
+      "agent_id": "buyer-naive-0",
+      "agent_name": "Naive Agent Alpha",
+      "agent_type": "naive",
+      "mandate_id": "mdt_01KYYMBG1JJZFHVA36J7XAEA9T",
+      "approved_amount": "100.00",
+      "status": "active"
+    },
+    {
+      "agent_id": "buyer-naive-1",
+      "agent_name": "Naive Agent Beta",
+      "agent_type": "naive",
+      "mandate_id": "mdt_01KYZBXMNSXNAHM7648G9F3EEK",
+      "approved_amount": "100.00",
+      "status": "active"
+    },
+    {
+      "agent_id": "buyer-naive-2",
+      "agent_name": "Naive Agent Gamma",
+      "agent_type": "naive",
+      "mandate_id": "mdt_01KZ1Z0YQ14SCT9HTDBDTGY8ZE",
+      "approved_amount": "100.00",
+      "status": "active"
+    },
+    {
+      "agent_id": "buyer-naive-3",
+      "agent_name": "Naive Agent Delta",
+      "agent_type": "naive",
+      "mandate_id": "mdt_01KZ1Z2TSV24JW2JEF0CMKP3GA",
+      "approved_amount": "100.00",
+      "status": "active"
+    },
+    {
+      "agent_id": "buyer-defended-0",
+      "agent_name": "Defended Agent Alpha",
+      "agent_type": "defended",
+      "mandate_id": "mdt_01KYZCHN2N7WZSXB9FJWPKP015",
+      "approved_amount": "100.00",
+      "status": "active"
+    },
+    {
+      "agent_id": "buyer-defended-1",
+      "agent_name": "Defended Agent Beta",
+      "agent_type": "defended",
+      "mandate_id": "mdt_01KZ1Z4XFK796R2Q8QKBQYHPAN",
+      "approved_amount": "100.00",
+      "status": "active"
+    },
+    {
+      "agent_id": "buyer-defended-2",
+      "agent_name": "Defended Agent Gamma",
+      "agent_type": "defended",
+      "mandate_id": "mdt_01KZ1Z748RJXGTS7Q5H7ZF3DF8",
+      "approved_amount": "100.00",
+      "status": "active"
+    },
+    {
+      "agent_id": "buyer-defended-3",
+      "agent_name": "Defended Agent Delta",
+      "agent_type": "defended",
+      "mandate_id": "mdt_01KZ1Z910NTJBPYVKD1PQ1E1CT",
+      "approved_amount": "100.00",
+      "status": "active"
+    }
+  ]
+}

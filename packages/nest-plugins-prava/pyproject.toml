@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+[project]
+name = "nest-plugins-prava"
+version = "0.1.0"
+description = "Prava Agentic Payments plugin for nest - mandate-backed payments with threshold enforcement"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "nest-sdk",
+    "httpx>=0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",  # httpx mocking
+]
+
+[project.entry-points."nest.plugins.payments"]
+prava = "nest_plugins_prava:PravaPayments"
+
+[project.urls]
+Homepage = "https://github.com/projnanda/nandatown"
+Repository = "https://github.com/projnanda/nandatown"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nest_plugins_prava"]
