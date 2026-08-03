@@ -7,7 +7,7 @@ CI. The sandbox tests in ``test_sandbox_live.py`` cover real money.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from nest_core.layers.payments import Payments
@@ -15,8 +15,15 @@ from nest_core.types import AgentId, Money, PaymentRef, PaymentStatus, ServiceRe
 from nest_plugin_prava import PravaPaymentError, PravaPayments
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import httpx
-    from tests.conftest import JsonResponseFactory, MockClientFactory
+
+    # Shapes of the conftest fixtures. Spelled out here rather than imported
+    # from the test package, which is not importable under every rootdir.
+    Handler = Callable[[httpx.Request], httpx.Response]
+    MockClientFactory = Callable[[Handler], httpx.AsyncClient]
+    JsonResponseFactory = Callable[[int, dict[str, Any]], httpx.Response]
 
 QUOTE_BODY = {
     "runId": "nanda_test_run",
