@@ -8,6 +8,7 @@ members = [
     "nest-core",
     "nest-marketplace",
     "nest-mocks",
+    "nest-plugin-prava",
     "nest-plugins-reference",
     "nest-scenarios",
     "nest-sdk",
@@ -1400,6 +1401,21 @@ dependencies = [
 requires-dist = [{ name = "nest-core", editable = "packages/nest-core" }]
 
 [[package]]
+name = "nest-plugin-prava"
+version = "0.1.0"
+source = { editable = "packages/nest-plugin-prava" }
+dependencies = [
+    { name = "httpx" },
+    { name = "nest-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "nest-core", editable = "packages/nest-core" },
+]
+
+[[package]]
 name = "nest-plugins-reference"
 version = "0.1.1"
 source = { editable = "packages/nest-plugins-reference" }
@@ -1480,6 +1496,7 @@ dependencies = [
     { name = "nest-core" },
     { name = "nest-marketplace" },
     { name = "nest-mocks" },
+    { name = "nest-plugin-prava" },
     { name = "nest-plugins-reference" },
     { name = "nest-scenarios" },
     { name = "nest-sdk" },
@@ -1517,6 +1534,7 @@ requires-dist = [
     { name = "nest-core", editable = "packages/nest-core" },
     { name = "nest-marketplace", editable = "packages/nest-marketplace" },
     { name = "nest-mocks", editable = "packages/nest-mocks" },
+    { name = "nest-plugin-prava", editable = "packages/nest-plugin-prava" },
     { name = "nest-plugins-reference", editable = "packages/nest-plugins-reference" },
     { name = "nest-scenarios", editable = "packages/nest-scenarios" },
     { name = "nest-sdk", editable = "packages/nest-sdk" },

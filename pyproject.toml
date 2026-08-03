@@ -23,6 +23,7 @@ dependencies = [
     "nest-shell",
     "nest-plugins-reference",
     "nest-marketplace",
+    "nest-plugin-prava",
 ]
 
 [project.optional-dependencies]

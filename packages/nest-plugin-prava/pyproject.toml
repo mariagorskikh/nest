@@ -30,6 +30,9 @@ Repository = "https://github.com/projnanda/nandatown"
 [project.entry-points."nest.plugins.payments"]
 prava = "nest_plugin_prava.plugin:PravaPayments"
 
+[project.entry-points."nest.scenarios"]
+policy_commerce = "nest_plugin_prava.scenario:policy_commerce_factory"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

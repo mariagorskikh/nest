@@ -22,7 +22,6 @@ import uuid
 import httpx
 import pytest
 from nest_core.types import AgentId, PaymentRef, PaymentStatus, ServiceRef
-
 from nest_plugin_prava import PravaPaymentError, PravaPayments
 
 EVIDENCE_PATH = pathlib.Path(__file__).resolve().parent.parent / "sandbox-evidence.json"

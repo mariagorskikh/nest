@@ -25,7 +25,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from nest_core.types import Money, PaymentStatus, Quote, Receipt
@@ -119,22 +119,27 @@ class PravaPayments:
         """
         try:
             with httpx.Client(timeout=10.0) as client:
-                data = client.get(f"{self._console_url}/api/portfolio").json()
+                payload = _as_mapping(client.get(f"{self._console_url}/api/portfolio").json())
         except (httpx.HTTPError, ValueError):
             return self._capacity_cents
 
-        envelopes = data.get("envelopes", [])
-        open_capacity = sum(
-            int(env.get("per_charge_cap_cents", 0))
-            for env in envelopes
-            if env.get("cycle") == "OPEN"
+        raw_envelopes = payload.get("envelopes")
+        envelopes: list[object] = (
+            cast("list[object]", raw_envelopes) if isinstance(raw_envelopes, list) else []
         )
-        policy = data.get("policy") or {}
+        open_capacity = 0
+        for entry in envelopes:
+            envelope = _as_mapping(entry)
+            if envelope.get("cycle") != "OPEN":
+                continue
+            open_capacity += _as_int(envelope.get("per_charge_cap_cents"))
+
+        policy = _as_mapping(payload.get("policy"))
         cap_cents = policy.get("cap_cents")
         if cap_cents is None:
             headroom = open_capacity
         else:
-            headroom = int(cap_cents) - int(policy.get("cumulative_cents", 0))
+            headroom = _as_int(cap_cents) - _as_int(policy.get("cumulative_cents"))
         self._capacity_cents = max(0, min(open_capacity, headroom))
         return self._capacity_cents
 
@@ -302,7 +307,7 @@ class PravaPayments:
             known = ", ".join(sorted(self._catalog))
             msg = f"Unknown service {service!r}; known services: {known}"
             raise PravaPaymentError("UNKNOWN_SERVICE", msg, {"service": service})
-        need = dict(spec)
+        need: dict[str, Any] = dict(spec)
         need.setdefault("deadline", _deadline_iso())
         return need
 
@@ -333,15 +338,43 @@ class PravaPayments:
             msg = f"console returned non-JSON ({response.status_code}) from {path}"
             raise PravaPaymentError("BAD_RESPONSE", msg) from exc
 
+        body = _as_mapping(payload)
         if response.is_success:
-            return dict(payload)
+            return body
 
-        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        error = _as_mapping(body.get("error"))
+        code = error.get("code")
+        message = error.get("message")
         raise PravaPaymentError(
-            str(error.get("code", f"HTTP_{response.status_code}")),
-            str(error.get("message", f"console returned {response.status_code}")),
-            dict(error.get("details", {})),
+            str(code) if code is not None else f"HTTP_{response.status_code}",
+            str(message) if message is not None else f"console returned {response.status_code}",
+            _as_mapping(error.get("details")),
         )
+
+
+def _as_mapping(value: object) -> dict[str, Any]:
+    """A JSON body is ``Any`` until proven otherwise. Anything that is not an
+    object becomes an empty one, so a malformed response reads as absent
+    fields rather than raising somewhere further away."""
+    if isinstance(value, dict):
+        pairs = cast("dict[object, object]", value)
+        return {str(key): item for key, item in pairs.items()}
+    return {}
+
+
+def _as_int(value: object) -> int:
+    """Cents, defensively. Console amounts are integers, but a missing or
+    malformed field must read as zero rather than crash a simulation."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, str)):
+        try:
+            return int(float(value))
+        except ValueError:
+            return 0
+    return 0
 
 
 def _deadline_iso(hours_ahead: int = 12) -> str:

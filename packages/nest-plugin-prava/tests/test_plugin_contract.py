@@ -12,12 +12,10 @@ from typing import TYPE_CHECKING
 import pytest
 from nest_core.layers.payments import Payments
 from nest_core.types import AgentId, Money, PaymentRef, PaymentStatus, ServiceRef
-
 from nest_plugin_prava import PravaPaymentError, PravaPayments
 
 if TYPE_CHECKING:
     import httpx
-
     from tests.conftest import JsonResponseFactory, MockClientFactory
 
 QUOTE_BODY = {

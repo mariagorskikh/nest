@@ -9,8 +9,9 @@ Example::
 
 from __future__ import annotations
 
+import importlib.metadata
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from nest_core.scenario import ScenarioConfig
 from nest_core.types import AgentId
@@ -39,6 +40,8 @@ def get_scenario_factory(name: str) -> ScenarioFactory:
     """
     if name not in _FACTORIES:
         _try_load_builtin(name)
+    if name not in _FACTORIES:
+        _try_load_entry_point(name)
     factory = _FACTORIES.get(name)
     if factory is None:
         msg = f"No scenario factory registered for {name!r}"
@@ -46,11 +49,24 @@ def get_scenario_factory(name: str) -> ScenarioFactory:
     return factory
 
 
-def _try_load_builtin(name: str) -> None:
-    if name == "policy_commerce":
-        from nest_plugin_prava.scenario import policy_commerce_factory
+def _try_load_entry_point(name: str) -> None:
+    """Load a scenario contributed by an installed package.
 
-        register_scenario("policy_commerce", policy_commerce_factory)
+    Scenarios ship with the plugins they exercise, the same way layers do,
+    so core does not need to know the name of every package that adds one::
+
+        [project.entry-points."nest.scenarios"]
+        policy_commerce = "nest_plugin_prava.scenario:policy_commerce_factory"
+    """
+    for ep in importlib.metadata.entry_points(group="nest.scenarios"):
+        if ep.name != name:
+            continue
+        factory = cast("ScenarioFactory", ep.load())
+        register_scenario(name, factory)
+        return
+
+
+def _try_load_builtin(name: str) -> None:
     if name == "marketplace":
         from nest_core.scenarios_builtin.marketplace import marketplace_factory
 
