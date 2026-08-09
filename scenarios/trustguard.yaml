@@ -1,0 +1,16 @@
+# TrustGuard trust plugin — adversarial scenario
+# 16 honest agents + 4 malicious agents + 1 observer
+# Tests: ELO evolution, denylist triggering, Sybil resistance, stake slashing
+
+agents:
+  count: 21
+  brain: state_machine
+
+layers:
+  trust: trustguard
+
+failures:
+  byzantine_agents: 0.19  # 4 agents act maliciously
+  message_drop: 0.05
+
+ticks: 200
