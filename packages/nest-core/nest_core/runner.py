@@ -9,11 +9,13 @@ Example::
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from nest_core.plugins import PluginRegistry
 from nest_core.scenario import ScenarioConfig
+from nest_core.sim.agent import ScenarioEventSink, StateMachineAgent
 from nest_core.sim.simulator import Simulator
 from nest_core.types import AgentId
 
@@ -28,6 +30,14 @@ def _parse_partition_groups(raw: object) -> list[list[str]] | None:
     return result if result else None
 
 
+class PluginResolver(Protocol):
+    """Generic layer-plugin resolver consumed by ScenarioRunner."""
+
+    def resolve(self, layer: str, name: str) -> Any:
+        """Resolve one configured layer/name pair."""
+        ...
+
+
 class ScenarioRunner:
     """Runs a scenario end-to-end: resolves plugins, creates agents, runs simulation.
 
@@ -38,11 +48,24 @@ class ScenarioRunner:
         await runner.run()
     """
 
-    def __init__(self, config: ScenarioConfig, registry: PluginRegistry | None = None) -> None:
+    def __init__(
+        self,
+        config: ScenarioConfig,
+        registry: PluginRegistry | None = None,
+        *,
+        participant_override: Mapping[AgentId, StateMachineAgent] | None = None,
+        plugin_resolver: PluginResolver | None = None,
+        event_sink: ScenarioEventSink | None = None,
+    ) -> None:
+        if registry is not None and plugin_resolver is not None:
+            raise ValueError("registry and plugin_resolver are mutually exclusive")
         self._config = config
-        self._registry = registry or PluginRegistry()
+        self._plugin_resolver = plugin_resolver or registry or PluginRegistry()
+        self._participant_override = dict(participant_override or {})
+        self._event_sink = event_sink
         self._resolved_plugins: dict[str, Any] = {}
         self._metrics: dict[str, float] = {}
+        self._trace_finalized = False
 
     @property
     def metrics(self) -> dict[str, float]:
@@ -51,6 +74,11 @@ class ScenarioRunner:
     @property
     def resolved_plugins(self) -> dict[str, Any]:
         return self._resolved_plugins
+
+    @property
+    def trace_finalized(self) -> bool:
+        """Whether this run's Simulator trace closed without raising."""
+        return self._trace_finalized
 
     def _resolve_plugins(self) -> dict[str, Any]:
         """Resolve all layer plugins from the config.
@@ -61,18 +89,18 @@ class ScenarioRunner:
         """
         layers = self._config.layers
         return {
-            "transport": self._registry.resolve("transport", layers.transport),
-            "comms": self._registry.resolve("comms", layers.comms),
-            "identity": self._registry.resolve("identity", layers.identity),
-            "registry": self._registry.resolve("registry", layers.registry),
-            "auth": self._registry.resolve("auth", layers.auth),
-            "trust": self._registry.resolve("trust", layers.trust),
-            "payments": self._registry.resolve("payments", layers.payments),
-            "coordination": self._registry.resolve("coordination", layers.coordination),
-            "negotiation": self._registry.resolve("negotiation", layers.negotiation),
-            "memory": self._registry.resolve("memory", layers.memory),
-            "privacy": self._registry.resolve("privacy", layers.privacy),
-            "datafacts": self._registry.resolve("datafacts", layers.datafacts),
+            "transport": self._plugin_resolver.resolve("transport", layers.transport),
+            "comms": self._plugin_resolver.resolve("comms", layers.comms),
+            "identity": self._plugin_resolver.resolve("identity", layers.identity),
+            "registry": self._plugin_resolver.resolve("registry", layers.registry),
+            "auth": self._plugin_resolver.resolve("auth", layers.auth),
+            "trust": self._plugin_resolver.resolve("trust", layers.trust),
+            "payments": self._plugin_resolver.resolve("payments", layers.payments),
+            "coordination": self._plugin_resolver.resolve("coordination", layers.coordination),
+            "negotiation": self._plugin_resolver.resolve("negotiation", layers.negotiation),
+            "memory": self._plugin_resolver.resolve("memory", layers.memory),
+            "privacy": self._plugin_resolver.resolve("privacy", layers.privacy),
+            "datafacts": self._plugin_resolver.resolve("datafacts", layers.datafacts),
         }
 
     def _create_agents(self, plugins: dict[str, Any]) -> dict[AgentId, Any]:
@@ -147,8 +175,18 @@ class ScenarioRunner:
 
             trace_path = await runner.run()
         """
+        self._trace_finalized = False
         plugins = self._resolve_plugins()
         self._resolved_plugins = plugins
+
+        agents = self._create_agents(plugins)
+        missing_overrides = [
+            agent_id for agent_id in self._participant_override if agent_id not in agents
+        ]
+        if missing_overrides:
+            missing = ", ".join(repr(agent_id) for agent_id in missing_overrides)
+            raise KeyError(f"participant override targets are not in the scenario: {missing}")
+        agents.update(self._participant_override)
 
         trace_path = Path(self._config.output.trace)
         trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,19 +207,36 @@ class ScenarioRunner:
             partition_start_at_time=failures.partition_start_at_time,
             partition_heal_at_time=failures.partition_heal_at_time,
             plugins=plugins,
+            event_sink=self._event_sink,
         )
 
-        agents = self._create_agents(plugins)
-        for agent_id, agent in agents.items():
-            sim.add_agent(agent_id, agent)
+        primary_error: BaseException | None = None
+        primary_traceback: Any = None
+        try:
+            for agent_id, agent in agents.items():
+                sim.add_agent(agent_id, agent)
 
-        # Apply per-agent plugin overrides set by scenario factories
-        agent_plugins = cast("dict[AgentId, dict[str, Any]]", plugins.pop("_agent_plugins", {}))
-        for agent_id, overrides in agent_plugins.items():
-            sim.set_agent_plugins(agent_id, overrides)
+            # Apply per-agent plugin overrides set by scenario factories
+            agent_plugins = cast("dict[AgentId, dict[str, Any]]", plugins.pop("_agent_plugins", {}))
+            for agent_id, overrides in agent_plugins.items():
+                sim.set_agent_plugins(agent_id, overrides)
 
-        max_ticks = self._config.get_max_ticks()
-        await sim.run(max_ticks=max_ticks)
+            await sim.run(max_ticks=self._config.get_max_ticks())
+        except BaseException as exc:
+            primary_error = exc
+            primary_traceback = exc.__traceback__
+        finally:
+            cleanup_error: BaseException | None = None
+            try:
+                sim.close_trace()
+            except BaseException as exc:
+                cleanup_error = exc
+            self._trace_finalized = sim.trace_finalized
+
+        if primary_error is not None:
+            raise primary_error.with_traceback(primary_traceback)
+        if cleanup_error is not None:
+            raise cleanup_error
 
         if self._config.metrics:
             from nest_core.metrics import compute_metrics, generate_html_report

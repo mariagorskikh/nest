@@ -81,6 +81,7 @@ class PluginRegistry:
 
     def __init__(self) -> None:
         self._cache: dict[tuple[str, str], Any] = {}
+        self._reference_cache: dict[tuple[str, str], Any] = {}
         self._discover_entry_points()
 
     def _discover_entry_points(self) -> None:
@@ -128,6 +129,26 @@ class PluginRegistry:
 
         msg = f"No plugin found for layer={layer!r}, name={name!r}"
         raise KeyError(msg)
+
+    def resolve_reference(self, layer: str, name: str) -> Any:
+        """Resolve a bundled reference plugin without entry-point precedence.
+
+        Example::
+
+            cls = registry.resolve_reference("registry", "in_memory")
+        """
+        key = (layer, name)
+        cached = self._reference_cache.get(key)
+        if cached is not None:
+            return cached
+
+        builtin = _BUILTINS.get(key)
+        if builtin is None:
+            msg = f"No reference plugin found for layer={layer!r}, name={name!r}"
+            raise KeyError(msg)
+        cls = _import_dotted(builtin)
+        self._reference_cache[key] = cls
+        return cls
 
     def list_plugins(self, layer: str | None = None) -> list[tuple[str, str]]:
         """List available plugins, optionally filtered by layer.

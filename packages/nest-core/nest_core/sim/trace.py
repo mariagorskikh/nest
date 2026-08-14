@@ -11,8 +11,13 @@ Example::
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
+
+
+def _private_file_opener(path: str, flags: int) -> int:
+    return os.open(path, flags, 0o600)
 
 
 class TraceWriter:
@@ -29,7 +34,8 @@ class TraceWriter:
         self._path = Path(path)
         self._buffer: list[dict[str, Any]] = []
         self._buffer_size = buffer_size
-        self._file = self._path.open("w")
+        # TraceWriter owns this stream across record() calls and closes it in close().
+        self._file = open(self._path, "w", opener=_private_file_opener)  # noqa: SIM115
 
     def record(self, event: dict[str, Any]) -> None:
         """Record an event to the trace buffer.
@@ -61,8 +67,19 @@ class TraceWriter:
 
             writer.close()
         """
-        self.flush()
-        self._file.close()
+        flush_error: BaseException | None = None
+        try:
+            try:
+                self.flush()
+            except BaseException as exc:
+                flush_error = exc
+                raise
+        finally:
+            try:
+                self._file.close()
+            except BaseException:
+                if flush_error is None:
+                    raise
 
     def __enter__(self) -> TraceWriter:
         return self
