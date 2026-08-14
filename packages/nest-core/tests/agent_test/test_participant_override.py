@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for the generic participant-replacement runner seam."""
+"""Regression tests for the exact participant-replacement runner seam."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import nest_core.agent_test.runner as agent_test_runner_module
 import pytest
+from nest_core.agent_test.profiles import resolve_test_profile
+from nest_core.builtin_scenarios import builtin_path
+from nest_core.plugins import PluginRegistry
 from nest_core.runner import ScenarioRunner
 from nest_core.scenario import ScenarioConfig
 from nest_core.scenarios import register_scenario
@@ -15,6 +19,17 @@ from nest_core.sim.agent import AgentContext, StateMachineAgent
 from nest_core.sim.simulator import Simulator
 from nest_core.sim.trace import TraceWriter
 from nest_core.types import AgentId
+
+RUN_ID = "01K00000000000000000000001"
+
+
+def _runtime() -> Any:
+    from nest_core.agent_test.runtime import AgentTestRuntime
+
+    return AgentTestRuntime(
+        run_id=RUN_ID,
+        resolved_profile=resolve_test_profile("capability-fulfillment"),
+    )
 
 
 class _ReplacementAgent(StateMachineAgent):
@@ -162,6 +177,49 @@ async def test_generic_runner_allows_requester_replacement(tmp_path: Path) -> No
     assert replacement.started_as == AgentId("requester-0")
 
 
+def test_runtime_rejects_independent_subject_authority() -> None:
+    from nest_core.agent_test.runtime import AgentTestRuntime
+
+    forged_kwargs: dict[str, object] = {
+        "run_id": RUN_ID,
+        "resolved_profile": resolve_test_profile("capability-fulfillment"),
+        "subject_participant_id": "requester-0",
+    }
+
+    with pytest.raises(TypeError, match="subject_participant_id"):
+        AgentTestRuntime(**forged_kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {AgentId("requester-0"): _ReferenceProvider()},
+        {
+            AgentId("requester-0"): _Requester(),
+            AgentId("provider-0"): _ReferenceProvider(),
+        },
+    ],
+)
+def test_agent_test_builder_rejects_non_subject_or_multiple_overrides(
+    override: dict[AgentId, StateMachineAgent],
+) -> None:
+    """Exact profile replacement policy remains in the agent-test boundary."""
+    resolved = resolve_test_profile("capability-fulfillment")
+    config = ScenarioConfig.from_yaml(builtin_path("capability_fulfillment"))
+
+    with pytest.raises(
+        agent_test_runner_module.AgentTestTownError,
+        match="PROFILE_SCENARIO_INVALID",
+    ):
+        cast("Any", agent_test_runner_module)._build_profile_scenario_runner(
+            config=config,
+            resolved_profile=resolved,
+            registry=PluginRegistry(),
+            participant_override=override,
+            event_sink=_runtime(),
+        )
+
+
 @pytest.mark.asyncio
 async def test_failed_replacement_never_falls_back_to_reference_provider(tmp_path: Path) -> None:
     original = _ReferenceProvider()
@@ -218,6 +276,7 @@ async def test_runner_closes_trace_when_agent_setup_fails(
     monkeypatch: pytest.MonkeyPatch,
     failure_stage: str,
 ) -> None:
+    """A failure after Simulator construction cannot leave its trace writer open."""
     primary = RuntimeError(f"{failure_stage} failed")
     close_calls = 0
     original_close = TraceWriter.close
