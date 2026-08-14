@@ -1,0 +1,306 @@
+{
+  "$defs": {
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "exercised": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "pattern": "[\\r\\n]"
+            },
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Exercised",
+          "type": "array"
+        },
+        "not_tested": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "pattern": "[\\r\\n]"
+            },
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Not Tested",
+          "type": "array"
+        }
+      },
+      "required": [
+        "exercised",
+        "not_tested"
+      ],
+      "title": "ProfileCoverage",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileDriver": {
+      "additionalProperties": false,
+      "properties": {
+        "best_effort_cleanup_events": {
+          "items": {
+            "const": "stop",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Best Effort Cleanup Events",
+          "type": "array"
+        },
+        "contract": {
+          "const": "town-agent-driver/1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "decision_timeout_ms": {
+          "const": 60000,
+          "title": "Decision Timeout Ms",
+          "type": "integer"
+        },
+        "max_http_body_bytes": {
+          "const": 65536,
+          "title": "Max Http Body Bytes",
+          "type": "integer"
+        },
+        "max_message_bytes": {
+          "const": 4096,
+          "title": "Max Message Bytes",
+          "type": "integer"
+        },
+        "required_evaluation_events": {
+          "items": {
+            "enum": [
+              "start",
+              "message"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Evaluation Events",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract",
+        "required_evaluation_events",
+        "best_effort_cleanup_events",
+        "decision_timeout_ms",
+        "max_http_body_bytes",
+        "max_message_bytes"
+      ],
+      "title": "ProfileDriver",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileEvaluator": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "const": "nanda.agent.capability-fulfillment",
+          "title": "Id",
+          "type": "string"
+        },
+        "required_checks": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "pattern": "[\\r\\n]"
+            },
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Required Checks",
+          "type": "array"
+        },
+        "version": {
+          "const": "1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "required_checks"
+      ],
+      "title": "ProfileEvaluator",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileFixture": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "const": "sell",
+          "title": "Capability",
+          "type": "string"
+        },
+        "expected_response": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__TextFixture_Literal__sold_widget__"
+        },
+        "request": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__TextFixture_Literal__buy_widget__"
+        }
+      },
+      "required": [
+        "capability",
+        "request",
+        "expected_response"
+      ],
+      "title": "ProfileFixture",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileScenario": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "const": "capability_fulfillment",
+          "title": "Id",
+          "type": "string"
+        },
+        "lookup_delay_ticks": {
+          "const": 0,
+          "title": "Lookup Delay Ticks",
+          "type": "integer"
+        },
+        "reference_participant_id": {
+          "const": "requester-0",
+          "title": "Reference Participant Id",
+          "type": "string"
+        },
+        "registry_plugin": {
+          "const": "in_memory",
+          "title": "Registry Plugin",
+          "type": "string"
+        },
+        "seed": {
+          "const": 7,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "const": "provider-0",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "seed",
+        "subject_participant_id",
+        "reference_participant_id",
+        "registry_plugin",
+        "lookup_delay_ticks"
+      ],
+      "title": "ProfileScenario",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__TextFixture_Literal__buy_widget__": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "const": "text/plain; charset=utf-8",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "text": {
+          "const": "buy:widget:2",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "text"
+      ],
+      "title": "TextFixture[Literal['buy:widget:2']]",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__TextFixture_Literal__sold_widget__": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "const": "text/plain; charset=utf-8",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "text": {
+          "const": "sold:widget:2",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "text"
+      ],
+      "title": "TextFixture[Literal['sold:widget:2']]",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "description": "The one shipped Generation 1 capability-fulfillment Test Profile.",
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileCoverage"
+        },
+        "driver": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileDriver"
+        },
+        "evaluator": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileEvaluator"
+        },
+        "fixture": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileFixture"
+        },
+        "id": {
+          "const": "nanda/agent/capability-fulfillment",
+          "title": "Id",
+          "type": "string"
+        },
+        "scenario": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProfileScenario"
+        },
+        "schema_version": {
+          "const": "town.test-profile/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "subject_kind": {
+          "const": "agent",
+          "title": "Subject Kind",
+          "type": "string"
+        },
+        "version": {
+          "const": "1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "version",
+        "subject_kind",
+        "scenario",
+        "driver",
+        "fixture",
+        "evaluator",
+        "coverage"
+      ],
+      "title": "TestProfile",
+      "type": "object"
+    }
+  ],
+  "title": "TestProfile"
+}

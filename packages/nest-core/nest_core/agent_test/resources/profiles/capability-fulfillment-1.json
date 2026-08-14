@@ -1,0 +1,63 @@
+{
+  "schema_version": "town.test-profile/1",
+  "id": "nanda/agent/capability-fulfillment",
+  "version": "1",
+  "subject_kind": "agent",
+  "scenario": {
+    "id": "capability_fulfillment",
+    "seed": 7,
+    "subject_participant_id": "provider-0",
+    "reference_participant_id": "requester-0",
+    "registry_plugin": "in_memory",
+    "lookup_delay_ticks": 0
+  },
+  "driver": {
+    "contract": "town-agent-driver/1",
+    "required_evaluation_events": ["start", "message"],
+    "best_effort_cleanup_events": ["stop"],
+    "decision_timeout_ms": 60000,
+    "max_http_body_bytes": 65536,
+    "max_message_bytes": 4096
+  },
+  "fixture": {
+    "capability": "sell",
+    "request": {
+      "media_type": "text/plain; charset=utf-8",
+      "text": "buy:widget:2"
+    },
+    "expected_response": {
+      "media_type": "text/plain; charset=utf-8",
+      "text": "sold:widget:2"
+    }
+  },
+  "evaluator": {
+    "id": "nanda.agent.capability-fulfillment",
+    "version": "1",
+    "required_checks": [
+      "driver.contract",
+      "registry.provider-registered",
+      "registry.provider-discovered",
+      "delivery.request-routed",
+      "capability.synthetic-request-fulfilled"
+    ]
+  },
+  "coverage": {
+    "exercised": [
+      "town.agent-driver.loopback",
+      "nanda.registry.run-local-discovery",
+      "town.simulator.in-memory-routing",
+      "nanda.agent.synthetic-capability-fulfillment"
+    ],
+    "not_tested": [
+      "nanda.index.persistent-discovery",
+      "nanda.comms.real-network-delivery",
+      "nanda.identity",
+      "nanda.authorization",
+      "nanda.trust",
+      "nanda.payments",
+      "nanda.negotiation",
+      "agent.safety",
+      "agent.long-term-reliability"
+    ]
+  }
+}

@@ -1,0 +1,298 @@
+{
+  "$defs": {
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__CapabilityParticipant": {
+      "additionalProperties": false,
+      "description": "Exact capability-profile participant selected by the shipped scenario.",
+      "properties": {
+        "id": {
+          "const": "provider-0",
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "const": "provider",
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "role"
+      ],
+      "title": "CapabilityParticipant",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__CapabilityProfileReference": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "const": "sha256:436622e70cd84690e39c24f93236c7639adefea2fe9ea72a1dddb25e65609c58",
+          "title": "Digest",
+          "type": "string"
+        },
+        "id": {
+          "const": "nanda/agent/capability-fulfillment",
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "const": "1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "title": "CapabilityProfileReference",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DriverMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "media_type": {
+          "const": "text/plain; charset=utf-8",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "sender_id": {
+          "const": "requester-0",
+          "title": "Sender Id",
+          "type": "string"
+        },
+        "text": {
+          "const": "buy:widget:2",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sender_id",
+        "media_type",
+        "text"
+      ],
+      "title": "DriverMessage",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__MessageDriverObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_intents": {
+          "const": [
+            "send_to_sender",
+            "none"
+          ],
+          "items": {
+            "enum": [
+              "send_to_sender",
+              "none"
+            ],
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Allowed Intents",
+          "type": "array"
+        },
+        "kind": {
+          "const": "message",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "integer"
+        },
+        "message": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DriverMessage"
+        }
+      },
+      "required": [
+        "kind",
+        "logical_time",
+        "allowed_intents",
+        "message"
+      ],
+      "title": "MessageDriverObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__StartDriverObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_intents": {
+          "const": [
+            "declare_capability",
+            "none"
+          ],
+          "items": {
+            "enum": [
+              "declare_capability",
+              "none"
+            ],
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Allowed Intents",
+          "type": "array"
+        },
+        "kind": {
+          "const": "start",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "logical_time",
+        "allowed_intents"
+      ],
+      "title": "StartDriverObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__StopDriverObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_intents": {
+          "const": [
+            "none"
+          ],
+          "items": {
+            "const": "none",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Allowed Intents",
+          "type": "array"
+        },
+        "kind": {
+          "const": "stop",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "integer"
+        },
+        "reason": {
+          "enum": [
+            "run_complete",
+            "run_failed",
+            "run_incomplete",
+            "user_interrupted"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "logical_time",
+        "allowed_intents",
+        "reason"
+      ],
+      "title": "StopDriverObservation",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "description": "Concrete capability request returned by the capability codec.",
+      "properties": {
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "observation": {
+          "discriminator": {
+            "mapping": {
+              "message": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__MessageDriverObservation",
+              "start": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__StartDriverObservation",
+              "stop": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__StopDriverObservation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__StartDriverObservation"
+            },
+            {
+              "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__MessageDriverObservation"
+            },
+            {
+              "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__StopDriverObservation"
+            }
+          ],
+          "title": "Observation"
+        },
+        "participant": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__CapabilityParticipant"
+        },
+        "profile": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__CapabilityProfileReference"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town-agent-driver/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "event_id",
+        "sequence",
+        "participant",
+        "profile",
+        "observation"
+      ],
+      "title": "DriverRequest",
+      "type": "object",
+      "x-town-semantic-validation": [
+        "event sequence is valid for the capability observation kind"
+      ]
+    }
+  ],
+  "title": "DriverRequest",
+  "x-town-semantic-validation": [
+    "event sequence is valid for the selected profile observation kind"
+  ]
+}

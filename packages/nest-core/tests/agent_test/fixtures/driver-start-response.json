@@ -1,0 +1,1 @@
+{"schema_version":"town-agent-driver/1","run_id":"01K00000000000000000000001","event_id":"01K00000000000000000000002","sequence":0,"adapter_instance_id":"01K00000000000000000000000","request_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","intent":{"kind":"declare_capability","capabilities":["sell"]}}

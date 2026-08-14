@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "ProfileReference": {
+      "additionalProperties": false,
+      "description": "Generic immutable identity for exact profile bytes.",
+      "properties": {
+        "digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "title": "ProfileReference",
+      "type": "object"
+    },
+    "ReadyLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_active_runs": {
+          "exclusiveMinimum": 0,
+          "title": "Max Active Runs",
+          "type": "integer"
+        },
+        "max_request_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Max Request Bytes",
+          "type": "integer"
+        },
+        "max_response_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Max Response Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_active_runs",
+        "max_request_bytes",
+        "max_response_bytes"
+      ],
+      "title": "ReadyLimits",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepting_runs": {
+      "title": "Accepting Runs",
+      "type": "boolean"
+    },
+    "adapter_instance_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "not": {
+        "pattern": "[\\r\\n]"
+      },
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+      "title": "Adapter Instance Id",
+      "type": "string"
+    },
+    "contracts": {
+      "items": {
+        "const": "town-agent-driver/1",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Contracts",
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/ReadyLimits"
+    },
+    "profiles": {
+      "items": {
+        "$ref": "#/$defs/ProfileReference"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Profiles",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "town-agent-driver-ready/1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "adapter_instance_id",
+    "contracts",
+    "profiles",
+    "accepting_runs",
+    "limits"
+  ],
+  "title": "DriverReady",
+  "type": "object"
+}

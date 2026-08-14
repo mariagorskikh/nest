@@ -1,0 +1,168 @@
+{
+  "$defs": {
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DeclareCapabilityIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "const": [
+            "sell"
+          ],
+          "items": {
+            "const": "sell",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "kind": {
+          "const": "declare_capability",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "capabilities"
+      ],
+      "title": "DeclareCapabilityIntent",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__NoneIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "none",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "NoneIntent",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__SendToSenderIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "send_to_sender",
+          "title": "Kind",
+          "type": "string"
+        },
+        "media_type": {
+          "const": "text/plain; charset=utf-8",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "pattern": "^[^\\s\\x00-\\x1f\\x7f](?:[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f])?$",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "media_type",
+        "text"
+      ],
+      "title": "SendToSenderIntent",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "additionalProperties": false,
+      "description": "Concrete capability response returned by the capability codec.",
+      "properties": {
+        "adapter_instance_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Adapter Instance Id",
+          "type": "string"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "intent": {
+          "discriminator": {
+            "mapping": {
+              "declare_capability": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DeclareCapabilityIntent",
+              "none": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__NoneIntent",
+              "send_to_sender": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__SendToSenderIntent"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DeclareCapabilityIntent"
+            },
+            {
+              "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__SendToSenderIntent"
+            },
+            {
+              "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__NoneIntent"
+            }
+          ],
+          "title": "Intent"
+        },
+        "request_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Request Digest",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town-agent-driver/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "event_id",
+        "sequence",
+        "adapter_instance_id",
+        "request_digest",
+        "intent"
+      ],
+      "title": "DriverResponse",
+      "type": "object"
+    }
+  ],
+  "title": "DriverResponse",
+  "x-town-semantic-validation": [
+    "intent validated with the originating request profile codec",
+    "intent text is at most the profile UTF-8 byte limit"
+  ]
+}

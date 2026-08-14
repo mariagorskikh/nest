@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "DriverErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "AUTHENTICATION_FAILED",
+            "RUN_BUSY",
+            "EVENT_CONFLICT",
+            "OUT_OF_ORDER",
+            "BODY_TOO_LARGE",
+            "UNSUPPORTED_CONTRACT",
+            "UNSUPPORTED_PROFILE",
+            "SCHEMA_INVALID",
+            "ADAPTER_INTERNAL"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 512,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "pattern": "^[^\\s\\x00-\\x1f\\x7f](?:[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f])?$",
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "retryable",
+        "message"
+      ],
+      "title": "DriverErrorDetail",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "adapter_instance_id": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Adapter Instance Id"
+    },
+    "error": {
+      "$ref": "#/$defs/DriverErrorDetail"
+    },
+    "event_id": {
+      "anyOf": [
+        {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Event Id"
+    },
+    "request_digest": {
+      "anyOf": [
+        {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Request Digest"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Run Id"
+    },
+    "schema_version": {
+      "const": "town-agent-driver-error/1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sequence": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Sequence"
+    }
+  },
+  "required": [
+    "schema_version",
+    "adapter_instance_id",
+    "run_id",
+    "event_id",
+    "sequence",
+    "request_digest",
+    "error"
+  ],
+  "title": "DriverError",
+  "type": "object"
+}
