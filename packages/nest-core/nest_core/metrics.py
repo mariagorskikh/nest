@@ -288,19 +288,34 @@ def validate_protocol(
 ) -> dict[str, Any]:
     """Run protocol validators and return results as part of metrics output.
 
+    ``all_passed`` is True only when at least one validator ran and every one
+    of them passed. A scenario type with no entry in ``VALIDATORS`` reports
+    ``all_passed=False`` and ``unknown_scenario_type=True`` rather than
+    silently succeeding: ``all([])`` is ``True``, so without this guard a
+    typo in ``task.type`` -- or a scenario never added to the registry --
+    produced a green verdict having checked nothing.
+
     Example::
 
         results = validate_protocol("trace.jsonl", "marketplace")
         # {"validations": [{"name": ..., "passed": ..., "detail": ...}, ...],
+        #  "validators_run": 3, "unknown_scenario_type": False,
         #  "all_passed": True}
+
+        validate_protocol("trace.jsonl", "typo_here")
+        # {"validations": [], "validators_run": 0,
+        #  "unknown_scenario_type": True, "all_passed": False}
     """
-    from nest_core.validators import validate_trace
+    from nest_core.validators import VALIDATORS, validate_trace
 
     trace_path = Path(trace_path)
+    known = scenario_type in VALIDATORS
     vresults = validate_trace(trace_path, scenario_type)
     return {
         "validations": [{"name": r.name, "passed": r.passed, "detail": r.detail} for r in vresults],
-        "all_passed": all(r.passed for r in vresults),
+        "validators_run": len(vresults),
+        "unknown_scenario_type": not known,
+        "all_passed": known and bool(vresults) and all(r.passed for r in vresults),
     }
 
 
