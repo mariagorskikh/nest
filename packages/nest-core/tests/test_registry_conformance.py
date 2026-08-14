@@ -58,6 +58,10 @@ _UNREACHABLE_VALIDATORS = {
     ),
 }
 
+# Keyed by task.type, not filename: 10 of the shipped scenarios declare a
+# task.type that differs from their stem (e.g. bft_consensus_partition ->
+# bft_hotstuff, shell_marketplace -> marketplace), so keying on the filename
+# would be fragile to renames and could mis-mark a scenario.
 _MISSING_VALIDATOR_ENTRY = {
     "capability_spoofing",
     "delegated_auth",
@@ -136,17 +140,18 @@ def _validator_coverage_params() -> list[Any]:
     """
     params: list[Any] = []
     for path in sorted(_SCENARIO_DIR.glob("*.yaml")):
+        ttype = _task_type(path)
         marks = (
             [
                 pytest.mark.xfail(
                     reason=(
-                        f"task.type {_task_type(path)!r} has no VALIDATORS entry, so "
-                        "validate_protocol reports success having executed zero checks"
+                        f"task.type {ttype!r} has no VALIDATORS entry, so no property "
+                        "checks run against its traces through the registry-driven path"
                     ),
                     strict=True,
                 )
             ]
-            if path.stem in _MISSING_VALIDATOR_ENTRY
+            if ttype in _MISSING_VALIDATOR_ENTRY
             else []
         )
         params.append(pytest.param(path, marks=marks, id=path.stem))
@@ -249,3 +254,29 @@ def test_unknown_scenario_type_is_not_reported_as_passing(tmp_path: Path) -> Non
         "validate_protocol reported success with zero validations for an unknown "
         "scenario type; absence of checks must not read as a pass"
     )
+
+
+@pytest.mark.parametrize("scenario_type", sorted(VALIDATORS))
+def test_validators_run_counts_functions_not_results(
+    scenario_type: str,
+    tmp_path: Path,
+) -> None:
+    """``validators_run`` counts validator functions, not emitted results.
+
+    A single validator may return several ``ValidationResult`` entries, so
+    ``len(validations)`` overcounts. ``failure_detection``'s two validators
+    return three results between them on a real trace.
+
+    Example::
+
+        test_validators_run_counts_functions_not_results("marketplace", Path("/tmp"))
+    """
+    from nest_core.metrics import validate_protocol
+
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(json.dumps({"agent": "a-0", "kind": "start", "ts": 0.0}) + "\n")
+
+    result = validate_protocol(trace, scenario_type)
+
+    assert result["validators_run"] == len(VALIDATORS[scenario_type])
+    assert result["unknown_scenario_type"] is False

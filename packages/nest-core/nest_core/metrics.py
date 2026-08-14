@@ -288,12 +288,18 @@ def validate_protocol(
 ) -> dict[str, Any]:
     """Run protocol validators and return results as part of metrics output.
 
-    ``all_passed`` is True only when at least one validator ran and every one
-    of them passed. A scenario type with no entry in ``VALIDATORS`` reports
-    ``all_passed=False`` and ``unknown_scenario_type=True`` rather than
-    silently succeeding: ``all([])`` is ``True``, so without this guard a
-    typo in ``task.type`` -- or a scenario never added to the registry --
-    produced a green verdict having checked nothing.
+    ``all_passed`` is True only when at least one validator was configured for
+    the scenario type and every result it produced passed. A scenario type
+    with no entry in ``VALIDATORS`` reports ``all_passed=False`` and
+    ``unknown_scenario_type=True`` rather than silently succeeding: ``all([])``
+    is ``True``, so without this guard a typo in ``task.type`` -- or a scenario
+    never added to the registry -- produced a green verdict having checked
+    nothing.
+
+    ``validators_run`` counts the validator *functions* executed, which is not
+    the same as ``len(validations)``: a single validator may emit several
+    ``ValidationResult`` entries (``failure_detection``'s two validators
+    return three results between them).
 
     Example::
 
@@ -309,13 +315,13 @@ def validate_protocol(
     from nest_core.validators import VALIDATORS, validate_trace
 
     trace_path = Path(trace_path)
-    known = scenario_type in VALIDATORS
+    validator_fns = VALIDATORS.get(scenario_type, [])
     vresults = validate_trace(trace_path, scenario_type)
     return {
         "validations": [{"name": r.name, "passed": r.passed, "detail": r.detail} for r in vresults],
-        "validators_run": len(vresults),
-        "unknown_scenario_type": not known,
-        "all_passed": known and bool(vresults) and all(r.passed for r in vresults),
+        "validators_run": len(validator_fns),
+        "unknown_scenario_type": scenario_type not in VALIDATORS,
+        "all_passed": bool(validator_fns) and all(r.passed for r in vresults),
     }
 
 
