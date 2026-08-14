@@ -19,6 +19,8 @@ from typing import Any
 import typer
 from pydantic import ValidationError
 
+from nest_core.agent_test.cli import test_app
+
 
 def _typer_argument(*args: Any, **kwargs: Any) -> Any:
     return typer.Argument(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType]
@@ -33,6 +35,8 @@ app = typer.Typer(
     help="Nanda Town",
     no_args_is_help=True,
 )
+
+app.add_typer(test_app, name="test")
 
 plugins_app = typer.Typer(help="Manage plugins.")
 app.add_typer(plugins_app, name="plugins")
