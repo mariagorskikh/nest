@@ -500,10 +500,10 @@ def test_headline_command_autodetects_one_exact_target_and_reuses_one_session(
     )
 
 
-def test_public_command_accepts_and_records_a_coherent_alternate_openclaw_version(
+def test_public_command_accepts_and_reports_a_coherent_alternate_openclaw_version(
     tmp_path: Path,
 ) -> None:
-    """A stale release allowlist or unrecorded probe version must fail this boundary."""
+    """A stale release allowlist or unreported public probe version must fail here."""
     fake_bin = tmp_path / "bin"
     prompts = tmp_path / "prompts"
     runtime = tmp_path / "runtime"

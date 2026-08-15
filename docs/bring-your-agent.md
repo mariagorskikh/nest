@@ -11,9 +11,10 @@ not a general evaluation of the agent.
 - The Town and OpenClaw commands must run on the same computer.
 - Run Town and OpenClaw on macOS or Linux. Native Windows is not supported in
   this preview.
-- Town tries the installed OpenClaw version and checks the commands and JSON
-  responses needed for this test. `2026.7.1-2` is the release tested against a
-  real OpenClaw installation.
+- Town tries the installed OpenClaw version and, before a model turn, checks
+  the probe, configuration, agent inventory, and Gateway JSON it needs for
+  this test. `2026.7.1-2` is the release tested against a real OpenClaw
+  installation.
 - `openclaw config get gateway.mode --json` must return exactly `"local"`, and
   OpenClaw must not configure an `OPENCLAW_GATEWAY_URL` override.
 - The OpenClaw Gateway must be healthy.
@@ -109,10 +110,14 @@ scoring it as agent behavior.
 - **Native Windows:** run Town and OpenClaw together on macOS or Linux. Town
   rejects this preview connector before starting an agent/model turn on native
   Windows.
-- **Version or command incompatibility:** check `openclaw --version` and update
-  OpenClaw if needed. Town tries the installed version, but stops clearly
-  before an agent/model turn when a required command or JSON response is
-  incompatible.
+- **Version or preflight incompatibility:** check `openclaw --version` and
+  update OpenClaw if needed. Town tries the installed version, but stops
+  clearly before an agent/model turn when a required probe, configuration,
+  inventory, or Gateway command/JSON response is incompatible.
+- **Agent command or response incompatibility:** after Town dispatches an
+  agent command, an unsupported flag or incompatible response envelope can be
+  detected after a model turn. Town reports the failure and does not retry with
+  alternate command syntax.
 - **Gateway unavailable or unhealthy:** run `openclaw gateway status`, restore
   the Gateway on the computer where you are running Town, then retry.
 - **Remote dispatch rejected:** run

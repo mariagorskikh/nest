@@ -116,13 +116,18 @@ The reference adapter's focused implementation notes are in
 
 ## Managed OpenClaw boundary
 
-The connector reads and records the installed OpenClaw version; it has no
-exact-release allowlist. It lists agents through the read-only JSON inventory,
-checks a healthy read RPC through the local OpenClaw CLI, and requires the CLI,
-Gateway, RPC, and reported server versions to agree. `2026.7.1-2` is the only
-release tested against a real OpenClaw installation. A missing required command,
-incompatible JSON response, or version disagreement fails clearly before an
+The connector reads the installed OpenClaw version and reports it in command
+progress; it has no exact-release allowlist. Before dispatching an agent
+command, it validates the version probe, local configuration, read-only JSON
+inventory, and Gateway status JSON, and requires the CLI, Gateway, RPC, and
+reported server versions to agree. `2026.7.1-2` is the only release tested
+against a real OpenClaw installation. A missing or incompatible pre-dispatch
+command/JSON response, or a version disagreement, fails clearly before an
 agent/model turn.
+
+After dispatch begins, an agent command/flag failure or incompatible response
+envelope can be detected after a model turn. Town reports that outcome and does
+not retry the turn with alternate command syntax.
 
 Before agent turns, Town requires exact local Gateway mode, rejects configured
 `OPENCLAW_GATEWAY_URL` overrides, and clears inherited URL overrides. The probe

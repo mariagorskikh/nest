@@ -140,9 +140,12 @@ Same seed → byte-identical trace, every time.
 From a checkout, Town can run one bounded agent workflow against an existing
 trusted OpenClaw target on the computer where Town is running and return a
 five-stage evidence report. Town tries the installed version and validates the
-commands and JSON response shapes it needs; `2026.7.1-2` is the release tested
-against a real OpenClaw installation. An incompatible command or response fails
-clearly before Town starts an agent/model turn.
+pre-dispatch probe, configuration, inventory, and Gateway commands and JSON
+response shapes it needs; `2026.7.1-2` is the release tested against a real
+OpenClaw installation. An incompatibility in those checks fails clearly before
+Town starts an agent/model turn. If the dispatched agent command, its flags, or
+its response envelope is incompatible, Town reports that result without trying
+an alternate command syntax; a model turn may already have occurred.
 
 ```bash
 uv run nest test agent <agent-id>
