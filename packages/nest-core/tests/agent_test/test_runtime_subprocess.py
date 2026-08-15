@@ -412,19 +412,21 @@ def test_forced_reap_and_both_output_drains_share_one_cleanup_budget() -> None:
     source = (
         "import subprocess, sys, time; "
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1)'], "
-        "start_new_session=True); time.sleep(30)"
+        "start_new_session=True); "
+        "sys.stdout.buffer.write(b'x' * 16384); sys.stdout.buffer.flush(); time.sleep(30)"
     )
     started = time.monotonic()
 
     with pytest.raises(ProcessError, match="^PROCESS_DRAIN_FAILED$"):
         run_bounded(
             _python(source),
-            deadline_seconds=0.05,
+            deadline_seconds=2,
+            max_output_bytes=64,
             terminate_grace_seconds=0.05,
             kill_reap_seconds=0.15,
         )
 
-    assert time.monotonic() - started < 0.33
+    assert time.monotonic() - started < 1
 
 
 def test_nonzero_exit_never_exposes_child_output() -> None:

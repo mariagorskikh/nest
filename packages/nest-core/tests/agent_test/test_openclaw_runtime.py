@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Contract and adversarial tests for the exact OpenClaw runtime connector."""
+"""Contract and adversarial tests for the version-coherent OpenClaw runtime connector."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from typing import Any, cast
 
 import nest_core.agent_test.openclaw_runtime as openclaw_runtime
 import pytest
-from nest_core.agent_test.openclaw_runtime import SUPPORTED_OPENCLAW, OpenClawConnector
+from nest_core.agent_test.openclaw_runtime import OpenClawConnector
 from nest_core.agent_test.runtime_connectors import (
     RuntimeConfigurationError,
     RuntimeDisplay,
@@ -83,10 +83,10 @@ def _success_envelope(intent: dict[str, object] | None = None) -> dict[str, Any]
     return envelope
 
 
-def _gateway() -> dict[str, Any]:
+def _gateway(*, version: str = VERSION) -> dict[str, Any]:
     """Sanitized v2026.7.1-2 status shape observed from the real Gateway CLI."""
     return {
-        "cli": {"entrypoint": "/synthetic/openclaw.mjs", "version": VERSION},
+        "cli": {"entrypoint": "/synthetic/openclaw.mjs", "version": version},
         "config": {
             "cli": {
                 "controlUi": {},
@@ -110,10 +110,10 @@ def _gateway() -> dict[str, Any]:
             "portSource": "config",
             "probeNote": "synthetic",
             "probeUrl": "ws://127.0.0.1:18789",
-            "version": VERSION,
+            "version": version,
         },
         "logFile": "/synthetic/openclaw.log",
-        "pluginVersionDrift": {"drifts": [], "gatewayVersion": VERSION},
+        "pluginVersionDrift": {"drifts": [], "gatewayVersion": version},
         "port": {
             "hints": [],
             "listeners": [
@@ -132,9 +132,9 @@ def _gateway() -> dict[str, Any]:
             "capability": "operator",
             "kind": "read",
             "ok": True,
-            "server": {"connId": "synthetic", "version": VERSION},
+            "server": {"connId": "synthetic", "version": version},
             "url": "ws://127.0.0.1:18789",
-            "version": VERSION,
+            "version": version,
         },
         "service": {
             "command": [],
@@ -513,13 +513,6 @@ def test_fractional_duration_is_accepted_without_becoming_public_metadata(
     assert not hasattr(turn, "duration_ms")
 
 
-def test_single_compatibility_record_is_exact_not_capability_widened() -> None:
-    assert SUPPORTED_OPENCLAW.cli_version == VERSION
-    assert SUPPORTED_OPENCLAW.gateway_version == VERSION
-    assert SUPPORTED_OPENCLAW.rpc_version == VERSION
-    assert SUPPORTED_OPENCLAW.envelope_version == VERSION
-
-
 def test_missing_executable_is_an_uninspectable_probe(tmp_path: Path) -> None:
     connector = OpenClawConnector(executable=tmp_path / "missing-openclaw")
     assert connector.probe() is None
@@ -539,6 +532,101 @@ def test_probe_accepts_the_characterized_version_banner(
         VERSION,
         RuntimeDisplay("OpenClaw", "openclaw gateway status"),
     )
+
+
+@pytest.mark.parametrize(
+    ("banner", "detected_version"),
+    [
+        ("2032.11.4-rc.2+build_7", "2032.11.4-rc.2+build_7"),
+        ("OpenClaw 2032.11.4-rc.2+build_7 (abcdef0)", "2032.11.4-rc.2+build_7"),
+    ],
+)
+def test_coherent_bare_and_branded_versions_prepare_run_and_record_detected_version(
+    tmp_path: Path,
+    banner: str,
+    detected_version: str,
+) -> None:
+    executable, _, _ = _fake_openclaw(
+        tmp_path,
+        version=banner,
+        gateway=_gateway(version=detected_version),
+    )
+    connector = OpenClawConnector(executable=executable)
+
+    probe = connector.probe()
+
+    assert probe is not None
+    target = connector.list_targets(probe)[0]
+    prepared = connector.prepare(probe, target, None)
+    turn = _turn(prepared)
+
+    assert probe.version == detected_version
+    assert prepared.runtime_version == detected_version
+    assert turn.intent == {"capabilities": ["sell"], "kind": "declare_capability"}
+
+
+@pytest.mark.parametrize(
+    "banner",
+    [
+        "",
+        "OpenClaw",
+        "OpenClaw 2032.11.4 unexpected",
+        "OpenClaw " + "x" * 129,
+    ],
+)
+def test_malformed_version_banners_fail_before_agent_inventory(
+    tmp_path: Path,
+    banner: str,
+) -> None:
+    executable, _, log_path = _fake_openclaw(tmp_path, version=banner)
+    connector = OpenClawConnector(executable=executable)
+
+    _assert_code(
+        RuntimeConfigurationError,
+        "OPENCLAW_VERSION_UNSUPPORTED",
+        connector.probe,
+    )
+
+    assert [entry["argv"] for entry in _logs(log_path)] == [["--version"]]
+
+
+_MIXED_VERSION_MUTATIONS: list[Mutation] = [
+    lambda gateway: gateway["cli"].update(version="2032.11.4-rc.3"),
+    lambda gateway: gateway["gateway"].update(version="2032.11.4-rc.3"),
+    lambda gateway: gateway["rpc"].update(version="2032.11.4-rc.3"),
+    lambda gateway: gateway["rpc"]["server"].update(version="2032.11.4-rc.3"),
+]
+
+
+@pytest.mark.parametrize("mutate", _MIXED_VERSION_MUTATIONS)
+def test_mixed_component_versions_are_rejected_against_detected_cli_version(
+    tmp_path: Path,
+    mutate: Mutation,
+) -> None:
+    detected_version = "2032.11.4-rc.2"
+    gateway = _gateway(version=detected_version)
+    mutate(gateway)
+    executable, _, log_path = _fake_openclaw(
+        tmp_path,
+        version=f"OpenClaw {detected_version}",
+        gateway=gateway,
+    )
+    connector = OpenClawConnector(executable=executable)
+    probe = connector.probe()
+
+    assert probe is not None
+    target = connector.list_targets(probe)[0]
+    _assert_code(
+        RuntimeConfigurationError,
+        "OPENCLAW_VERSION_MISMATCH",
+        lambda: connector.prepare(probe, target, None),
+    )
+    assert [entry["argv"] for entry in _logs(log_path)][-1] == [
+        "gateway",
+        "status",
+        "--json",
+        "--require-rpc",
+    ]
 
 
 @pytest.mark.parametrize("gateway_mode", ["remote", None, "", "LOCAL", {"mode": "local"}])
@@ -789,33 +877,6 @@ def test_prepare_allows_official_additive_gateway_diagnostics(tmp_path: Path) ->
     assert connector.prepare(probe, target, None).runtime_version == VERSION
 
 
-@pytest.mark.parametrize(
-    "version",
-    [VERSION, "2026.7.1", "2026.7.1-3", "openclaw 2026.7.1-2", "latest"],
-)
-def test_probe_accepts_only_the_exact_cli_version(tmp_path: Path, version: str) -> None:
-    executable, _, _ = _fake_openclaw(tmp_path, version=version)
-    connector = OpenClawConnector(executable=executable)
-
-    _assert_code(
-        RuntimeConfigurationError,
-        "OPENCLAW_VERSION_UNSUPPORTED",
-        connector.probe,
-    )
-
-
-def test_unsupported_valid_version_output_is_not_retained(tmp_path: Path) -> None:
-    executable, _, _ = _fake_openclaw(tmp_path, version="private-version-canary")
-    connector = OpenClawConnector(executable=executable)
-
-    with pytest.raises(RuntimeConfigurationError) as caught:
-        connector.probe()
-
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    assert "private-version-canary" not in _traceback_locals(caught.value)
-
-
 def test_invalid_utf8_version_output_is_code_only(tmp_path: Path) -> None:
     executable = tmp_path / "openclaw"
     executable.write_text(
@@ -974,7 +1035,7 @@ _GATEWAY_MUTATIONS: list[tuple[Mutation, str]] = [
 
 
 @pytest.mark.parametrize(("mutate", "code"), _GATEWAY_MUTATIONS)
-def test_prepare_requires_exact_versions_config_coherence_rpc_and_loopback(
+def test_prepare_requires_version_config_coherence_rpc_and_loopback(
     tmp_path: Path, mutate: Mutation, code: str
 ) -> None:
     gateway = _gateway()

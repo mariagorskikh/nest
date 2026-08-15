@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Exact-version, same-host OpenClaw connector for Town's managed runtime seam."""
+"""Version-coherent, same-host OpenClaw connector for Town's managed runtime seam."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import tempfile
 import uuid
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
 from urllib.parse import urlsplit
@@ -79,7 +78,9 @@ _ACTIVITY_KEYS = frozenset(
     }
 )
 _ERROR_KEYS = frozenset({"error", "failuresignal"})
-_CLI_VERSION_BANNER = re.compile(r"OpenClaw (2026\.7\.1-2)(?: \([0-9a-f]{7}\))?\Z")
+_CLI_VERSION_BANNER = re.compile(
+    r"(?:OpenClaw )?([A-Za-z0-9][A-Za-z0-9._+-]{0,127})(?: \([0-9a-f]{7}\))?\Z"
+)
 _OPENCLAW_ENVIRONMENT_KEYS = frozenset(
     {"OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWAY_URL", "OPENCLAW_STATE_DIR"}
 )
@@ -139,22 +140,6 @@ _OPENCLAW_ISSUE_POLICY = RuntimeIssuePolicy(
             "OPENCLAW_TRANSPORT_LOSS",
         }
     ),
-)
-
-
-@dataclass(frozen=True, slots=True)
-class OpenClawCompatibility:
-    cli_version: str
-    gateway_version: str
-    rpc_version: str
-    envelope_version: str
-
-
-SUPPORTED_OPENCLAW = OpenClawCompatibility(
-    cli_version="2026.7.1-2",
-    gateway_version="2026.7.1-2",
-    rpc_version="2026.7.1-2",
-    envelope_version="2026.7.1-2",
 )
 
 
@@ -314,11 +299,11 @@ def _version_string(raw: bytes) -> str:
     except UnicodeDecodeError:
         invalid = True
     match = None if invalid else _CLI_VERSION_BANNER.fullmatch(version)
-    if match is None or match.group(1) != SUPPORTED_OPENCLAW.cli_version:
+    if match is None or match.group(1) == "OpenClaw":
         raw = b""
         version = ""
         raise RuntimeConfigurationError("OPENCLAW_VERSION_UNSUPPORTED")
-    return SUPPORTED_OPENCLAW.cli_version
+    return match.group(1)
 
 
 def _require_local_gateway_mode(raw: bytes) -> None:
@@ -470,11 +455,11 @@ def _targets_from_output(raw: bytes) -> tuple[RuntimeTarget, ...]:
     return targets
 
 
-def _require_probe(probe: RuntimeProbe, executable: Path) -> None:
+def _require_probe(probe: RuntimeProbe, executable: Path, detected_version: str) -> None:
     if (
         probe.runtime_id != "openclaw"
         or probe.executable != executable
-        or probe.version != SUPPORTED_OPENCLAW.cli_version
+        or probe.version != detected_version
         or probe.display != _OPENCLAW_DISPLAY
     ):
         raise RuntimeConfigurationError("OPENCLAW_PROBE_MISMATCH")
@@ -894,9 +879,13 @@ class OpenClawConnector:
     def __init__(self, *, executable: str | os.PathLike[str] = "openclaw") -> None:
         self._requested_executable = os.fspath(executable)
         self._executable: Path | None = None
+        self._detected_version: str | None = None
         self._listed_targets: tuple[RuntimeTarget, ...] | None = None
 
     def probe(self) -> RuntimeProbe | None:
+        self._executable = None
+        self._detected_version = None
+        self._listed_targets = None
         if os.name != "posix":
             raise RuntimeConfigurationError("OPENCLAW_PLATFORM_UNSUPPORTED")
         requested = self._requested_executable
@@ -930,13 +919,13 @@ class OpenClawConnector:
         )
         _require_no_gateway_url_config(executable)
         self._executable = executable
-        self._listed_targets = None
+        self._detected_version = version
         return RuntimeProbe(self.runtime_id, executable, version, _OPENCLAW_DISPLAY)
 
     def list_targets(self, probe: RuntimeProbe) -> tuple[RuntimeTarget, ...]:
-        if self._executable is None:
+        if self._executable is None or self._detected_version is None:
             raise RuntimeConfigurationError("OPENCLAW_PROBE_MISMATCH")
-        _require_probe(probe, self._executable)
+        _require_probe(probe, self._executable, self._detected_version)
         self._listed_targets = _targets_from_output(
             _process(
                 [os.fspath(self._executable), "agents", "list", "--json"],
@@ -953,9 +942,13 @@ class OpenClawConnector:
         target: RuntimeTarget,
         model_override: str | None,
     ) -> _PreparedOpenClaw:
-        if self._executable is None or self._listed_targets is None:
+        if (
+            self._executable is None
+            or self._detected_version is None
+            or self._listed_targets is None
+        ):
             raise RuntimeConfigurationError("OPENCLAW_PROBE_MISMATCH")
-        _require_probe(probe, self._executable)
+        _require_probe(probe, self._executable, self._detected_version)
         matches = tuple(listed for listed in self._listed_targets if listed.id == target.id)
         if not matches or target not in matches:
             raise RuntimeConfigurationError("TARGET_NOT_FOUND")
@@ -976,17 +969,19 @@ class OpenClawConnector:
                 deadline_seconds=PROBE_DEADLINE_SECONDS,
                 unavailable_code="OPENCLAW_GATEWAY_UNAVAILABLE",
                 error_type=RuntimeIncompleteError,
-            )
+            ),
+            detected_version=self._detected_version,
         )
         return _PreparedOpenClaw(
             executable=self._executable,
+            runtime_version=self._detected_version,
             target=target,
             model_override=model_override,
             expected_model=expected_model,
         )
 
     @staticmethod
-    def _validate_gateway_output(raw: bytes) -> None:
+    def _validate_gateway_output(raw: bytes, *, detected_version: str) -> None:
         gateway: dict[str, object] = {}
         configuration_code: str | None = None
         execution_code: str | None = None
@@ -1000,7 +995,7 @@ class OpenClawConnector:
                 code="OPENCLAW_GATEWAY_INVALID",
                 error_type=RuntimeExecutionError,
             )
-            OpenClawConnector._validate_gateway(gateway)
+            OpenClawConnector._validate_gateway(gateway, detected_version=detected_version)
         except RuntimeConfigurationError as error:
             configuration_code = error.code
         except RuntimeExecutionError as error:
@@ -1013,7 +1008,7 @@ class OpenClawConnector:
             raise RuntimeExecutionError(execution_code)
 
     @staticmethod
-    def _validate_gateway(status: dict[str, object]) -> None:
+    def _validate_gateway(status: dict[str, object], *, detected_version: str) -> None:
         if not {"cli", "config", "gateway", "rpc"}.issubset(status):
             raise RuntimeExecutionError("OPENCLAW_GATEWAY_INVALID")
         cli = _dictionary(
@@ -1035,10 +1030,7 @@ class OpenClawConnector:
             code="OPENCLAW_GATEWAY_INVALID",
             error_type=RuntimeExecutionError,
         )
-        if (
-            cli.get("version") != SUPPORTED_OPENCLAW.cli_version
-            or gateway.get("version") != SUPPORTED_OPENCLAW.gateway_version
-        ):
+        if cli.get("version") != detected_version or gateway.get("version") != detected_version:
             raise RuntimeConfigurationError("OPENCLAW_VERSION_MISMATCH")
         if "pluginVersionDrift" in status:
             plugin_drift = _dictionary(
@@ -1048,7 +1040,7 @@ class OpenClawConnector:
             )
             if not {"drifts", "gatewayVersion"}.issubset(plugin_drift):
                 raise RuntimeExecutionError("OPENCLAW_GATEWAY_INVALID")
-            if plugin_drift.get("gatewayVersion") != SUPPORTED_OPENCLAW.gateway_version:
+            if plugin_drift.get("gatewayVersion") != detected_version:
                 raise RuntimeConfigurationError("OPENCLAW_VERSION_MISMATCH")
             drifts = _list(
                 plugin_drift.get("drifts"),
@@ -1116,7 +1108,7 @@ class OpenClawConnector:
             code="OPENCLAW_GATEWAY_INVALID",
             error_type=RuntimeExecutionError,
         )
-        if rpc.get("version") != SUPPORTED_OPENCLAW.rpc_version:
+        if rpc.get("version") != detected_version:
             raise RuntimeConfigurationError("OPENCLAW_VERSION_MISMATCH")
         if rpc.get("ok") is not True:
             raise RuntimeConfigurationError("OPENCLAW_RPC_UNHEALTHY")
@@ -1141,7 +1133,7 @@ class OpenClawConnector:
                 code="OPENCLAW_GATEWAY_INVALID",
                 error_type=RuntimeExecutionError,
             )
-            if server.get("version") != SUPPORTED_OPENCLAW.gateway_version:
+            if server.get("version") != detected_version:
                 raise RuntimeConfigurationError("OPENCLAW_VERSION_MISMATCH")
         if not _is_loopback_url(gateway.get("probeUrl")) or not _is_loopback_url(rpc.get("url")):
             raise RuntimeConfigurationError("OPENCLAW_REMOTE_DISPATCH")
@@ -1149,7 +1141,6 @@ class OpenClawConnector:
 
 class _PreparedOpenClaw:
     runtime_id = "openclaw"
-    runtime_version = SUPPORTED_OPENCLAW.envelope_version
     display = _OPENCLAW_DISPLAY
     issue_policy = _OPENCLAW_ISSUE_POLICY
 
@@ -1157,10 +1148,12 @@ class _PreparedOpenClaw:
         self,
         *,
         executable: Path,
+        runtime_version: str,
         target: RuntimeTarget,
         model_override: str | None,
         expected_model: tuple[str, str] | None,
     ) -> None:
+        self.runtime_version = runtime_version
         self.target = target
         self.target_label = self._target_label(target.id)
         self.adapter_instance_id = "openclaw-" + uuid.uuid4().hex
