@@ -119,11 +119,11 @@ The reference adapter's focused implementation notes are in
 The connector reads the installed OpenClaw version and reports it in command
 progress; it has no exact-release allowlist. Before dispatching an agent
 command, it validates the version probe, local configuration, read-only JSON
-inventory, and Gateway status JSON, and requires the CLI, Gateway, RPC, and
-reported server versions to agree. `2026.7.1-2` is the only release tested
-against a real OpenClaw installation. A missing or incompatible pre-dispatch
-command/JSON response, or a version disagreement, fails clearly before an
-agent/model turn.
+inventory, and Gateway status JSON. The required CLI, Gateway, and RPC versions
+must agree; optional server and plugin versions must also agree when OpenClaw
+reports them. `2026.7.1-2` is the only release tested against a real OpenClaw
+installation. A missing or incompatible pre-dispatch command/JSON response, or
+a version disagreement, fails clearly before an agent/model turn.
 
 After dispatch begins, an agent command/flag failure or incompatible response
 envelope can be detected after a model turn. Town reports that outcome and does
