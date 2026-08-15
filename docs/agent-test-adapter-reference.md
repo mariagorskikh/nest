@@ -116,16 +116,22 @@ The reference adapter's focused implementation notes are in
 
 ## Managed OpenClaw boundary
 
-The supported connector probes only exact OpenClaw `2026.7.1-2`, lists agents
-through the read-only JSON inventory, and checks a healthy read RPC through the
-local OpenClaw CLI. Before agent turns, Town requires exact local Gateway mode,
-rejects configured `OPENCLAW_GATEWAY_URL` overrides, and clears inherited URL
-overrides. The probe and RPC URLs used by the connector must be
-literal-loopback URLs; Town does not require the Gateway to be exposed only on
-loopback. Each Town run creates a fresh OpenClaw session key and uses it for
-exactly two model turns. Prompts are passed through private temporary files and
-removed after each invocation. Town does not use `--deliver` or `--local` and
-does not pass its internal bearer or `TOWN_*` environment into OpenClaw.
+The connector reads and records the installed OpenClaw version; it has no
+exact-release allowlist. It lists agents through the read-only JSON inventory,
+checks a healthy read RPC through the local OpenClaw CLI, and requires the CLI,
+Gateway, RPC, and reported server versions to agree. `2026.7.1-2` is the only
+release tested against a real OpenClaw installation. A missing required command,
+incompatible JSON response, or version disagreement fails clearly before an
+agent/model turn.
+
+Before agent turns, Town requires exact local Gateway mode, rejects configured
+`OPENCLAW_GATEWAY_URL` overrides, and clears inherited URL overrides. The probe
+and RPC URLs used by the connector must be literal-loopback URLs; Town does not
+require the Gateway to be exposed only on loopback. Each Town run creates a
+fresh OpenClaw session key and uses it for exactly two model turns. Prompts are
+passed through private temporary files and removed after each invocation. Town
+does not use `--deliver` or `--local` and does not pass its internal bearer or
+`TOWN_*` environment into OpenClaw.
 
 The accepted sanitized envelope must report one stable session, configured
 provider/model, completed turn, and no fallback or explicit delivery/tool

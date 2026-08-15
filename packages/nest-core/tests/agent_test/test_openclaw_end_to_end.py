@@ -70,6 +70,7 @@ def _install_fake_openclaw(
     fake_bin: Path,
     *,
     variant: str = "success",
+    version: str = "2026.7.1-2",
     linger_port: int | None = None,
 ) -> Path:
     """Install a four-command fake with private, test-only prompt capture."""
@@ -98,6 +99,7 @@ def _install_fake_openclaw(
         ready_path = pathlib.Path(__READY__)
         capture_directory = pathlib.Path(__CAPTURES__)
         variant = __VARIANT__
+        version = __VERSION__
         linger_port = __PORT__
         start_prompt = __START_PROMPT__
         message_prompt = __MESSAGE_PROMPT__
@@ -122,7 +124,7 @@ def _install_fake_openclaw(
 
         if args == ["--version"]:
             append_log(["--version"])
-            emit("OpenClaw 2026.7.1-2 (0790d9f)")
+            emit("OpenClaw " + version + " (0790d9f)")
             raise SystemExit(0)
 
         if args == ["config", "get", "gateway.mode", "--json"]:
@@ -152,7 +154,7 @@ def _install_fake_openclaw(
         if args == ["gateway", "status", "--json", "--require-rpc"]:
             append_log(["gateway", "status", "--json", "--require-rpc"])
             emit({
-                "cli": {"entrypoint": "/synthetic/openclaw.mjs", "version": "2026.7.1-2"},
+                "cli": {"entrypoint": "/synthetic/openclaw.mjs", "version": version},
                 "config": {
                     "cli": {
                         "controlUi": {},
@@ -172,7 +174,7 @@ def _install_fake_openclaw(
                     "bindMode": "lan",
                     "bindHost": "0.0.0.0",
                     "probeUrl": "ws://127.0.0.1:18789",
-                    "version": "2026.7.1-2",
+                    "version": version,
                 },
                 "port": {
                     "hints": [],
@@ -184,7 +186,7 @@ def _install_fake_openclaw(
                     "capability": "operator",
                     "kind": "read",
                     "ok": True,
-                    "version": "2026.7.1-2",
+                    "version": version,
                     "url": "ws://127.0.0.1:18789",
                 },
             })
@@ -339,6 +341,7 @@ def _install_fake_openclaw(
         .replace("__READY__", repr(str(ready_path)))
         .replace("__CAPTURES__", repr(str(capture_directory)))
         .replace("__VARIANT__", repr(variant))
+        .replace("__VERSION__", repr(version))
         .replace("__PORT__", repr(linger_port))
         .replace("__START_PROMPT__", repr(START_PROMPT))
         .replace("__MESSAGE_PROMPT__", repr(MESSAGE_PROMPT))
@@ -495,6 +498,32 @@ def test_headline_command_autodetects_one_exact_target_and_reuses_one_session(
         ),
         raw_prompts=first_prompts + second_prompts,
     )
+
+
+def test_public_command_accepts_and_records_a_coherent_alternate_openclaw_version(
+    tmp_path: Path,
+) -> None:
+    """A stale release allowlist or unrecorded probe version must fail this boundary."""
+    fake_bin = tmp_path / "bin"
+    prompts = tmp_path / "prompts"
+    runtime = tmp_path / "runtime"
+    for directory in (fake_bin, prompts, runtime):
+        directory.mkdir()
+    _install_fake_openclaw(fake_bin, version="2027.1.0-preview.3+compat")
+
+    completed = _run(
+        runtime,
+        _environment(fake_bin, prompts),
+        "fixture-agent",
+        "--format",
+        "json",
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    result, _ = _result_bundle(runtime, completed)
+    _assert_five_passes(result)
+    assert b"OpenClaw 2027.1.0-preview.3+compat" in completed.stderr
+    assert len(_read_and_remove_private_prompt_captures(fake_bin)) == 2
 
 
 def test_explicit_runtime_uses_only_the_openclaw_connector(tmp_path: Path) -> None:

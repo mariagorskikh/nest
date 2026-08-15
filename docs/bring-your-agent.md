@@ -11,7 +11,9 @@ not a general evaluation of the agent.
 - The Town and OpenClaw commands must run on the same computer.
 - Run Town and OpenClaw on macOS or Linux. Native Windows is not supported in
   this preview.
-- OpenClaw must be exactly version `2026.7.1-2`.
+- Town tries the installed OpenClaw version and checks the commands and JSON
+  responses needed for this test. `2026.7.1-2` is the release tested against a
+  real OpenClaw installation.
 - `openclaw config get gateway.mode --json` must return exactly `"local"`, and
   OpenClaw must not configure an `OPENCLAW_GATEWAY_URL` override.
 - The OpenClaw Gateway must be healthy.
@@ -65,9 +67,9 @@ For example only, if the listed agent ID is `everett`:
 uv run nest test agent everett
 ```
 
-Town auto-detects the supported local runtime when exactly one runtime contains
-that exact target. If the message offers an explicit command, copy it exactly;
-for this release that form is `uv run nest test agent <agent-id> --runtime openclaw`.
+Town auto-detects the local runtime when exactly one runtime contains that
+exact target. If the message offers an explicit command, copy it exactly; for
+this release that form is `uv run nest test agent <agent-id> --runtime openclaw`.
 
 ## Read the five stages
 
@@ -107,8 +109,10 @@ scoring it as agent behavior.
 - **Native Windows:** run Town and OpenClaw together on macOS or Linux. Town
   rejects this preview connector before starting an agent/model turn on native
   Windows.
-- **Unsupported or mismatched version:** confirm `openclaw --version` is exactly
-  `2026.7.1-2`. Other versions are rejected rather than guessed compatible.
+- **Version or command incompatibility:** check `openclaw --version` and update
+  OpenClaw if needed. Town tries the installed version, but stops clearly
+  before an agent/model turn when a required command or JSON response is
+  incompatible.
 - **Gateway unavailable or unhealthy:** run `openclaw gateway status`, restore
   the Gateway on the computer where you are running Town, then retry.
 - **Remote dispatch rejected:** run

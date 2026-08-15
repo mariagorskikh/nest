@@ -137,19 +137,21 @@ Same seed → byte-identical trace, every time.
 
 ## Test an existing OpenClaw agent
 
-From a checkout, Town can run one bounded agent workflow
-against an existing trusted OpenClaw `2026.7.1-2` target on the computer where
-Town is running and return a
-five-stage evidence report:
+From a checkout, Town can run one bounded agent workflow against an existing
+trusted OpenClaw target on the computer where Town is running and return a
+five-stage evidence report. Town tries the installed version and validates the
+commands and JSON response shapes it needs; `2026.7.1-2` is the release tested
+against a real OpenClaw installation. An incompatible command or response fails
+clearly before Town starts an agent/model turn.
 
 ```bash
 uv run nest test agent <agent-id>
 ```
 
-Follow the [short OpenClaw agent guide](docs/bring-your-agent.md) for exact
-requirements, setup, result limits, and troubleshooting. A pass covers only the
-frozen synthetic workflow through Town's pinned local components; it is not a
-claim of general agent compatibility, safety, trust, or reliability.
+Follow the [short OpenClaw agent guide](docs/bring-your-agent.md) for setup,
+result limits, and troubleshooting. A pass covers only the frozen synthetic
+workflow through Town's pinned local components; it is not a claim of general
+agent compatibility, safety, trust, or reliability.
 Custom endpoint adapters and automation are documented separately in the
 [technical agent-test adapter reference](docs/agent-test-adapter-reference.md).
 
