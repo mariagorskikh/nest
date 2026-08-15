@@ -42,6 +42,11 @@ TOKEN = "0123456789abcdef" * 4
 PROFILE_ALIAS = "capability-fulfillment"
 PROFILE_EXACT = "nanda/agent/capability-fulfillment@1"
 ENDPOINT = "http://127.0.0.1:8787"
+PLAIN_HELP_ENV: dict[str, str | None] = {
+    "FORCE_COLOR": None,
+    "GITHUB_ACTIONS": None,
+    "TERM": "dumb",
+}
 
 
 class _InterruptServer(ThreadingHTTPServer):
@@ -234,8 +239,8 @@ def _invoke(
 
 
 def test_test_and_agent_help_freeze_the_additive_command_tree() -> None:
-    test_help = runner.invoke(app, ["test", "--help"], color=False)
-    agent_help = runner.invoke(app, ["test", "agent", "--help"], color=False)
+    test_help = runner.invoke(app, ["test", "--help"], color=False, env=PLAIN_HELP_ENV)
+    agent_help = runner.invoke(app, ["test", "agent", "--help"], color=False, env=PLAIN_HELP_ENV)
 
     assert test_help.exit_code == 0
     assert "Run local NANDA Town adapter tests." in test_help.stdout
@@ -273,7 +278,7 @@ def test_test_and_agent_help_freeze_the_additive_command_tree() -> None:
 
 
 def test_agent_help_is_plain_when_color_is_disabled() -> None:
-    result = runner.invoke(app, ["test", "agent", "--help"], color=False)
+    result = runner.invoke(app, ["test", "agent", "--help"], color=False, env=PLAIN_HELP_ENV)
 
     assert result.exit_code == 0
     assert "\x1b[" not in result.stdout
