@@ -26,6 +26,12 @@ from nest_core.agent_test.models import TestObservation, TestResult
 REPOSITORY_ROOT = Path(__file__).parents[4]
 ADAPTER_PATH = REPOSITORY_ROOT / "examples" / "agent-test" / "reference_adapter.py"
 CHECKER_PATH = REPOSITORY_ROOT / "scripts" / "check_agent_test_quickstart.py"
+ROOT_README = REPOSITORY_ROOT / "README.md"
+DOCS_INDEX = REPOSITORY_ROOT / "docs" / "README.md"
+DOCS_QUICKSTART = REPOSITORY_ROOT / "docs" / "quickstart.md"
+BEGINNER_GUIDE = REPOSITORY_ROOT / "docs" / "bring-your-agent.md"
+ADAPTER_REFERENCE = REPOSITORY_ROOT / "docs" / "agent-test-adapter-reference.md"
+EXAMPLE_README = REPOSITORY_ROOT / "examples" / "agent-test" / "README.md"
 TOKEN = "9" * 64
 CONTRACT = "town-agent-driver/1"
 
@@ -355,6 +361,90 @@ def test_checker_recursively_enumerates_every_artifact_file(tmp_path: Path) -> N
     (output / "result.json").write_bytes(b"{}")
 
     assert checker._artifact_files(output) == [nested, output / "result.json"]
+
+
+def test_checker_exercises_installed_openclaw_auto_explicit_and_preflight_paths(
+    tmp_path: Path,
+) -> None:
+    """Dropping the installed managed-runtime journey from the release check must fail."""
+    checker = _load_checker()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    environment = checker._safe_environment()
+
+    checker._verify_installed_openclaw(
+        nest=_installed_nest(),
+        runtime=runtime,
+        environment=environment,
+    )
+    logs = [
+        json.loads(line) for line in (runtime / "fake-bin" / "log.jsonl").read_text().splitlines()
+    ]
+    assert len(logs) == 30
+    assert [record["argument_names"] for record in logs[14:]] == [
+        ["--version"],
+        ["config", "get", "gateway.mode", "--json"],
+        ["config", "get", "env", "--json"],
+        ["agents", "list", "--json"],
+    ] * 4
+
+
+def test_checker_raw_prompt_scan_rejects_an_embedded_prompt() -> None:
+    """The release scan must inspect prompt bytes, not only whole-file digests."""
+    checker = _load_checker()
+    prompt = b'{"private":"clean-wheel-raw-prompt"}'
+    retained = b"prefix\n" + prompt + b"\nsuffix"
+
+    with pytest.raises(checker._CheckFailureError, match="raw OpenClaw prompt"):
+        checker._assert_no_raw_prompts([retained], [prompt])
+
+
+def test_public_docs_route_beginner_and_advanced_readers_without_duplication() -> None:
+    """Public indexes must route to both guides while the example stays implementation-only."""
+    assert "docs/bring-your-agent.md" in ROOT_README.read_text()
+    assert "docs/agent-test-adapter-reference.md" in ROOT_README.read_text()
+    assert "bring-your-agent.md" in DOCS_INDEX.read_text()
+    assert "agent-test-adapter-reference.md" in DOCS_INDEX.read_text()
+    assert "bring-your-agent.md" in DOCS_QUICKSTART.read_text()
+    assert "agent-test-adapter-reference.md" in DOCS_QUICKSTART.read_text()
+
+    example = EXAMPLE_README.read_text()
+    assert "../../docs/agent-test-adapter-reference.md" in example
+    for duplicated_detail in (
+        "TOWN_AGENT_TOKEN",
+        "two terminals",
+        "127.0.0.1",
+        "digest binding",
+        "replay",
+        "--endpoint",
+    ):
+        assert duplicated_detail not in example
+
+    beginner = BEGINNER_GUIDE.read_text()
+    assert "agent-test-adapter-reference.md" in beginner
+    reference = ADAPTER_REFERENCE.read_text()
+    assert "run state is released after stop" in reference
+    assert "adapter process continues serving until you press Ctrl-C" in reference
+
+
+def test_public_beginner_readme_hides_the_internal_profile_name() -> None:
+    assert "capability-fulfillment" not in ROOT_README.read_text()
+
+
+def test_beginner_guide_discloses_openclaw_session_retention() -> None:
+    beginner = " ".join(BEGINNER_GUIDE.read_text().split())
+    assert (
+        "Each Town run uses a fresh OpenClaw session, but OpenClaw may retain that session "
+        "and its normal transcript; Town does not delete them."
+    ) in beginner
+
+
+def test_beginner_guide_explains_how_to_test_an_agent_on_another_computer() -> None:
+    beginner = " ".join(BEGINNER_GUIDE.read_text().split())
+    assert "If OpenClaw runs on another computer" in beginner
+    assert "SSH into that computer and run Town there" in beginner
+    assert "does not connect directly to a remote OpenClaw Gateway" in beginner
+    assert "Gateway must be healthy and bound to loopback" not in beginner
 
 
 @pytest.mark.skipif(

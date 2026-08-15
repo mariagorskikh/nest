@@ -8,6 +8,10 @@ go deeper.
 
 - **[quickstart.md](quickstart.md)** — Install, run a scenario,
   validate the trace. Five minutes, no clone required.
+- **[bring-your-agent.md](bring-your-agent.md)** — Run the bounded local test
+  against an existing OpenClaw agent on the computer where Town is running.
+- **[agent-test-adapter-reference.md](agent-test-adapter-reference.md)** —
+  Advanced endpoint, wire-contract, automation, and evidence details.
 - **[concepts.md](concepts.md)** — The 12 layers, fidelity tiers,
   scenarios, plugins, traces, determinism.
 
