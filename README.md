@@ -12,6 +12,15 @@ This is a testing tool first and a simulator second: a local-first sandbox and t
 
 The framing comes from Ramesh Raskar's NandaTown introduction and the paper "Towards Sandboxes for the Internet of Agents" (papers.ssrn.com/sol3/papers.cfm?abstract_id=5801322): agent evaluation must move from isolated task competence to system fitness. This build makes that loop executable end to end: define a population, select a scenario, swap a protocol component, inject a failure, run, inspect every interaction, and compare the outcome against properties that should remain true.
 
+![Architecture of nandatown: a CLI, TUI, and browser front door; the Lab, a seeded simulation over twelve replaceable protocol layers; the Track, a FastAPI coordinator over SQLite with subprocess participants; and one evidence pipeline that both modes write to](images/Flow.png)
+
+*How the town is built: one front door, two ways to test, one evidence pipeline.*
+
+![Sequence diagram of the quote-crash-restart profile: the buyer posts a quote request, the seller claims it under fence 1 and crashes, the runner restarts it, the seller reclaims under fence 2, any ack with the stale fence is rejected, and the buyer verifies the 3990-cent total](images/Test_track.png)
+
+*The default Track run, `quote-crash-restart`: the task is trivial on purpose; custody, recovery, and fence rejection are what get judged.*
+
+
 ## Install
 
 From the repository root, in a virtual environment:
