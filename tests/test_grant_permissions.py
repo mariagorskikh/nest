@@ -12,7 +12,11 @@ restart. Token-joined sessions of unpinned roles carry no grant and are
 unaffected.
 """
 
+import os
 import sqlite3
+import subprocess
+import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,6 +25,9 @@ from nandatown.coordinator import build_app
 from nandatown.db import TownDB
 from nandatown.identity_portable import Keystore, session_proof
 from nandatown.records import TestProfile
+from nandatown.runner import run_town
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 ADMIN = {"X-Town-Admin": "secret"}
 BODY = {"sku": "widget", "quantity": 2, "unit_price_cents": 1995}
@@ -402,6 +409,8 @@ def test_default_grant_permits_the_whole_mailbox(town):
     client, keystore = town
     data = _create_run(client, keystore, ["buyer", "seller"])
     run_id = data["run_id"]
+    assert keystore.make_grant("buyer", run_id)["grant"]["permissions"] \
+        == sorted(ALL), "an unspecified grant is the default, full set"
     buyer = _join_with_grant(client, keystore, run_id, "buyer", ALL)
     seller = _join_with_grant(client, keystore, run_id, "seller", ALL)
 
@@ -456,3 +465,107 @@ def test_older_databases_gain_the_permissions_column(tmp_path):
         == session
     assert db.session_permissions("run-1", "buyer") == []
     assert db.pinned_identity("run-1", "buyer") is None
+
+
+# -- a superseded grant cannot be replayed -------------------------------------
+
+def test_replayed_older_wider_grant_does_not_rewiden(town):
+    client, keystore = town
+    data = _create_run(client, keystore, ["buyer"])
+    run_id = data["run_id"]
+    t0 = time.time()
+    wide = keystore.make_grant("buyer", run_id, permissions=ALL, now=t0)
+    narrow = keystore.make_grant("buyer", run_id, permissions=["join"],
+                                 now=t0 + 10)
+
+    def join(bundle):
+        r = _post_grant_join(client, run_id, "buyer", bundle["grant"],
+                             bundle["grant_signature"],
+                             bundle["session_private"])
+        assert r.status_code == 200, r.text
+        return {"X-Town-Session": r.json()["session"]}
+
+    session = join(wide)
+    assert _send(client, run_id, session).status_code == 202
+    assert join(narrow) == session
+    assert _send(client, run_id, session, message_id="q-2").status_code \
+        == 403, "the controller narrowed the grant"
+
+    assert join(wide) == session
+    assert _send(client, run_id, session, message_id="q-3").status_code \
+        == 403, "replaying the older, wider grant must not re-widen"
+
+
+def test_wrong_token_on_pinned_role_leaves_no_mark(town):
+    client, keystore = town
+    data = _create_run(client, keystore, ["buyer"])
+    run_id = data["run_id"]
+
+    for _ in range(3):
+        r = _post_token_join(client, run_id, "buyer", "not-the-token")
+        assert r.status_code == 403
+        assert r.json()["detail"] == "join rejected"
+
+    assert "grant_required" not in _kinds(client, run_id), \
+        "knowing a run id alone must not let anyone write into its evidence"
+    real = _post_token_join(client, run_id, "buyer",
+                            data["join_tokens"]["buyer"])
+    assert real.json()["detail"]["error"] == "grant_required"
+    assert _kinds(client, run_id).count("grant_required") == 1
+
+
+# -- the runner hands pinned roles their grant, and gives up on a harness
+#    that cannot present one --------------------------------------------------
+
+def test_identity_handoff_gives_an_external_agent_its_grant(tmp_path):
+    handed: dict[str, dict[str, str]] = {}
+    procs: list[subprocess.Popen] = []
+
+    stderr_path = tmp_path / "external-seller.err"
+
+    def on_credentials(role, env):
+        handed[role] = dict(env)
+        # Play the role from outside the runner with the stock seller,
+        # which joins through TOWN_GRANT when it is present.
+        full_env = {**os.environ, **env, "FAULT": "none", "DEADLINE": "30"}
+        procs.append(subprocess.Popen(
+            [sys.executable, "-m", "nandatown.participants.seller"],
+            env=full_env, stdout=subprocess.DEVNULL,
+            stderr=open(stderr_path, "w")))
+
+    try:
+        bundle_dir, result = run_town(
+            "quote-clean", str(tmp_path / "runs"),
+            external={"seller": None}, identity_dir=str(tmp_path / "keys"),
+            on_credentials=on_credentials)
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+
+    assert set(handed["seller"]) == {"TOWN_URL", "RUN_ID", "NAME", "TOKEN",
+                                     "STATE_DIR", "TOWN_GRANT"}, \
+        "the spawned participants' environment contract, plus the grant"
+    detail = [(s.name, s.status, s.note) for s in result.stages]
+    assert result.verdict == "passed", (detail, stderr_path.read_text())
+    assert next(s for s in result.stages
+                if s.name == "portable_identity").status == "passed"
+
+
+def test_identity_run_ends_early_for_a_token_only_agent(tmp_path):
+    example = os.path.join(REPO_ROOT, "examples", "byoa_seller.py")
+    started = time.time()
+
+    bundle_dir, result = run_town(
+        "quote-clean", str(tmp_path / "runs"),
+        external={"seller": [sys.executable, example]},
+        identity_dir=str(tmp_path / "keys"), wait_timeout=45.0)
+
+    assert time.time() - started < 20, \
+        "the runner must not wait out the timeout on a harness that" \
+        " can never join"
+    assert result.verdict != "passed"
+    with open(os.path.join(bundle_dir, "events.jsonl")) as f:
+        kinds = [__import__("json").loads(line)["kind"] for line in f]
+    assert "grant_required" in kinds
+    assert "harness_refused_grant" in kinds

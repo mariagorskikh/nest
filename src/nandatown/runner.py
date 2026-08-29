@@ -135,6 +135,16 @@ def _participant_command(profile: TestProfile, role: str,
     return [sys.executable, "-m", f"nandatown.participants.{role}"], {}
 
 
+def _grant_refused(events: list[dict[str, Any]]) -> str | None:
+    """The first role that tried to join a pinned identity with a bare
+    token, or None. Such a harness can never join, so waiting on is
+    pointless."""
+    for e in events:
+        if e["kind"] == "grant_required":
+            return e["subject"]
+    return None
+
+
 def _quiescent(profile: TestProfile, events: list[dict[str, Any]]) -> bool:
     """Has the seller side finished everything this profile expects?"""
     seller_acks = [e for e in events
@@ -245,11 +255,18 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
         buyer_deadline = str(wait_timeout - 15)
 
         def hand_off(role: str, state_dir: str) -> None:
-            if on_credentials is not None:
-                on_credentials(role, {"TOWN_URL": url, "RUN_ID": run_id,
-                                      "NAME": role,
-                                      "TOKEN": tokens[role],
-                                      "STATE_DIR": state_dir})
+            """Credentials for an agent that joins from outside: the same
+            environment a spawned participant gets. A role pinned to a
+            portable identity also receives its Run Grant, which is the
+            only credential the town will accept from it."""
+            if on_credentials is None:
+                return
+            os.makedirs(state_dir, exist_ok=True)
+            env = {"TOWN_URL": url, "RUN_ID": run_id, "NAME": role,
+                   "TOKEN": tokens[role], "STATE_DIR": state_dir}
+            if role in grants:
+                env["TOWN_GRANT"] = grants[role]
+            on_credentials(role, env)
 
         def spawn_seller() -> subprocess.Popen | None:
             if seller_cmd is None:
@@ -274,12 +291,23 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
             procs.append(buyer)
 
         restarted = False
+        refused_role: str | None = None
         deadline = time.time() + wait_timeout
         while time.time() < deadline:
             if buyer is not None and buyer.poll() is not None:
                 break
             if buyer is None and _quiescent(profile, get_events()):
                 break
+            if grants:
+                refused_role = _grant_refused(get_events())
+                if refused_role:
+                    post_event("runner", "harness_refused_grant",
+                               refused_role,
+                               {"reason": "joined with a bare token while"
+                                          " pinned to a portable identity;"
+                                          " this harness must present"
+                                          " TOWN_GRANT"})
+                    break
             if seller is not None:
                 rc = seller.poll()
                 if rc is not None:
@@ -301,7 +329,7 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
             post_event("runner", "participant_exited", "buyer",
                        {"exit_code": buyer.poll()})
 
-        quiet_deadline = time.time() + 8.0
+        quiet_deadline = time.time() + (0.0 if refused_role else 8.0)
         while time.time() < quiet_deadline:
             if _quiescent(profile, get_events()):
                 break

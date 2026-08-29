@@ -336,7 +336,11 @@ agent as a subprocess with TOWN_URL, RUN_ID, NAME, TOKEN in its
 environment; `--wait` prints those credentials and waits while you
 start it anywhere else. `examples/byoa_seller.py` is a complete
 reference agent in plain standard-library Python: no nandatown import,
-no dependency, just the HTTP contract.
+no dependency, just the HTTP contract. Under `--identity` a pinned role is
+handed `TOWN_GRANT` instead of `TOKEN` and must join with an Ed25519
+session proof (`TownClient.join_with_grant`); the runner stops early,
+with a `harness_refused_grant` event, if an agent tries the bare token
+instead. The standard-library example is for token runs.
 
 ## Onboard a service
 

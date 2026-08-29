@@ -11,6 +11,12 @@ Run it through the town:
 
 or start it yourself with TOWN_URL, RUN_ID, NAME, TOKEN in the
 environment (nandatown test-agent --wait prints them).
+
+It joins with the run's join token. Under --identity the town pins each
+role to a portable identity and hands out TOWN_GRANT instead; joining
+then needs an Ed25519 session proof (see nandatown.client
+join_with_grant), which plain standard-library Python cannot produce, so
+this example is for token runs only.
 """
 
 import json

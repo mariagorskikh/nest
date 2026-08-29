@@ -123,6 +123,9 @@ def call(method, path, body=None):
         return None if resp.status == 204 else json.loads(resp.read())
 
 
+# Joins with the run's join token. A role pinned to a portable identity
+# (--identity) must present TOWN_GRANT with an Ed25519 session proof
+# instead; see nandatown.client.TownClient.join_with_grant.
 joined = call("POST", "/join", {{"name": os.environ["NAME"],
                                  "token": os.environ["TOKEN"]}})
 session = joined["session"]

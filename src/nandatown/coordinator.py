@@ -91,12 +91,17 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
         if permissions is not None and permission not in permissions:
             deny(run_id, name, permission, now)
 
-    def require_grant_for_pinned_role(run_id: str, name: str,
+    def require_grant_for_pinned_role(run_id: str, name: str, token: str,
                                       now: float) -> None:
         """A role pinned to a portable identity joins only through its
-        Run Grant; a bare token must not sidestep the grant's limits."""
+        Run Grant; a bare token must not sidestep the grant's limits.
+        Only the holder of the real token leaves a mark in the evidence;
+        a wrong token is refused without writing anything, so nobody can
+        pad an attested bundle knowing just the run id."""
         if db.pinned_identity(run_id, name) is None:
             return
+        if token != db.join_token(run_id, name):
+            raise HTTPException(status_code=403, detail="join rejected")
         db.record_event(run_id, observer="town", kind="grant_required",
                         subject=name, at=now,
                         detail={"attempted": "token join"})
@@ -182,9 +187,10 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
             if row_token is None:
                 raise HTTPException(status_code=403,
                                     detail="unknown participant")
-            session = db.authenticate(run_id, body.name, row_token,
-                                      now=now,
-                                      permissions=body.grant["permissions"])
+            session = db.authenticate(
+                run_id, body.name, row_token, now=now,
+                permissions=body.grant["permissions"],
+                grant_issued_at=float(body.grant["issued_at"]))
             db.record_event(
                 run_id, observer="town",
                 kind="portable_identity_verified", subject=body.name,
@@ -194,7 +200,7 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
                         "permissions": body.grant["permissions"],
                         "expires_at": body.grant["expires_at"]})
         else:
-            require_grant_for_pinned_role(run_id, body.name, now)
+            require_grant_for_pinned_role(run_id, body.name, body.token, now)
             session = db.authenticate(run_id, body.name, body.token,
                                       now=now)
         if session is None:

@@ -168,6 +168,9 @@ def verify_grant(grant: dict[str, Any], grant_signature: str,
     if not isinstance(permissions, list) \
             or not all(isinstance(p, str) for p in permissions):
         raise IdentityError("grant permissions must be a list of names")
+    if not isinstance(grant.get("issued_at"), (int, float)) \
+            or isinstance(grant.get("issued_at"), bool):
+        raise IdentityError("grant issued_at must be a timestamp")
     if not verify_signature(controller_public, grant, grant_signature):
         raise IdentityError("grant signature does not verify against"
                             " the pinned controller key")
