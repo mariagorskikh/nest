@@ -69,23 +69,42 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
     db = TownDB(db_path)
     # Fault bookkeeping per run: each fault fires at most once.
     faults: dict[str, dict[str, Any]] = {}
-    # The exact per-run identity directory: role name -> pinned
-    # {agent_id, controller_public}. The town holds only this.
-    run_identities: dict[str, dict[str, dict[str, str]]] = {}
-    # Permissions carried by grant-joined sessions.
-    session_permissions: dict[tuple[str, str], list[str]] = {}
 
-    def require_permission(run_id: str, name: str, permission: str):
-        permissions = session_permissions.get((run_id, name))
+    def deny(run_id: str, name: str, permission: str, now: float) -> None:
+        """A refused action is evidence: record it, then refuse."""
+        db.record_event(run_id, observer="town",
+                        kind="grant_permission_denied", subject=name,
+                        at=now, detail={"permission": permission})
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "grant_permission_denied",
+                    "permission": permission})
+
+    def require_permission(run_id: str, name: str, permission: str,
+                           now: float) -> None:
+        """A grant-joined session acts only within its grant. The
+        permissions live with the session in the database, as do the
+        pinned identities, so both hold across a coordinator restart and
+        across workers. A token-joined session carries no grant and is
+        unrestricted; a role pinned to an identity cannot token-join."""
+        permissions = db.session_permissions(run_id, name)
         if permissions is not None and permission not in permissions:
-            db.record_event(run_id, observer="town",
-                            kind="grant_permission_denied", subject=name,
-                            at=time.time(),
-                            detail={"permission": permission})
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "grant_permission_denied",
-                        "permission": permission})
+            deny(run_id, name, permission, now)
+
+    def require_grant_for_pinned_role(run_id: str, name: str,
+                                      now: float) -> None:
+        """A role pinned to a portable identity joins only through its
+        Run Grant; a bare token must not sidestep the grant's limits."""
+        if db.pinned_identity(run_id, name) is None:
+            return
+        db.record_event(run_id, observer="town", kind="grant_required",
+                        subject=name, at=now,
+                        detail={"attempted": "token join"})
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "grant_required",
+                    "reason": "this role is pinned to a portable identity;"
+                              " join with its run grant"})
 
     def fault_state(run_id: str) -> dict[str, Any]:
         if run_id not in faults:
@@ -121,7 +140,7 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
                                profile.capabilities.get(name, []), token)
             join_tokens[name] = token
         if body.identities:
-            run_identities[run_id] = body.identities
+            db.pin_identities(run_id, body.identities)
         db.record_event(run_id, observer="town", kind="run_created",
                         subject=run_id, at=now,
                         detail={"profile": profile.name,
@@ -141,7 +160,7 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
         if body.grant is not None:
             from .identity_portable import IdentityError, verify_grant
 
-            pinned = run_identities.get(run_id, {}).get(body.name)
+            pinned = db.pinned_identity(run_id, body.name)
             if pinned is None:
                 raise HTTPException(
                     status_code=403,
@@ -157,14 +176,15 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
                                 at=now, detail={"reason": str(exc)})
                 raise HTTPException(status_code=403,
                                     detail=f"grant rejected: {exc}")
+            if "join" not in body.grant["permissions"]:
+                deny(run_id, body.name, "join", now)
             row_token = db.join_token(run_id, body.name)
             if row_token is None:
                 raise HTTPException(status_code=403,
                                     detail="unknown participant")
             session = db.authenticate(run_id, body.name, row_token,
-                                      now=now)
-            session_permissions[(run_id, body.name)] = \
-                body.grant["permissions"]
+                                      now=now,
+                                      permissions=body.grant["permissions"])
             db.record_event(
                 run_id, observer="town",
                 kind="portable_identity_verified", subject=body.name,
@@ -174,6 +194,7 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
                         "permissions": body.grant["permissions"],
                         "expires_at": body.grant["expires_at"]})
         else:
+            require_grant_for_pinned_role(run_id, body.name, now)
             session = db.authenticate(run_id, body.name, body.token,
                                       now=now)
         if session is None:
@@ -197,6 +218,7 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
         now = time.time()
         db.record_intent(run_id, actor=name, action="send",
                          payload=body.model_dump(), at=now)
+        require_permission(run_id, name, "send", now)
         state = fault_state(run_id)
         suppress = False
         if (state["fault"] == "drop_wakeup" and not state["fired"]
@@ -237,6 +259,7 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
     def claim(run_id: str, name: str = Depends(participant)):
         now = time.time()
         db.record_intent(run_id, actor=name, action="claim", payload={}, at=now)
+        require_permission(run_id, name, "claim", now)
         state = fault_state(run_id)
         result = db.claim_next(run_id, name, lease_seconds=state["lease"],
                                now=now)
@@ -262,6 +285,7 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
         now = time.time()
         db.record_intent(run_id, actor=name, action="ack",
                          payload=body.model_dump(), at=now)
+        require_permission(run_id, name, "ack", now)
         if body.status not in ACK_STATUSES:
             raise HTTPException(status_code=422, detail="unknown ack status")
         state = fault_state(run_id)

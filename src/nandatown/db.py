@@ -41,6 +41,14 @@ CREATE TABLE IF NOT EXISTS participants (
     join_token TEXT NOT NULL,
     session TEXT,
     joined_at REAL,
+    permissions_json TEXT,
+    PRIMARY KEY (run_id, name)
+);
+CREATE TABLE IF NOT EXISTS run_identities (
+    run_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    controller_public TEXT NOT NULL,
     PRIMARY KEY (run_id, name)
 );
 CREATE TABLE IF NOT EXISTS messages (
@@ -107,6 +115,16 @@ class TownDB:
         self.path = path
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn) -> None:
+        """Bring a database created by an earlier release up to date."""
+        columns = {row["name"] for row in
+                   conn.execute("PRAGMA table_info(participants)")}
+        if "permissions_json" not in columns:
+            conn.execute("ALTER TABLE participants"
+                         " ADD COLUMN permissions_json TEXT")
 
     @contextmanager
     def _conn(self):
@@ -154,7 +172,15 @@ class TownDB:
             )
 
     def authenticate(self, run_id: str, name: str, token: str,
-                     now: float = 0.0) -> str | None:
+                     now: float = 0.0,
+                     permissions: list[str] | None = None) -> str | None:
+        """Exchange a join token for the participant's session, minting
+        one on first join. A grant's permissions are written in the same
+        transaction, so a session never exists without the restrictions
+        its grant named; None means a token join, which carries no grant.
+        """
+        permissions_json = (None if permissions is None
+                            else json.dumps(sorted(permissions)))
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT join_token, session FROM participants"
@@ -164,12 +190,18 @@ class TownDB:
             if row is None or row["join_token"] != token:
                 return None
             if row["session"]:
+                if permissions_json is not None:
+                    conn.execute(
+                        "UPDATE participants SET permissions_json=?"
+                        " WHERE run_id=? AND name=?",
+                        (permissions_json, run_id, name),
+                    )
                 return row["session"]
             session = "ses-" + uuid.uuid4().hex
             conn.execute(
-                "UPDATE participants SET session=?, joined_at=?"
-                " WHERE run_id=? AND name=?",
-                (session, now, run_id, name),
+                "UPDATE participants SET session=?, joined_at=?,"
+                " permissions_json=? WHERE run_id=? AND name=?",
+                (session, now, permissions_json, run_id, name),
             )
             return session
 
@@ -179,6 +211,43 @@ class TownDB:
                 "SELECT join_token FROM participants WHERE run_id=?"
                 " AND name=?", (run_id, name)).fetchone()
         return row["join_token"] if row else None
+
+    def pin_identities(self, run_id: str,
+                       identities: dict[str, dict[str, str]]) -> None:
+        """Pin each role's portable identity for this run. The town
+        holds only the agent id and the controller's public key."""
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO run_identities"
+                " (run_id, name, agent_id, controller_public)"
+                " VALUES (?, ?, ?, ?)",
+                [(run_id, name, ident["agent_id"],
+                  ident["controller_public"])
+                 for name, ident in sorted(identities.items())],
+            )
+
+    def pinned_identity(self, run_id: str,
+                        name: str) -> dict[str, str] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT agent_id, controller_public FROM run_identities"
+                " WHERE run_id=? AND name=?", (run_id, name),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def session_permissions(self, run_id: str,
+                            name: str) -> list[str] | None:
+        """The permissions a grant-joined session carries, or None for
+        a token-joined session, which carries no grant."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT permissions_json FROM participants"
+                " WHERE run_id=? AND name=?",
+                (run_id, name),
+            ).fetchone()
+        if row is None or row["permissions_json"] is None:
+            return None
+        return list(json.loads(row["permissions_json"]))
 
     def session_owner(self, run_id: str, session: str) -> str | None:
         with self._conn() as conn:

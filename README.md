@@ -233,7 +233,12 @@ controller, authorizes one disposable session key for one run with
 named permissions; the coordinator verifies the chain against the
 controller key pinned at run creation, and the report's
 portable_identity stage turns Passed with the verifying events as
-evidence. Identity resolvers are pluggable: the file registry is the
+evidence. The join itself and every claim, send, and acknowledgement
+are checked against the grant's permissions, and a role pinned to an
+identity cannot sidestep them with a bare token; a refused action is
+recorded as an intent plus a `grant_permission_denied` event, so a
+bundle can show an agent attempting something it was not authorized
+to do. Identity resolvers are pluggable: the file registry is the
 town's testnet registry, and an eth_call resolver reads a chain
 registry whose contract and selector are configuration.
 

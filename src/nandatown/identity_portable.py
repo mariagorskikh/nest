@@ -136,7 +136,8 @@ class Keystore:
             "agent_id": identity["agent_id"],
             "run_id": run_id,
             "session_public": session.public_key().public_bytes_raw().hex(),
-            "permissions": sorted(permissions or DEFAULT_PERMISSIONS),
+            "permissions": sorted(DEFAULT_PERMISSIONS if permissions is None
+                                  else permissions),
             "issued_at": now,
             "expires_at": now + ttl,
         }
@@ -163,6 +164,10 @@ def verify_grant(grant: dict[str, Any], grant_signature: str,
         raise IdentityError("grant names a different run")
     if now > float(grant.get("expires_at", 0)):
         raise IdentityError("grant expired")
+    permissions = grant.get("permissions")
+    if not isinstance(permissions, list) \
+            or not all(isinstance(p, str) for p in permissions):
+        raise IdentityError("grant permissions must be a list of names")
     if not verify_signature(controller_public, grant, grant_signature):
         raise IdentityError("grant signature does not verify against"
                             " the pinned controller key")

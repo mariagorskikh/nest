@@ -138,8 +138,11 @@ def render_report(bundle: dict[str, Any]) -> str:
         if s.note:
             add(f"  {' ' * name_width}  note: {s.note}")
     add("")
+    refused = sum(1 for e in bundle["events"]
+                  if e.kind == "grant_permission_denied")
     add(f"Events recorded: {len(bundle['events'])}."
-        f" Intents recorded: {len(bundle['intents'])}.")
+        f" Intents recorded: {len(bundle['intents'])}."
+        + (f" Refused by grant permissions: {refused}." if refused else ""))
     add(SCOPE_SENTENCE)
     add("One run is one scoped observation, not a certificate.")
     add("Improve: fix what failed and rerun the same profile.")

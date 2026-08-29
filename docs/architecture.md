@@ -95,6 +95,12 @@ Runner observations (crash, restart, exit codes) are posted as events
 attributed to the runner. Model-facing tools are join, discover,
 notify, claim, send, ack, inspect; run creation and fault plans are
 admin-only.
+A grant's permissions (join, claim, send, ack) are checked at join and
+on every mailbox action; a role pinned to a portable identity can join
+only through its grant, never with a bare token. Pinned identities and
+session permissions live in the database, so both hold across a
+coordinator restart. Denials are recorded as intents plus
+`grant_permission_denied` (or `grant_required`) events.
 
 ## Extending the town
 
