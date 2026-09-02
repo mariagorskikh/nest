@@ -7,6 +7,10 @@ Example::
 """
 
 from nest_core.sim.agent import AgentContext as AgentContext
+from nest_core.sim.agent import ScenarioAgentContext as ScenarioAgentContext
+from nest_core.sim.agent import ScenarioEventReceipt as ScenarioEventReceipt
+from nest_core.sim.agent import ScenarioEventRequest as ScenarioEventRequest
+from nest_core.sim.agent import ScenarioEventSink as ScenarioEventSink
 from nest_core.sim.agent import StateMachineAgent as StateMachineAgent
 from nest_core.sim.clock import VirtualClock as VirtualClock
 from nest_core.sim.events import Event as Event
@@ -20,6 +24,10 @@ __all__ = [
     "Event",
     "EventQueue",
     "InMemoryTransport",
+    "ScenarioAgentContext",
+    "ScenarioEventReceipt",
+    "ScenarioEventRequest",
+    "ScenarioEventSink",
     "Simulator",
     "StateMachineAgent",
     "TraceWriter",

@@ -15,11 +15,19 @@ Example::
 from __future__ import annotations
 
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from nest_core.sim.agent import AgentContext, StateMachineAgent
+from nest_core.sim.agent import (
+    AgentContext,
+    ScenarioAgentContext,
+    ScenarioEventReceipt,
+    ScenarioEventRequest,
+    ScenarioEventSink,
+    StateMachineAgent,
+)
 from nest_core.sim.clock import VirtualClock
 from nest_core.sim.events import Event, EventQueue
 from nest_core.sim.trace import TraceWriter
@@ -59,6 +67,7 @@ class _SimAgentContext:
         trace: TraceWriter | None,
         corr_counter: _CorrelationCounter,
         plugins: dict[str, Any] | None = None,
+        event_sink: ScenarioEventSink | None = None,
     ) -> None:
         self._agent_id = agent_id
         self._clock = clock
@@ -68,6 +77,7 @@ class _SimAgentContext:
         self._trace = trace
         self._corr = corr_counter
         self._plugins: dict[str, Any] = plugins or {}
+        self._event_sink = event_sink
 
     @property
     def agent_id(self) -> AgentId:
@@ -85,7 +95,14 @@ class _SimAgentContext:
     def plugins(self) -> dict[str, Any]:
         return self._plugins
 
+    @property
+    def event_sink(self) -> ScenarioEventSink | None:
+        return self._event_sink
+
     async def send(self, to: AgentId, payload: bytes) -> None:
+        await self.send_with_correlation(to, payload)
+
+    async def send_with_correlation(self, to: AgentId, payload: bytes) -> CorrelationId:
         cid = self._corr.next()
         if self._trace:
             self._trace.record(
@@ -100,6 +117,32 @@ class _SimAgentContext:
                 }
             )
         await self._transport.send(to, payload, correlation_id=cid)
+        return cid
+
+    def record_scenario_event(
+        self,
+        *,
+        kind: str,
+        observer: str,
+        subject: str,
+        data: Mapping[str, object],
+        attributes: Mapping[str, object] | None = None,
+    ) -> ScenarioEventReceipt | None:
+        if self._event_sink is None:
+            return None
+        receipt = self._event_sink.record(
+            ScenarioEventRequest(
+                kind=kind,
+                logical_time=self._clock.now,
+                observer=observer,
+                subject=subject,
+                data=data,
+                attributes={} if attributes is None else attributes,
+            )
+        )
+        if self._trace is not None:
+            self._trace.record(dict(receipt.trace_record))
+        return receipt
 
     async def broadcast(self, payload: bytes) -> None:
         cid = self._corr.next()
@@ -130,6 +173,7 @@ class _SimAgentContext:
 
 # Verify _SimAgentContext satisfies the protocol at import time
 _ctx_check: type[AgentContext] = _SimAgentContext  # noqa: F841
+_scenario_ctx_check: type[ScenarioAgentContext] = _SimAgentContext  # noqa: F841
 
 
 class Simulator:
@@ -153,6 +197,7 @@ class Simulator:
         partition_start_at_time: float | None = None,
         partition_heal_at_time: float | None = None,
         plugins: dict[str, Any] | None = None,
+        event_sink: ScenarioEventSink | None = None,
     ) -> None:
         if not 0.0 <= message_drop_rate <= 1.0:
             msg = f"message_drop_rate must be between 0 and 1: {message_drop_rate}"
@@ -168,6 +213,8 @@ class Simulator:
         self._trace: TraceWriter | None = None
         if trace_path is not None:
             self._trace = TraceWriter(trace_path)
+        self._trace_finalized = False
+        self._trace_close_attempted = False
         self._tick_count = 0
         self._message_count = 0
         self._dropped_count = 0
@@ -188,6 +235,7 @@ class Simulator:
         self._failure_rng = random.Random(self._master_rng.randint(0, 2**63))
         self._plugins: dict[str, Any] = plugins or {}
         self._agent_plugins: dict[AgentId, dict[str, Any]] = {}
+        self._event_sink = event_sink
 
     @property
     def clock(self) -> VirtualClock:
@@ -228,6 +276,19 @@ class Simulator:
             print(sim.dropped_count)
         """
         return self._dropped_count
+
+    @property
+    def trace_finalized(self) -> bool:
+        """Whether the configured trace writer closed without raising."""
+        return self._trace_finalized
+
+    def close_trace(self) -> None:
+        """Close the configured trace at most once and mark only successful closure."""
+        if self._trace is None or self._trace_close_attempted:
+            return
+        self._trace_close_attempted = True
+        self._trace.close()
+        self._trace_finalized = True
 
     def add_agent(self, agent_id: AgentId, agent: StateMachineAgent) -> None:
         """Register an agent for the simulation.
@@ -282,142 +343,166 @@ class Simulator:
 
             await sim.run(max_ticks=5000)
         """
-        all_ids = list(self._agents.keys())
-        for slot in self._agents.values():
-            slot.transport.all_agents = all_ids
+        self._trace_finalized = False
+        primary_error: BaseException | None = None
+        primary_traceback: Any = None
+        lifecycle_started = False
+        try:
+            all_ids = list(self._agents.keys())
+            for slot in self._agents.values():
+                slot.transport.all_agents = all_ids
 
-        self._init_failures()
+            self._init_failures()
 
-        for aid, slot in self._agents.items():
-            ctx = self._make_context(aid, slot)
-            if self._trace:
-                self._trace.record(
-                    {
-                        "ts": self._clock.now,
-                        "agent": str(aid),
-                        "kind": "start",
-                    }
-                )
-            self._queue.push(
-                Event(
-                    time=self._clock.now,
-                    kind="start",
-                    agent_id=aid,
-                )
-            )
-
-        for aid, slot in self._agents.items():
-            ctx = self._make_context(aid, slot)
-            await slot.agent.on_start(ctx)
-
-        while self._queue and self._tick_count < max_ticks:
-            event = self._queue.pop()
-
-            if max_time is not None and event.time > max_time:
-                break
-
-            self._clock.advance_to(event.time)
-            self._tick_count += 1
-
-            if (
-                self._partition_start_at_time is not None
-                and not self._partition_started
-                and not self._partition_healed
-                and self._clock.now >= self._partition_start_at_time
-            ):
-                self._partition_map = dict(self._pending_partition_map)
-                self._partition_started = True
+            for aid, slot in self._agents.items():
+                ctx = self._make_context(aid, slot)
                 if self._trace:
                     self._trace.record(
                         {
                             "ts": self._clock.now,
-                            "agent": "_simulator",
-                            "kind": "partition_started",
+                            "agent": str(aid),
+                            "kind": "start",
                         }
                     )
-
-            if not self._partition_healed and (
-                (
-                    self._partition_heal_at is not None
-                    and self._tick_count >= self._partition_heal_at
-                )
-                or (
-                    self._partition_heal_at_time is not None
-                    and self._clock.now >= self._partition_heal_at_time
-                )
-            ):
-                self._partition_map = {}
-                self._partition_healed = True
-                if self._trace:
-                    self._trace.record(
-                        {
-                            "ts": self._clock.now,
-                            "agent": "_simulator",
-                            "kind": "partition_healed",
-                        }
+                self._queue.push(
+                    Event(
+                        time=self._clock.now,
+                        kind="start",
+                        agent_id=aid,
                     )
+                )
 
-            if event.kind == "start":
-                continue
+            lifecycle_started = True
+            for aid, slot in self._agents.items():
+                ctx = self._make_context(aid, slot)
+                await slot.agent.on_start(ctx)
 
-            if event.kind == "deliver":
-                target_slot = self._agents.get(event.agent_id)
-                if target_slot is None:
+            while self._queue and self._tick_count < max_ticks:
+                event = self._queue.pop()
+
+                if max_time is not None and event.time > max_time:
+                    break
+
+                self._clock.advance_to(event.time)
+                self._tick_count += 1
+
+                if (
+                    self._partition_start_at_time is not None
+                    and not self._partition_started
+                    and not self._partition_healed
+                    and self._clock.now >= self._partition_start_at_time
+                ):
+                    self._partition_map = dict(self._pending_partition_map)
+                    self._partition_started = True
+                    if self._trace:
+                        self._trace.record(
+                            {
+                                "ts": self._clock.now,
+                                "agent": "_simulator",
+                                "kind": "partition_started",
+                            }
+                        )
+
+                if not self._partition_healed and (
+                    (
+                        self._partition_heal_at is not None
+                        and self._tick_count >= self._partition_heal_at
+                    )
+                    or (
+                        self._partition_heal_at_time is not None
+                        and self._clock.now >= self._partition_heal_at_time
+                    )
+                ):
+                    self._partition_map = {}
+                    self._partition_healed = True
+                    if self._trace:
+                        self._trace.record(
+                            {
+                                "ts": self._clock.now,
+                                "agent": "_simulator",
+                                "kind": "partition_healed",
+                            }
+                        )
+
+                if event.kind == "start":
                     continue
 
-                if self._should_drop(event.target_id, event.agent_id):
-                    self._dropped_count += 1
+                if event.kind == "deliver":
+                    target_slot = self._agents.get(event.agent_id)
+                    if target_slot is None:
+                        continue
+
+                    if self._should_drop(event.target_id, event.agent_id):
+                        self._dropped_count += 1
+                        if self._trace:
+                            drop_rec: dict[str, Any] = {
+                                "ts": self._clock.now,
+                                "agent": str(event.agent_id),
+                                "kind": "dropped",
+                                "from": str(event.target_id),
+                                "size": len(event.payload),
+                                "msg": event.payload.decode("utf-8", errors="replace"),
+                            }
+                            if event.correlation_id is not None:
+                                drop_rec["corr"] = str(event.correlation_id)
+                            self._trace.record(drop_rec)
+                        continue
+
+                    delivered_payload = event.payload
+                    if event.target_id in self._byzantine_agents:
+                        delivered_payload = bytes(
+                            (b ^ self._failure_rng.randint(0, 255)) for b in event.payload
+                        )
+
+                    self._message_count += 1
                     if self._trace:
-                        drop_rec: dict[str, Any] = {
+                        rec: dict[str, Any] = {
                             "ts": self._clock.now,
                             "agent": str(event.agent_id),
-                            "kind": "dropped",
+                            "kind": "receive",
                             "from": str(event.target_id),
-                            "size": len(event.payload),
-                            "msg": event.payload.decode("utf-8", errors="replace"),
+                            "size": len(delivered_payload),
+                            "msg": delivered_payload.decode("utf-8", errors="replace"),
                         }
                         if event.correlation_id is not None:
-                            drop_rec["corr"] = str(event.correlation_id)
-                        self._trace.record(drop_rec)
-                    continue
+                            rec["corr"] = str(event.correlation_id)
+                        self._trace.record(rec)
 
-                delivered_payload = event.payload
-                if event.target_id in self._byzantine_agents:
-                    delivered_payload = bytes(
-                        (b ^ self._failure_rng.randint(0, 255)) for b in event.payload
-                    )
+                    ctx = self._make_context(event.agent_id, target_slot)
+                    await target_slot.agent.on_message(ctx, event.target_id, delivered_payload)
+        except BaseException as exc:
+            primary_error = exc
+            primary_traceback = exc.__traceback__
 
-                self._message_count += 1
-                if self._trace:
-                    rec: dict[str, Any] = {
-                        "ts": self._clock.now,
-                        "agent": str(event.agent_id),
-                        "kind": "receive",
-                        "from": str(event.target_id),
-                        "size": len(delivered_payload),
-                        "msg": delivered_payload.decode("utf-8", errors="replace"),
-                    }
-                    if event.correlation_id is not None:
-                        rec["corr"] = str(event.correlation_id)
-                    self._trace.record(rec)
+        cleanup_error: BaseException | None = None
+        try:
+            if lifecycle_started:
+                for aid, slot in self._agents.items():
+                    try:
+                        ctx = self._make_context(aid, slot)
+                        if self._trace:
+                            self._trace.record(
+                                {
+                                    "ts": self._clock.now,
+                                    "agent": str(aid),
+                                    "kind": "stop",
+                                }
+                            )
+                        await slot.agent.on_stop(ctx)
+                    except BaseException as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
+        finally:
+            try:
+                self.close_trace()
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
 
-                ctx = self._make_context(event.agent_id, target_slot)
-                await target_slot.agent.on_message(ctx, event.target_id, delivered_payload)
-
-        for aid, slot in self._agents.items():
-            ctx = self._make_context(aid, slot)
-            if self._trace:
-                self._trace.record(
-                    {
-                        "ts": self._clock.now,
-                        "agent": str(aid),
-                        "kind": "stop",
-                    }
-                )
-            await slot.agent.on_stop(ctx)
-
-        if self._trace:
-            self._trace.close()
+        if primary_error is not None:
+            raise primary_error.with_traceback(primary_traceback)
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def set_agent_plugins(self, agent_id: AgentId, overrides: dict[str, Any]) -> None:
         """Set per-agent plugin overrides (merged on top of shared plugins).
@@ -440,4 +525,5 @@ class Simulator:
             trace=self._trace,
             corr_counter=self._corr_counter,
             plugins=merged,
+            event_sink=self._event_sink,
         )

@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+name: capability-fulfillment
+description: "Deterministic Registry discovery and synthetic capability fulfillment"
+
+tier: 1
+seed: 7
+
+agents:
+  count: 2
+  brain: state-machine
+  roles:
+    - name: requester
+      count: 1
+    - name: provider
+      count: 1
+
+layers:
+  transport: in_memory
+  comms: nest_native
+  identity: did_key
+  registry: in_memory
+  auth: jwt
+  trust: score_average
+  payments: prepaid_credits
+  coordination: contract_net
+  negotiation: alternating_offers
+  memory: blackboard
+  privacy: noop
+  datafacts: datafacts_v1
+
+task:
+  type: capability_fulfillment
+  config:
+    lookup_delay_ticks: 0
+
+failures:
+  message_drop: 0.0
+  byzantine_agents: 0.0
+
+duration: "ticks: 10"
+metrics: []
+
+output:
+  trace: ./traces/capability_fulfillment.jsonl

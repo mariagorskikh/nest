@@ -201,3 +201,9 @@ def _try_load_builtin(name: str) -> None:
         )
 
         register_scenario("capability_spoofing", capability_spoofing_factory)
+    elif name == "capability_fulfillment":
+        from nest_core.scenarios_builtin.capability_fulfillment import (
+            capability_fulfillment_factory,
+        )
+
+        register_scenario("capability_fulfillment", capability_fulfillment_factory)

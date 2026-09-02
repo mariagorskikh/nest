@@ -14,12 +14,72 @@ Example::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
-from nest_core.types import AgentId
+from nest_core.types import AgentId, CorrelationId
 
 if TYPE_CHECKING:
     import random as _random
+
+
+def _copied_mapping(value: object, *, field_name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{field_name} must be a mapping")
+    mapping = cast("Mapping[object, object]", value)
+    copied: dict[str, object] = {}
+    for key, item in mapping.items():
+        if not isinstance(key, str):
+            raise TypeError(f"{field_name} keys must be strings")
+        copied[key] = deepcopy(item)
+    return MappingProxyType(copied)
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioEventRequest:
+    """Immutable generic event handed from the simulator context to a sink."""
+
+    kind: str
+    logical_time: float
+    observer: str
+    subject: str
+    data: Mapping[str, object]
+    attributes: Mapping[str, object] = field(default_factory=lambda: dict[str, object]())
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "data", _copied_mapping(self.data, field_name="data"))
+        object.__setattr__(
+            self,
+            "attributes",
+            _copied_mapping(self.attributes, field_name="attributes"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioEventReceipt:
+    """Opaque event identifier plus the generic record the simulator may trace."""
+
+    event_id: str
+    trace_record: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "trace_record",
+            _copied_mapping(self.trace_record, field_name="trace_record"),
+        )
+
+
+@runtime_checkable
+class ScenarioEventSink(Protocol):
+    """Optional sink for scenario-owned structured events."""
+
+    def record(self, request: ScenarioEventRequest) -> ScenarioEventReceipt:
+        """Record one generic request and return its traceable receipt."""
+        ...
 
 
 @runtime_checkable
@@ -101,6 +161,32 @@ class AgentContext(Protocol):
 
             await ctx.schedule(5.0, b"timeout")
         """
+        ...
+
+
+@runtime_checkable
+class ScenarioAgentContext(AgentContext, Protocol):
+    """Optional generic extensions used by instrumented simulator scenarios."""
+
+    @property
+    def event_sink(self) -> ScenarioEventSink | None:
+        """Optional run-scoped scenario event sink."""
+        ...
+
+    async def send_with_correlation(self, to: AgentId, payload: bytes) -> CorrelationId:
+        """Send a message and return its simulator correlation identifier."""
+        ...
+
+    def record_scenario_event(
+        self,
+        *,
+        kind: str,
+        observer: str,
+        subject: str,
+        data: Mapping[str, object],
+        attributes: Mapping[str, object] | None = None,
+    ) -> ScenarioEventReceipt | None:
+        """Record one event when a generic sink is injected."""
         ...
 
 
