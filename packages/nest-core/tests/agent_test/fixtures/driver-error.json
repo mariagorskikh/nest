@@ -1,0 +1,1 @@
+{"schema_version":"town-agent-driver-error/1","adapter_instance_id":"01K00000000000000000000000","run_id":"01K00000000000000000000001","event_id":"01K00000000000000000000003","sequence":1,"request_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","error":{"code":"OUT_OF_ORDER","retryable":false,"message":"Expected sequence 1"}}

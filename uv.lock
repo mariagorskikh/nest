@@ -1502,6 +1502,7 @@ plugins = [
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
+    { name = "jsonschema" },
     { name = "nest-cli" },
     { name = "pyright" },
     { name = "pytest" },
@@ -1529,6 +1530,7 @@ provides-extras = ["judge", "harness", "plugins"]
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.100" },
+    { name = "jsonschema", specifier = ">=4.0" },
     { name = "nest-cli", editable = "packages/nest-cli" },
     { name = "pyright", specifier = ">=1.1.400,<1.1.410" },
     { name = "pytest", specifier = ">=8.0" },

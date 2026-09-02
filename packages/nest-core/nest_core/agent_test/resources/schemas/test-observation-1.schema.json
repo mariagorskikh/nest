@@ -1,0 +1,2121 @@
+{
+  "$defs": {
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DriverExchangeFailedData": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": [
+            "driver_contract",
+            "incomplete",
+            "town"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "driver_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 26,
+              "minLength": 26,
+              "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Driver Event Id"
+        },
+        "driver_sequence": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Driver Sequence"
+        },
+        "error_code": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+          "title": "Error Code",
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "readiness",
+            "start",
+            "message"
+          ],
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "disposition",
+        "error_code",
+        "driver_event_id",
+        "driver_sequence"
+      ],
+      "title": "DriverExchangeFailedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DriverExchangeFailedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DriverExchangeFailedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.driver.exchange_failed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "DriverExchangeFailedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__IntentReturnedData": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_instance_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Adapter Instance Id",
+          "type": "string"
+        },
+        "driver_event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Driver Event Id",
+          "type": "string"
+        },
+        "driver_sequence": {
+          "const": 1,
+          "title": "Driver Sequence",
+          "type": "integer"
+        },
+        "intent_kind": {
+          "enum": [
+            "send_to_sender",
+            "none"
+          ],
+          "title": "Intent Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_instance_id",
+        "driver_event_id",
+        "driver_sequence",
+        "intent_kind"
+      ],
+      "title": "IntentReturnedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__IntentReturnedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__IntentReturnedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.driver.intent_returned",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "IntentReturnedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupRequestedData": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "const": "sell",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "registry_implementation": {
+          "const": "nest_plugins_reference.registry.in_memory.InMemoryRegistry",
+          "title": "Registry Implementation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry_implementation",
+        "capabilities"
+      ],
+      "title": "LookupRequestedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupRequestedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupRequestedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.registry.lookup_requested",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "LookupRequestedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupReturnedData": {
+      "additionalProperties": false,
+      "properties": {
+        "card_agent_ids": {
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "pattern": "[\\r\\n]"
+            },
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Card Agent Ids",
+          "type": "array"
+        },
+        "registry_implementation": {
+          "const": "nest_plugins_reference.registry.in_memory.InMemoryRegistry",
+          "title": "Registry Implementation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry_implementation",
+        "card_agent_ids"
+      ],
+      "title": "LookupReturnedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupReturnedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupReturnedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.registry.lookup_returned",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "LookupReturnedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderRegisteredData": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "const": "sell",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "card_agent_id": {
+          "const": "provider-0",
+          "title": "Card Agent Id",
+          "type": "string"
+        },
+        "registry_implementation": {
+          "const": "nest_plugins_reference.registry.in_memory.InMemoryRegistry",
+          "title": "Registry Implementation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry_implementation",
+        "card_agent_id",
+        "capabilities"
+      ],
+      "title": "ProviderRegisteredData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderRegisteredObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderRegisteredData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.registry.provider_registered",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "ProviderRegisteredObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderSelectedData": {
+      "additionalProperties": false,
+      "properties": {
+        "lookup_event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Lookup Event Id",
+          "type": "string"
+        },
+        "selected_agent_id": {
+          "const": "provider-0",
+          "title": "Selected Agent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "selected_agent_id",
+        "lookup_event_id"
+      ],
+      "title": "ProviderSelectedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderSelectedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderSelectedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.requester.provider_selected",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "ProviderSelectedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RequestRoutedData": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "const": "text/plain; charset=utf-8",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "payload_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Payload Digest",
+          "type": "string"
+        },
+        "recipient_id": {
+          "const": "provider-0",
+          "title": "Recipient Id",
+          "type": "string"
+        },
+        "sender_id": {
+          "const": "requester-0",
+          "title": "Sender Id",
+          "type": "string"
+        },
+        "text": {
+          "const": "buy:widget:2",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sender_id",
+        "recipient_id",
+        "media_type",
+        "text",
+        "payload_digest"
+      ],
+      "title": "RequestRoutedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RequestRoutedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RequestRoutedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.message.request_routed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "RequestRoutedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResponseRoutedData": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "const": "text/plain; charset=utf-8",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "payload_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Payload Digest",
+          "type": "string"
+        },
+        "recipient_id": {
+          "const": "requester-0",
+          "title": "Recipient Id",
+          "type": "string"
+        },
+        "sender_id": {
+          "const": "provider-0",
+          "title": "Sender Id",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "pattern": "^[^\\s\\x00-\\x1f\\x7f](?:[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f])?$",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sender_id",
+        "recipient_id",
+        "media_type",
+        "text",
+        "payload_digest"
+      ],
+      "title": "ResponseRoutedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResponseRoutedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResponseRoutedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.message.response_routed",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "ResponseRoutedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResultEvaluatedData": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Actual Response Digest"
+        },
+        "evaluator_id": {
+          "const": "nanda.agent.capability-fulfillment",
+          "title": "Evaluator Id",
+          "type": "string"
+        },
+        "evaluator_version": {
+          "const": "1",
+          "title": "Evaluator Version",
+          "type": "string"
+        },
+        "expected_response_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Expected Response Digest",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "fail",
+            "inconclusive"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evaluator_id",
+        "evaluator_version",
+        "verdict",
+        "expected_response_digest",
+        "actual_response_digest"
+      ],
+      "title": "ResultEvaluatedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResultEvaluatedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResultEvaluatedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.capability.result_evaluated",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "ResultEvaluatedObservation",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RunAdmittedData": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_instance_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Adapter Instance Id",
+          "type": "string"
+        },
+        "driver_sequence": {
+          "const": 0,
+          "title": "Driver Sequence",
+          "type": "integer"
+        },
+        "intent_kind": {
+          "enum": [
+            "declare_capability",
+            "none"
+          ],
+          "title": "Intent Kind",
+          "type": "string"
+        },
+        "profile_digest": {
+          "maxLength": 71,
+          "minLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Profile Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_instance_id",
+        "profile_digest",
+        "driver_sequence",
+        "intent_kind"
+      ],
+      "title": "RunAdmittedData",
+      "type": "object"
+    },
+    "profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RunAdmittedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "data": {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RunAdmittedData"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Duration Ms"
+        },
+        "event_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "test.driver.run_admitted",
+          "title": "Kind",
+          "type": "string"
+        },
+        "logical_time": {
+          "minimum": 0,
+          "title": "Logical Time",
+          "type": "number"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "not": {
+                "pattern": "[\\r\\n]"
+              },
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message Id"
+        },
+        "observed_at": {
+          "maxLength": 64,
+          "minLength": 20,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observer": {
+          "enum": [
+            "town.agent-test-runner",
+            "town.capability-requester",
+            "town.driven-agent",
+            "town.profile-evaluator"
+          ],
+          "title": "Observer",
+          "type": "string"
+        },
+        "request_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Digest"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 71,
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Digest"
+        },
+        "run_id": {
+          "maxLength": 26,
+          "minLength": 26,
+          "pattern": "^[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "town.test-observation/1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "subject_participant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n]"
+          },
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "title": "Subject Participant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "seq",
+        "event_id",
+        "run_id",
+        "logical_time",
+        "observed_at",
+        "duration_ms",
+        "observer",
+        "subject_participant_id",
+        "message_id",
+        "correlation_id",
+        "request_digest",
+        "response_digest",
+        "kind",
+        "data"
+      ],
+      "title": "RunAdmittedObservation",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "description": "One discriminated, closed capability-profile trace observation.",
+      "discriminator": {
+        "mapping": {
+          "test.capability.result_evaluated": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResultEvaluatedObservation",
+          "test.driver.exchange_failed": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DriverExchangeFailedObservation",
+          "test.driver.intent_returned": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__IntentReturnedObservation",
+          "test.driver.run_admitted": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RunAdmittedObservation",
+          "test.message.request_routed": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RequestRoutedObservation",
+          "test.message.response_routed": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResponseRoutedObservation",
+          "test.registry.lookup_requested": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupRequestedObservation",
+          "test.registry.lookup_returned": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupReturnedObservation",
+          "test.registry.provider_registered": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderRegisteredObservation",
+          "test.requester.provider_selected": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderSelectedObservation"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RunAdmittedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__DriverExchangeFailedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderRegisteredObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupRequestedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__LookupReturnedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ProviderSelectedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__RequestRoutedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__IntentReturnedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResponseRoutedObservation"
+        },
+        {
+          "$ref": "#/$defs/profile_bmFuZGEvYWdlbnQvY2FwYWJpbGl0eS1mdWxmaWxsbWVudAAx__ResultEvaluatedObservation"
+        }
+      ],
+      "title": "CapabilityTestObservation"
+    }
+  ],
+  "title": "TestObservation",
+  "x-town-semantic-validation": [
+    "observation validated with the run profile codec",
+    "calendar-valid UTC RFC3339 timestamps",
+    "payload_digest matches exact UTF-8 text",
+    "routed response text is at most the profile UTF-8 byte limit"
+  ]
+}
