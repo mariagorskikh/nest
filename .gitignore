@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 traces/
+.town/
 # Capsule ledger written to cwd by the capsule_emit trust/payments plugins.
 capsule_ledger.jsonl
 

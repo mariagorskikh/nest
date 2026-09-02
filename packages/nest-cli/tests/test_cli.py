@@ -20,6 +20,18 @@ class TestVersion:
         assert core_version in result.output
 
 
+class TestAgentTestShim:
+    def test_deprecated_shim_reexports_agent_test_help(self) -> None:
+        from nest_core.cli import app as core_app
+
+        shim = runner.invoke(app, ["test", "agent", "--help"], color=False)
+        core = runner.invoke(core_app, ["test", "agent", "--help"], color=False)
+
+        assert app is core_app
+        assert shim.exit_code == 0
+        assert shim.stdout == core.stdout
+
+
 class TestDoctor:
     def test_doctor_passes(self) -> None:
         result = runner.invoke(app, ["doctor"])
@@ -83,6 +95,22 @@ class TestRun:
         )
         assert result.exit_code == 0
         assert "seed: 999" in result.output
+
+    def test_run_capability_fulfillment_builtin_uses_ordinary_interface(
+        self, tmp_path: Path
+    ) -> None:
+        trace_out = tmp_path / "capability.jsonl"
+
+        result = runner.invoke(
+            app,
+            ["run", "capability_fulfillment", "-o", str(trace_out)],
+        )
+
+        assert result.exit_code == 0
+        assert "Running scenario: capability-fulfillment" in result.output
+        assert f"Trace written to: {trace_out}" in result.output
+        assert trace_out.exists()
+        assert '"kind":"test.' not in trace_out.read_text()
 
 
 class TestInit:
