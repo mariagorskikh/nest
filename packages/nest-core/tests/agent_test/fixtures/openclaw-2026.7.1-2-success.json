@@ -1,0 +1,46 @@
+{
+  "runId": "run-synthetic-001",
+  "status": "ok",
+  "summary": "completed",
+  "result": {
+    "payloads": [
+      {
+        "text": "{\"capabilities\":[\"sell\"],\"kind\":\"declare_capability\"}",
+        "mediaUrl": null
+      }
+    ],
+    "meta": {
+      "durationMs": 42,
+      "agentMeta": {
+        "sessionId": "session-synthetic-001",
+        "provider": "provider",
+        "model": "model",
+        "agentHarnessId": "synthetic-harness"
+      },
+      "aborted": false,
+      "finalAssistantVisibleText": "{\"capabilities\":[\"sell\"],\"kind\":\"declare_capability\"}",
+      "finalAssistantRawText": "{\"capabilities\":[\"sell\"],\"kind\":\"declare_capability\"}",
+      "replayInvalid": false,
+      "livenessState": "working",
+      "stopReason": "stop",
+      "executionTrace": {
+        "winnerProvider": "provider",
+        "winnerModel": "model",
+        "attempts": [
+          {
+            "provider": "provider",
+            "model": "model",
+            "result": "success",
+            "stage": "assistant"
+          }
+        ],
+        "fallbackUsed": false,
+        "runner": "embedded"
+      },
+      "completion": {
+        "stopReason": "stop",
+        "finishReason": "stop"
+      }
+    }
+  }
+}
