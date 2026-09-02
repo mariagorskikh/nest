@@ -30,6 +30,11 @@ class TestAgentTestShim:
         assert app is core_app
         assert shim.exit_code == 0
         assert shim.stdout == core.stdout
+        assert "basic local agent test" in shim.stdout
+        assert "[TARGET]" in " ".join(shim.stdout.replace("│", "").split())
+        assert "OpenClaw" in shim.stdout
+        assert "capability-fulfillment" not in shim.stdout
+        assert "bearer" not in shim.stdout.lower()
 
 
 class TestDoctor:

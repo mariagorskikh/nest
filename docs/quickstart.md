@@ -92,6 +92,9 @@ report.
 
 ## What's next
 
+- **Test an existing OpenClaw agent:** [bring-your-agent.md](bring-your-agent.md)
+- **Build or automate an advanced agent adapter:**
+  [agent-test-adapter-reference.md](agent-test-adapter-reference.md)
 - **Plug in your own layer:** [writing-a-plugin.md](writing-a-plugin.md)
 - **Build a new scenario:** [writing-a-scenario.md](writing-a-scenario.md)
 - **How the layers fit together:** [concepts.md](concepts.md)

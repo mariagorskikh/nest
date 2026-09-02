@@ -39,7 +39,7 @@ That's the whole "hello world". No clone, no path, no setup.
 - [Hackathon](#hackathon)
 - [Install](#install)
 - [The 60-second tour](#the-60-second-tour)
-- [Test a local agent adapter](#test-a-local-agent-adapter)
+- [Test an existing OpenClaw agent](#test-an-existing-openclaw-agent)
 - [Test your own protocol](#test-your-own-protocol)
 - [Built-in scenarios](#built-in-scenarios)
 - [The 12 layers](#the-12-layers)
@@ -135,25 +135,28 @@ Same seed → byte-identical trace, every time.
 
 ---
 
-## Test a local agent adapter
+## Test an existing OpenClaw agent
 
-Bring an agent through a strict loopback adapter, run one frozen
-capability-fulfillment workflow through Town's pinned, run-local Registry
-implementation and simulator, and receive a per-stage evidence report. Town
-translates the adapter's declared capability into a provider card; Town's
-reference requester discovers it. This does not test the external agent's own
-Registry protocol.
-
-Generation 1 is the first frozen agent-test contract/profile generation, not a
-Town or nest-core 1.0 release. The Generation 1 Bring Your Agent preview is
-checkout-only and requires Python 3.12+ plus `uv`. Follow
-[the Generation 1 local-agent adapter guide](docs/bring-your-agent.md) to start
-the reference adapter and set the shared caller credential. After the adapter
-is running:
+From a checkout, Town can run one bounded agent workflow against an existing
+trusted OpenClaw target on the computer where Town is running and return a
+five-stage evidence report. Town tries the installed version and validates the
+pre-dispatch probe, configuration, inventory, and Gateway commands and JSON
+response shapes it needs; `2026.7.1-2` is the release tested against a real
+OpenClaw installation. An incompatibility in those checks fails clearly before
+Town starts an agent/model turn. If the dispatched agent command, its flags, or
+its response envelope is incompatible, Town reports that result without trying
+an alternate command syntax; a model turn may already have occurred.
 
 ```bash
-uv run nest test agent --endpoint http://127.0.0.1:8787
+uv run nest test agent <agent-id>
 ```
+
+Follow the [short OpenClaw agent guide](docs/bring-your-agent.md) for setup,
+result limits, and troubleshooting. A pass covers only the frozen synthetic
+workflow through Town's pinned local components; it is not a claim of general
+agent compatibility, safety, trust, or reliability.
+Custom endpoint adapters and automation are documented separately in the
+[technical agent-test adapter reference](docs/agent-test-adapter-reference.md).
 
 ---
 
