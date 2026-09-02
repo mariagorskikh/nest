@@ -16,6 +16,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "httpx>=0.28",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "typer>=0.12",

@@ -1354,6 +1354,7 @@ version = "0.1.4"
 source = { editable = "packages/nest-core" }
 dependencies = [
     { name = "cryptography" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "typer" },
@@ -1374,6 +1375,7 @@ plugins = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=41.0" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "nest-core", extras = ["plugins", "llm"], marker = "extra == 'full'", editable = "packages/nest-core" },
     { name = "nest-plugins-reference", marker = "extra == 'plugins'", editable = "packages/nest-plugins-reference" },
     { name = "nest-shell", marker = "extra == 'llm'", editable = "packages/nest-shell" },
