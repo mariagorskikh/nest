@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import socket
 import sys
 import threading
 from collections.abc import Generator
@@ -85,6 +86,13 @@ def _headers(body: bytes | None = None, *, token: str = TOKEN) -> dict[str, str]
         headers["Content-Type"] = "application/json"
         headers["Town-Request-Digest"] = "sha256:" + hashlib.sha256(body).hexdigest()
     return headers
+
+
+def _assert_token_absent_from_traceback(error: BaseException) -> None:
+    traceback = error.__traceback__
+    while traceback is not None:
+        assert TOKEN not in repr(traceback.tb_frame.f_locals)
+        traceback = traceback.tb_next
 
 
 def _post_data(port: int, data: dict[str, Any]) -> tuple[int, dict[str, str], bytes, bytes]:
@@ -211,6 +219,46 @@ def test_valid_token_is_removed_from_environment_before_decisions(
     assert observed_tokens == [None]
     assert "TOWN_AGENT_TOKEN" not in os.environ
     assert TOKEN not in repr(server.__dict__)
+
+
+def test_reference_factory_exception_traceback_never_retains_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An occupied-port failure must not leave the environment bearer in wrapper frames."""
+    occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    occupied.bind(("127.0.0.1", 0))
+    port = int(occupied.getsockname()[1])
+    monkeypatch.setenv("TOWN_AGENT_TOKEN", TOKEN)
+    module = _load_adapter()
+    try:
+        with pytest.raises(OSError) as caught:
+            module.create_server(port=port)
+    finally:
+        occupied.close()
+
+    _assert_token_absent_from_traceback(caught.value)
+    assert "TOWN_AGENT_TOKEN" not in os.environ
+
+
+def test_reference_keeps_the_public_teaching_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bypassing the teaching hook would prevent a user adapter from deciding an intent."""
+    observed: list[dict[str, Any]] = []
+    request = _fixture("driver-start-request.json")
+    with _running_adapter(monkeypatch) as (module, port, _server):
+        original = module.decide_intent
+
+        def observe(observation: dict[str, Any]) -> dict[str, Any]:
+            observed.append(observation)
+            return original(observation)
+
+        monkeypatch.setattr(module, "decide_intent", observe)
+        status, _, body, _ = _post_data(port, request)
+
+    assert status == 200
+    assert observed == [request["observation"]]
+    assert DriverResponse.model_validate_json(body).intent.kind == "declare_capability"
 
 
 def test_start_returns_exact_declared_capability_and_request_digest(
