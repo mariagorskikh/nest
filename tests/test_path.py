@@ -1,5 +1,6 @@
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,10 +12,41 @@ from nandatown.records import fingerprint
 from nandatown.report import render_report
 
 SUBJECT = "http://testserver"
+MISSING_REQUEST_ID = object()
 
 
 def client(defect=None):
     return TestClient(build_a2a_app(SUBJECT, defect=defect))
+
+
+def fulfillment_id_client(returned_request_id):
+    """In-process A2A service whose fulfillment ID may differ from its order."""
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=build_agent_card(SUBJECT))
+
+        message = json.loads(request.content)
+        text = message["params"]["message"]["parts"][0]["text"]
+        order = json.loads(text)
+        fulfillment = {"total_cents": 3990}
+        if returned_request_id is not MISSING_REQUEST_ID:
+            fulfillment["request_id"] = (
+                order["request_id"]
+                if returned_request_id == "matching"
+                else returned_request_id
+            )
+        task = {
+            "id": "task-1",
+            "kind": "task",
+            "status": {"state": "completed"},
+            "artifacts": [{"parts": [{"kind": "text",
+                                         "text": json.dumps(fulfillment)}]}],
+        }
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1,
+                                         "result": task})
+
+    return httpx.Client(base_url=SUBJECT,
+                        transport=httpx.MockTransport(handler))
 
 
 def stage(result, name):
@@ -75,6 +107,39 @@ def test_wrong_total_fails_semantics_only(tmp_path):
     assert semantic.status == "failed"
     assert "expected total 3990, observed 4090" in semantic.note
     assert result.verdict == "failed"
+
+
+@pytest.mark.parametrize(
+    ("returned_request_id", "passes"),
+    [
+        ("matching", True),
+        ("order-from-an-earlier-run", False),
+        ("unrelated-request", False),
+        (MISSING_REQUEST_ID, False),
+        (None, False),
+    ],
+    ids=["matching", "stale-order", "other", "missing", "null"],
+)
+def test_fulfillment_request_id_must_exactly_match_issued_order_and_replay(
+        tmp_path, returned_request_id, passes):
+    bundle_dir, result = run_path_test(
+        SUBJECT, str(tmp_path), http=fulfillment_id_client(returned_request_id))
+
+    semantic = stage(result, "semantic_result")
+    assert verify_bundle(bundle_dir) == []
+    if passes:
+        assert semantic.status == "passed"
+        assert result.verdict == "passed"
+        return
+
+    bundle = load_bundle(bundle_dir)
+    fulfillment = next(event for event in bundle["events"]
+                       if event.kind == "fulfillment_observed"
+                       and event.detail["attempt"] == 1)
+    assert semantic.status == "failed"
+    assert result.verdict == "failed"
+    assert f"expected request_id {fulfillment.subject!r}" in semantic.note
+    assert "observed request_id" in semantic.note
 
 
 def test_duplicate_fulfillment_exposes_idempotency_defect(tmp_path):

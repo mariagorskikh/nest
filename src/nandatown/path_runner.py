@@ -36,7 +36,7 @@ from .records import (
     fingerprint,
 )
 
-PATH_EVALUATOR_VERSION = "path-0.1"
+PATH_EVALUATOR_VERSION = "path-0.2"
 
 STAGE_ORDER = ["resolution", "agent_card_retrieval",
                "descriptor_consistency", "protocol_invocation",
@@ -336,19 +336,28 @@ def evaluate_path(profile: PathProfile, run_id: str,
     if first_fulfillment:
         detail = first_fulfillment[0].detail
         observed_total = detail.get("total_cents")
-        request_ok = str(detail.get("request_id", "")).startswith("order-")
+        expected_request_id = first_fulfillment[0].subject
+        observed_request_id = detail.get("request_id")
+        request_ok = (isinstance(expected_request_id, str)
+                      and bool(expected_request_id)
+                      and isinstance(observed_request_id, str)
+                      and observed_request_id == expected_request_id)
         if observed_total == expected_total and request_ok:
             stages.append(StageResult(
                 name="semantic_result", status="passed",
                 evidence=[first_fulfillment[0].event_id],
                 note=f"exactly one fulfillment, total {observed_total}"))
         else:
+            note = (f"protocol passed but the result is wrong:"
+                    f" expected total {expected_total}, observed"
+                    f" {observed_total}")
+            if not request_ok:
+                note += (f"; expected request_id {expected_request_id!r},"
+                         f" observed request_id {observed_request_id!r}")
             stages.append(StageResult(
                 name="semantic_result", status="failed",
                 evidence=[first_fulfillment[0].event_id],
-                note=f"protocol passed but the result is wrong:"
-                     f" expected total {expected_total}, observed"
-                     f" {observed_total}"))
+                note=note))
     elif find("fulfillment_unparseable", attempt=1):
         bad = find("fulfillment_unparseable", attempt=1)[0]
         stages.append(StageResult(
