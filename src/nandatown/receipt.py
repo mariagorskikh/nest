@@ -149,8 +149,17 @@ def render_proof(bundle_dir: str,
         reasons.append(f"the evidence is {age_days:.1f} days old,"
                        f" beyond the {freshness_days:.0f} day freshness"
                        " window")
-    if not payload["coverage"]["tested"]:
+    tested = payload["coverage"]["tested"]
+    not_tested = payload["coverage"].get("not_tested")
+    if not tested:
         reasons.append("nothing was tested")
+    if (not isinstance(not_tested, list)
+            or not all(isinstance(stage, str) for stage in not_tested)):
+        reasons.append("coverage is incomplete; stages not tested were"
+                       " not recorded")
+    elif not_tested:
+        reasons.append("coverage is incomplete; stages not tested: "
+                       + ", ".join(not_tested))
 
     if reasons:
         lines = ["No Town Proof. The badge renders only from"
@@ -158,8 +167,6 @@ def render_proof(bundle_dir: str,
         lines += [f"  {r}" for r in reasons]
         return False, "\n".join(lines) + "\n"
 
-    tested = payload["coverage"]["tested"]
-    not_tested = payload["coverage"]["not_tested"]
     coverage = f"{len(tested)} stages tested"
     if not_tested:
         coverage += f" ({', '.join(not_tested)} not tested)"
