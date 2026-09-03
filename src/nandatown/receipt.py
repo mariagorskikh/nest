@@ -131,7 +131,15 @@ def verify_receipt(receipt_path: str,
 def render_proof(bundle_dir: str,
                  freshness_days: float = 30.0) -> tuple[bool, str]:
     """The TOWN-TESTED badge, rendered only when the evidence is
-    conclusive, covered, fresh, and the receipt verifies."""
+    conclusive, covered, fresh, and the bundle and receipt verify."""
+    from .bundle import verify_bundle
+
+    bundle_problems = verify_bundle(bundle_dir)
+    if bundle_problems:
+        lines = ["No Town Proof. Bundle verification failed:"]
+        lines += [f"  {problem}" for problem in bundle_problems]
+        return False, "\n".join(lines) + "\n"
+
     receipt_path = os.path.join(bundle_dir, "receipt.json")
     if not os.path.exists(receipt_path):
         make_receipt(bundle_dir)
