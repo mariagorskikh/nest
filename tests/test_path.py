@@ -153,14 +153,14 @@ def test_empty_fulfillment_subject_cannot_establish_request_correlation():
         event_id="ev-1", run_id="path-empty-subject", at=0,
         observer="town-requester", kind="fulfillment_observed", subject="",
         detail={"attempt": 1, "total_cents": 3990,
-                "request_id": "order-issued"},
+                "request_id": ""},
     )])
 
     semantic = stage(result, "semantic_result")
     assert semantic.status == "failed"
     assert result.verdict == "failed"
     assert "expected request_id ''" in semantic.note
-    assert "observed request_id 'order-issued'" in semantic.note
+    assert "observed request_id ''" in semantic.note
 
 
 def test_duplicate_fulfillment_exposes_idempotency_defect(tmp_path):
