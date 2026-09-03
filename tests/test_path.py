@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 from nandatown.a2a_adapter import build_a2a_app, build_agent_card
 from nandatown.bundle import load_bundle, verify_bundle
 from nandatown.path_profiles import get_path_profile
-from nandatown.path_runner import run_path_test
-from nandatown.records import fingerprint
+from nandatown.path_runner import evaluate_path, run_path_test
+from nandatown.records import TownEvent, fingerprint
 from nandatown.report import render_report
 
 SUBJECT = "http://testserver"
@@ -117,8 +117,12 @@ def test_wrong_total_fails_semantics_only(tmp_path):
         ("unrelated-request", False),
         (MISSING_REQUEST_ID, False),
         (None, False),
+        (123, False),
+        (["order-from-an-earlier-run"], False),
+        ({"request_id": "order-from-an-earlier-run"}, False),
     ],
-    ids=["matching", "stale-order", "other", "missing", "null"],
+    ids=["matching", "stale-order", "other", "missing", "null",
+         "integer", "list", "object"],
 )
 def test_fulfillment_request_id_must_exactly_match_issued_order_and_replay(
         tmp_path, returned_request_id, passes):
@@ -139,7 +143,24 @@ def test_fulfillment_request_id_must_exactly_match_issued_order_and_replay(
     assert semantic.status == "failed"
     assert result.verdict == "failed"
     assert f"expected request_id {fulfillment.subject!r}" in semantic.note
-    assert "observed request_id" in semantic.note
+    assert (f"observed request_id"
+            f" {fulfillment.detail.get('request_id')!r}" in semantic.note)
+
+
+def test_empty_fulfillment_subject_cannot_establish_request_correlation():
+    profile = get_path_profile("a2a-capability-fulfillment@0.1")
+    result = evaluate_path(profile, "path-empty-subject", [TownEvent(
+        event_id="ev-1", run_id="path-empty-subject", at=0,
+        observer="town-requester", kind="fulfillment_observed", subject="",
+        detail={"attempt": 1, "total_cents": 3990,
+                "request_id": "order-issued"},
+    )])
+
+    semantic = stage(result, "semantic_result")
+    assert semantic.status == "failed"
+    assert result.verdict == "failed"
+    assert "expected request_id ''" in semantic.note
+    assert "observed request_id 'order-issued'" in semantic.note
 
 
 def test_duplicate_fulfillment_exposes_idempotency_defect(tmp_path):
