@@ -46,16 +46,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             print("--plugin and --layer apply to Lab scenarios; Track"
                   " profiles run the fixed coordinator contract")
             return 2
-        from .runner import run_town
+        from .runner import RunnerUsageError, run_town
         print(f"nandatown {__version__}: Track run of {name}"
               " (real subprocess agents)")
         identity_dir = None
         if args.identity:
             from .identity_portable import default_keystore_dir
             identity_dir = args.identity_dir or default_keystore_dir()
-        bundle_dir, result = run_town(name, args.out, model=args.model,
-                                      harnesses=harnesses or None,
-                                      identity_dir=identity_dir)
+        try:
+            bundle_dir, result = run_town(name, args.out,
+                                          model=args.model,
+                                          harnesses=harnesses or None,
+                                          identity_dir=identity_dir)
+        except RunnerUsageError as exc:
+            print(exc)
+            return 2
     elif _is_lab(name):
         if harnesses:
             print("--agent applies to Track profiles; Lab scenarios use"

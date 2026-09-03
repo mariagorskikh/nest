@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+import nandatown.runner as runner_module
 from nandatown.bundle import load_bundle
 from nandatown.cli import main
 from nandatown.runner import RunnerError, parse_harness, run_town
@@ -25,6 +26,51 @@ def test_parse_harness_specs():
         parse_harness("telepathy")
     with pytest.raises(RunnerError):
         parse_harness("cmd:")
+
+
+@pytest.fixture
+def reject_startup(monkeypatch):
+    def fail_if_started():
+        raise AssertionError("invalid role reached port allocation")
+
+    monkeypatch.setattr(runner_module, "_free_port", fail_if_started)
+
+
+@pytest.mark.parametrize(("override_name", "overrides", "role"), [
+    ("harnesses", {"seler": "cmd:/does/not/exist"}, "seler"),
+    ("harnesses", {"": "scripted"}, ""),
+    ("external", {"seler": None}, "seler"),
+    ("external", {"": None}, ""),
+    ("harnesses", {"seller": "scripted", "seler": "external"},
+     "seler"),
+    ("external", {"seller": None, "seler": None}, "seler"),
+])
+def test_run_town_rejects_unknown_override_roles_before_startup(
+        tmp_path, reject_startup, override_name, overrides, role):
+    out_dir = tmp_path / "not-created"
+
+    with pytest.raises(
+            RunnerError,
+            match=rf"unknown role {role!r}; supported roles: buyer, seller"):
+        run_town("quote-clean", str(out_dir), **{override_name: overrides})
+
+    assert not out_dir.exists()
+
+
+@pytest.mark.parametrize(("agent", "role"), [
+    ("seler=cmd:/does/not/exist", "seler"),
+    ("=scripted", ""),
+])
+def test_cli_reports_unknown_harness_role_as_usage_error(
+        tmp_path, capsys, reject_startup, agent, role):
+    out_dir = tmp_path / "not-created"
+
+    assert main(["run", "quote-clean", "--agent",
+                 agent, "--out", str(out_dir)]) == 2
+
+    assert f"unknown role {role!r}; supported roles: buyer, seller" in (
+        capsys.readouterr().out)
+    assert not out_dir.exists()
 
 
 def test_cmd_harness_runs_external_agent(tmp_path):
