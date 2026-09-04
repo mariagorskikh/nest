@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from ..records import EvidenceResult, StageResult, TownEvent
 
-LAB_EVALUATOR_VERSION = "lab-0.2.0"
+LAB_EVALUATOR_VERSION = "lab-0.2.1"
 
 VALIDATORS: dict[str, Callable] = {}
 
@@ -103,8 +103,14 @@ def ledger_conserved(trace: Trace) -> StageResult:
                            f"negative balance after {e.event_id}")
     total = sum(balances.values()) + sum(escrow.values())
     if opened == 0 and not evidence:
-        return _passed("ledger_conserved", trace.ids("run_created"),
-                       "no money moved")
+        finished = trace.ids("run_finished")
+        if not finished:
+            return _missing(
+                "ledger_conserved",
+                "no completed-run evidence for a no-money ledger claim",
+            )
+        return _passed("ledger_conserved", finished,
+                       "complete run recorded no money moved")
     if total != opened:
         return _failed("ledger_conserved", evidence,
                        f"opened {opened} cents but ended with {total}")
@@ -129,7 +135,13 @@ def privacy_clean(trace: Trace, redact_fields: list[str]) -> StageResult:
     bad = [e.event_id for e in trace.events if leaks(e.detail)]
     if bad:
         return _failed("privacy", bad, "redacted fields leaked into events")
-    return _passed("privacy", trace.ids("run_created"),
+    finished = trace.ids("run_finished")
+    if not finished:
+        return _missing(
+            "privacy",
+            "no completed-run evidence for a declared-privacy claim",
+        )
+    return _passed("privacy", finished,
                    f"fields {sorted(redact_fields)} never left the run")
 
 
@@ -441,6 +453,18 @@ def evaluate_scenario(spec, run_id: str,
                            f" {spec.validator!r}")]
     else:
         stages = fn(spec, trace)
+        if not stages:
+            stages = [StageResult(
+                name="scenario_coverage", status="error",
+                note=(f"selected validator {spec.validator!r} produced no"
+                      " scenario checks"),
+            )]
+        elif all(stage.status == "not_tested" for stage in stages):
+            stages.append(_missing(
+                "scenario_coverage",
+                f"selected validator {spec.validator!r} produced only"
+                " not_tested checks",
+            ))
     stages.append(ledger_conserved(trace))
     stages.append(privacy_clean(trace, spec.redact_fields))
     from ..evaluator import stage_verdict
