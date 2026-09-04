@@ -205,7 +205,7 @@ def run_path_test(subject_url: str | None, out_dir: str,
         rerun += f" --index {index_file} --agent-name {agent_name}"
     else:
         rerun += f" --url {subject_url}"
-    rerun += f" --profile {profile.ref}"
+    rerun += f" --path-profile {profile.ref}"
     if pin_card_digest:
         rerun += f" --pin-card-digest {pin_card_digest}"
 

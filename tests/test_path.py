@@ -1,4 +1,11 @@
+import argparse
 import json
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import time
 
 import httpx
 import pytest
@@ -6,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from nandatown.a2a_adapter import build_a2a_app, build_agent_card
 from nandatown.bundle import load_bundle, verify_bundle
-from nandatown.path_profiles import get_path_profile
+from nandatown.path_profiles import PATH_PROFILES, get_path_profile
 from nandatown.path_runner import run_path_test
 from nandatown.records import fingerprint
 from nandatown.report import render_report
@@ -24,6 +31,32 @@ def stage(result, name):
 
 def statuses(result):
     return {s.name: s.status for s in result.stages}
+
+
+def start_reference_agent():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
+                       PYTHONPATH=os.path.join(source_root, "src"))
+    process = subprocess.Popen(
+        [sys.executable, "-m", "nandatown.cli", "a2a", "serve",
+         "--port", str(port)], env=environment,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    url = f"http://127.0.0.1:{port}"
+    import httpx
+
+    for _ in range(50):
+        try:
+            if httpx.get(url + "/.well-known/agent-card.json",
+                         trust_env=False).status_code == 200:
+                return process, url
+        except httpx.HTTPError:
+            time.sleep(0.05)
+    process.terminate()
+    process.wait()
+    raise RuntimeError("reference A2A agent did not start")
 
 
 def test_healthy_agent_passes_the_path(tmp_path):
@@ -219,3 +252,42 @@ def test_owned_path_keeps_card_session_for_both_logical_requests(tmp_path, monke
     _, result = run_path_test(SUBJECT, str(tmp_path))
     assert result.verdict == "passed"
     assert len(clients) == 1 and clients[0].is_closed
+
+
+def test_generated_rerun_keeps_explicit_path_profile_when_default_changes(
+        tmp_path, monkeypatch):
+    """Catches a generated --profile being parsed as the Track flag."""
+    fallback = get_path_profile("a2a-capability-fulfillment@0.1").model_copy(
+        update={"version": "0.2"})
+    monkeypatch.setitem(PATH_PROFILES, fallback.ref, fallback)
+    original_add_argument = argparse.ArgumentParser.add_argument
+
+    def different_path_default(parser, *names, **kwargs):
+        if "--path-profile" in names:
+            kwargs["default"] = fallback.ref
+        return original_add_argument(parser, *names, **kwargs)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "add_argument",
+                        different_path_default)
+    process, url = start_reference_agent()
+    try:
+        expected_digest = fingerprint(build_agent_card(url))
+        bundle_dir, _ = run_path_test(
+            url, str(tmp_path),
+            profile_ref="a2a-capability-fulfillment@0.1",
+            pin_card_digest=expected_digest)
+        rerun = load_bundle(bundle_dir)["run"].config["rerun_command"]
+        assert url in rerun
+        assert "--pin-card-digest " + expected_digest in rerun
+
+        monkeypatch.chdir(tmp_path)
+        from nandatown.cli import main
+
+        assert main(shlex.split(rerun)[1:]) == 0
+        rerun_bundle = next((tmp_path / "runs").iterdir())
+        replayed = load_bundle(str(rerun_bundle))
+        assert replayed["run"].profile_name == "a2a-capability-fulfillment@0.1"
+        assert replayed["run"].config["pinned_card_digest"] == expected_digest
+    finally:
+        process.terminate()
+        process.wait()
