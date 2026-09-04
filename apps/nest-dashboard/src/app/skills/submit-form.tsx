@@ -36,6 +36,13 @@ export function SubmitForm() {
     CHECKLIST.map(() => false),
   );
   const formRef = useRef<HTMLFormElement>(null);
+  // Block repeat submit events synchronously, before the pending render can
+  // disable the button. This is a UI guard, not server-side idempotency.
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    if (!pending) submittingRef.current = false;
+  }, [pending]);
 
   // Clear the fields after a successful save.
   useEffect(() => {
@@ -47,7 +54,18 @@ export function SubmitForm() {
   }, [state.ok]);
 
   return (
-    <form ref={formRef} action={formAction} className="space-y-7">
+    <form
+      ref={formRef}
+      action={formAction}
+      onSubmit={(event) => {
+        if (submittingRef.current) {
+          event.preventDefault();
+          return;
+        }
+        submittingRef.current = true;
+      }}
+      className="space-y-7"
+    >
       {/* Readiness checklist */}
       <div className="rounded-2xl border border-cream-400/70 bg-cream-100/70 p-5">
         <p className={labelClass}>Before you submit — the steps</p>
