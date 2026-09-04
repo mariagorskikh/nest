@@ -368,6 +368,49 @@ credit: [James's #222](https://github.com/projnanda/nandatown/pull/222)
 adopt their legacy middleware, Town-specific handshake, deployment code,
 or loopback-only origin restrictions.
 
+#### Check the item, not only the price
+
+Select `--path-profile a2a-quote-intent@0.1` to test an explicit quote:
+two blue widgets from `town-reference`, denominated in USD, with a maximum
+total of 3,990 cents. The response must contain the exact `sku`, `color`,
+`quantity`, `merchant_id`, `currency`, and current `request_id`.
+`total_cents` must be a JSON integer from 0 through 3990; discounts and free
+quotes are allowed, strings, floats and booleans are not. Missing terms fail;
+Town never substitutes request values for an agent's missing response fields.
+
+In two terminals:
+
+```bash
+nandatown a2a serve --defect wrong_item
+nandatown test-agent --url http://127.0.0.1:8940 --path-profile a2a-quote-intent@0.1
+```
+
+The reference seller deliberately offers a red item for 3,000 cents. The price
+is within budget, but the report names `color` as the semantic mismatch.
+Restart the seller without `--defect wrong_item` and rerun for the healthy
+control. Other A2A agents can implement this same JSON contract; no specific
+agent runtime, model key or payment provider is required by Town.
+
+The bundle stores the selected profile, observed quote fields, request
+correlation, response digest and `path-quote-intent-0.1` evaluator version.
+`nandatown verify BUNDLE_DIR` replays the judgment offline. The controlled
+duplicate checks whether the returned quote changes, not whether a merchant
+performed a second purchase. A matching merchant identifier is a returned
+claim, not independent proof of merchant ownership. This is a synthetic quote
+conformance test, not purchase authorization, payment settlement, physical
+delivery verification or outside-user adoption evidence.
+
+The default remains `a2a-capability-fulfillment@0.2`; both earlier price-only
+profiles and their `path-0.2` evaluator remain unchanged. Non-object quote
+artifacts are now recorded as unparseable subject output rather than a Town
+driver exception. Older recorded events retain their original interpretation.
+
+Requirements credit: [#215 by chainaim-sathya](https://github.com/projnanda/nandatown/pull/215)
+(`0b7667d5896bedd80f237a188f7cd0607d46237f`) identified the cheaper-but-wrong-item
+gap. This fresh implementation preserves that narrow requirement; it does not
+port the legacy Prava client, live charges, intent certificates, FX conversions,
+return policy or hosted service.
+
 ## Receipts and Town Proof
 
 ```

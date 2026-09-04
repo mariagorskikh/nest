@@ -15,6 +15,9 @@ from pydantic import BaseModel, ConfigDict
 
 from .records import fingerprint
 
+QUOTE_INTENT_EVALUATOR = "quote-intent-evaluator@0.1"
+QUOTE_INTENT_FIELDS = ("sku", "color", "quantity", "merchant_id", "currency")
+
 
 class PathProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -38,6 +41,20 @@ class PathProfile(BaseModel):
 
 
 PATH_PROFILES: dict[str, PathProfile] = {
+    "a2a-quote-intent@0.1": PathProfile(
+        profile_id="a2a-quote-intent",
+        version="0.1",
+        protocol="a2a",
+        capability="quote",
+        request={"sku": "widget", "quantity": 2, "unit_price_cents": 1995,
+                 "color": "blue", "merchant_id": "town-reference", "currency": "USD"},
+        expected={"max_total_cents": 3990,
+                  "quote": {"sku": "widget", "quantity": 2, "color": "blue",
+                            "merchant_id": "town-reference", "currency": "USD"}},
+        controlled_condition="duplicate_request",
+        limits={"timeout_seconds": 15.0, "max_response_bytes": 1_048_576},
+        evaluator=QUOTE_INTENT_EVALUATOR,
+    ),
     "a2a-capability-fulfillment@0.1": PathProfile(
         profile_id="a2a-capability-fulfillment",
         version="0.1",

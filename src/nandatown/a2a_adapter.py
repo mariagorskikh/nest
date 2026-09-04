@@ -18,6 +18,7 @@ import httpx
 from fastapi import FastAPI, Request
 
 from . import __version__
+from .path_profiles import QUOTE_INTENT_FIELDS
 from .a2a_transport import (
     DEFAULT_MAX_RESPONSE_BYTES,
     HTTPStatusError,
@@ -46,7 +47,10 @@ def build_agent_card(base_url: str) -> dict[str, Any]:
             "name": "Quote",
             "description": "Given JSON {sku, quantity,"
                            " unit_price_cents}, returns JSON"
-                           " {request_id, total_cents}.",
+                           " {request_id, total_cents}. Optional item terms"
+                           " {color, merchant_id, currency} request an explicit"
+                           " quote echoing sku, quantity and those terms."
+                           " This reference fixture performs no purchase.",
             "tags": ["quote", "commerce", "nandatown"],
         }],
     }
@@ -55,7 +59,7 @@ def build_agent_card(base_url: str) -> dict[str, Any]:
 def build_a2a_app(base_url: str = "http://127.0.0.1:8940",
                   defect: str | None = None):
     """The reference A2A seller, optionally with one planted defect:
-    wrong_total, duplicate_fulfillment, or card_drift. Planted defects
+    wrong_total, wrong_item, duplicate_fulfillment, or card_drift. Planted defects
     are how the path test's failure cases are demonstrated for real."""
     app = FastAPI(title="nandatown a2a seller", version=__version__)
     tasks: dict[str, dict[str, Any]] = {}
@@ -84,8 +88,13 @@ def build_a2a_app(base_url: str = "http://127.0.0.1:8940",
                 return "completed", {"request_id": request_id,
                                      "total_cents": total,
                                      "fulfillment_number": count}
-        return "completed", {"request_id": request_id,
-                             "total_cents": total}
+        quote = {"request_id": request_id, "total_cents": total}
+        if any(field in request for field in ("color", "merchant_id", "currency")):
+            quote.update({field: request[field] for field in QUOTE_INTENT_FIELDS
+                          if field in request})
+        if defect == "wrong_item":
+            quote.update({"color": "red", "total_cents": 3000})
+        return "completed", quote
 
     @app.post("/")
     async def rpc(request: Request):

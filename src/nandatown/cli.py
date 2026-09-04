@@ -939,7 +939,7 @@ def main(argv: list[str] | None = None) -> int:
     p_a2a.add_argument("--host", default="127.0.0.1")
     p_a2a.add_argument("--port", type=int, default=8940)
     p_a2a.add_argument("--defect", default=None,
-                       choices=["wrong_total", "duplicate_fulfillment",
+                       choices=["wrong_total", "wrong_item", "duplicate_fulfillment",
                                 "card_drift"],
                        help="plant one defect in the reference seller"
                             " to demonstrate a failing path test")
