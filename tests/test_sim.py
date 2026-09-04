@@ -108,12 +108,23 @@ def test_marketplace_key_events(tmp_path):
 
 def test_marketplace_redaction_applied(tmp_path):
     bundle_dir, _ = run_lab("marketplace", str(tmp_path))
-    with open(f"{bundle_dir}/profile.json") as f:
-        text = f.read()
-    assert "10000" not in text.split("budget_cents")[1].split(",")[0]
-    with open(f"{bundle_dir}/events.jsonl") as f:
-        assert "budget_cents" not in f.read() or True
     bundle = load_bundle(bundle_dir)
+
+    def assert_declared_fields_redacted(value, fields):
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key in fields:
+                    assert nested == "[redacted]"
+                assert_declared_fields_redacted(nested, fields)
+        elif isinstance(value, list):
+            for nested in value:
+                assert_declared_fields_redacted(nested, fields)
+
+    assert_declared_fields_redacted(
+        bundle["profile"].model_dump(), {"budget_cents"},
+    )
+    for event in bundle["events"]:
+        assert_declared_fields_redacted(event.model_dump(), {"budget_cents"})
     buyer = next(a for a in bundle["profile"].agents if a.role == "buyer")
     assert buyer.config["budget_cents"] == "[redacted]"
 
