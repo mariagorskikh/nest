@@ -150,7 +150,8 @@ class Buyer(SimAgent):
         order_id = f"order-{self.name}-{self.round}"
         self.api.escrow_hold(unit_cents * qty, ref=order_id)
         self.api.send(self.active["seller"], "purchase_order",
-                      {"order_id": order_id, "sku": self.config["sku"],
+                      {"nid": self.active["nid"], "order_id": order_id,
+                       "sku": self.config["sku"],
                        "quantity": qty, "unit_cents": unit_cents})
 
     def handle_delivery(self, msg):

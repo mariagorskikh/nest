@@ -7,12 +7,13 @@ evidence is reported as missing, never inferred.
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any, Callable
 
 from ..records import EvidenceResult, StageResult, TownEvent
 
-LAB_EVALUATOR_VERSION = "lab-0.2.5"
+LAB_EVALUATOR_VERSION = "lab-0.2.6"
 
 VALIDATORS: dict[str, Callable] = {}
 
@@ -38,6 +39,11 @@ def _missing(name, note):
     return StageResult(name=name, status="not_enough_evidence", note=note)
 
 
+def _event_ids(events: list[TownEvent]) -> list[str]:
+    return [event.event_id for event in events
+            if isinstance(event.event_id, str) and event.event_id]
+
+
 def _check(name: str, ok: bool, evidence: list[str], fail_note: str,
            pass_note: str = "") -> StageResult:
     if not evidence:
@@ -47,8 +53,9 @@ def _check(name: str, ok: bool, evidence: list[str], fail_note: str,
 
 
 class Trace:
-    def __init__(self, events: list[TownEvent]):
+    def __init__(self, events: list[TownEvent], run_id: str | None = None):
         self.events = events
+        self.run_id = run_id
 
     def find(self, ekind: str, **conds) -> list[TownEvent]:
         out = []
@@ -59,7 +66,8 @@ class Trace:
                 continue
             if "subject" in conds and e.subject != conds["subject"]:
                 continue
-            ok = all(e.detail.get(k) == v for k, v in conds.items()
+            detail = e.detail if isinstance(e.detail, dict) else {}
+            ok = all(detail.get(k) == v for k, v in conds.items()
                      if k not in ("observer", "subject"))
             if ok:
                 out.append(e)
@@ -79,31 +87,65 @@ def ledger_conserved(trace: Trace) -> StageResult:
     evidence: list[str] = []
     for e in trace.events:
         d = e.detail
+        if (e.kind in {"account_opened", "escrow_held", "escrow_released",
+                       "escrow_refunded", "payment_settled"}
+                and not isinstance(d, dict)):
+            return _failed("ledger_conserved", _event_ids([e]),
+                           f"malformed money event {e.event_id}")
         if e.kind == "account_opened":
-            balances[e.subject] = d["balance_cents"]
-            opened += d["balance_cents"]
+            amount = d.get("balance_cents")
+            if (not isinstance(e.subject, str) or not e.subject
+                    or type(amount) is not int):
+                return _failed("ledger_conserved", _event_ids([e]),
+                               f"malformed account opening {e.event_id}")
+            balances[e.subject] = amount
+            opened += amount
         elif e.kind == "escrow_held":
-            balances[d["from"]] = balances.get(d["from"], 0) - d["cents"]
-            escrow[e.subject] = d["cents"]
-            evidence.append(e.event_id)
+            payer, amount = d.get("from"), d.get("cents")
+            if (not isinstance(e.subject, str) or not e.subject
+                    or not isinstance(payer, str) or not payer
+                    or type(amount) is not int):
+                return _failed("ledger_conserved", _event_ids([e]),
+                               f"malformed escrow hold {e.event_id}")
+            balances[payer] = balances.get(payer, 0) - amount
+            escrow[e.subject] = amount
+            evidence.extend(_event_ids([e]))
         elif e.kind == "escrow_released":
+            payee, amount = d.get("to"), d.get("cents")
+            if (not isinstance(e.subject, str) or not e.subject
+                    or not isinstance(payee, str) or not payee
+                    or type(amount) is not int):
+                return _failed("ledger_conserved", _event_ids([e]),
+                               f"malformed escrow release {e.event_id}")
             escrow.pop(e.subject, None)
-            balances[d["to"]] = balances.get(d["to"], 0) + d["cents"]
-            evidence.append(e.event_id)
+            balances[payee] = balances.get(payee, 0) + amount
+            evidence.extend(_event_ids([e]))
         elif e.kind == "escrow_refunded":
+            payee, amount = d.get("to"), d.get("cents")
+            if (not isinstance(e.subject, str) or not e.subject
+                    or not isinstance(payee, str) or not payee
+                    or type(amount) is not int):
+                return _failed("ledger_conserved", _event_ids([e]),
+                               f"malformed escrow refund {e.event_id}")
             escrow.pop(e.subject, None)
-            balances[d["to"]] = balances.get(d["to"], 0) + d["cents"]
-            evidence.append(e.event_id)
+            balances[payee] = balances.get(payee, 0) + amount
+            evidence.extend(_event_ids([e]))
         elif e.kind == "payment_settled" and d.get("via") != "escrow":
-            balances[d["from"]] = balances.get(d["from"], 0) - d["cents"]
-            balances[d["to"]] = balances.get(d["to"], 0) + d["cents"]
-            evidence.append(e.event_id)
+            payer, payee, amount = d.get("from"), d.get("to"), d.get("cents")
+            if (not isinstance(payer, str) or not payer
+                    or not isinstance(payee, str) or not payee
+                    or type(amount) is not int):
+                return _failed("ledger_conserved", _event_ids([e]),
+                               f"malformed payment settlement {e.event_id}")
+            balances[payer] = balances.get(payer, 0) - amount
+            balances[payee] = balances.get(payee, 0) + amount
+            evidence.extend(_event_ids([e]))
         if any(v < 0 for v in balances.values()):
-            return _failed("ledger_conserved", [e.event_id],
+            return _failed("ledger_conserved", _event_ids([e]),
                            f"negative balance after {e.event_id}")
     total = sum(balances.values()) + sum(escrow.values())
     if opened == 0 and not evidence:
-        finished = trace.ids("run_finished")
+        finished = _event_ids(trace.find("run_finished"))
         if not finished:
             return _missing(
                 "ledger_conserved",
@@ -152,9 +194,25 @@ def reputation_consistent(trace: Trace) -> StageResult:
     held authority, or proved misconduct. Receipt signatures are not present
     in these events and are not cryptographically verified by this check.
     """
+    reputation_events = [
+        event for event in trace.events
+        if event.kind in {"receipt_attested", "reputation_updated"}
+    ]
+    reputation_ids = _event_ids(reputation_events)
+    if (len(reputation_ids) != len(reputation_events)
+            or len(reputation_ids) != len(set(reputation_ids))):
+        return _failed(
+            "reputation", reputation_ids,
+            "reputation evidence has malformed or ambiguous event IDs")
+
     receipts: dict[str, list[tuple[int, TownEvent]]] = {}
     for index, event in enumerate(trace.events):
         if event.kind == "receipt_attested":
+            if (not isinstance(event.detail, dict)
+                    or type(event.at) not in (int, float)
+                    or not math.isfinite(event.at)):
+                return _failed("reputation", _event_ids([event]),
+                               "receipt event is malformed")
             record_id = event.detail.get("record_id")
             if isinstance(record_id, str) and record_id:
                 receipts.setdefault(record_id, []).append((index, event))
@@ -167,6 +225,12 @@ def reputation_consistent(trace: Trace) -> StageResult:
         if event.kind != "reputation_updated":
             continue
         detail = event.detail
+        if (not isinstance(detail, dict)
+                or not isinstance(event.subject, str) or not event.subject
+                or type(event.at) not in (int, float)
+                or not math.isfinite(event.at)):
+            return _failed("reputation", _event_ids([event]),
+                           "score update is malformed")
         outcome = detail.get("outcome")
         delta = 1 if outcome == "good" else -1
         score = scores.get(event.subject, 0) + delta
@@ -215,6 +279,350 @@ def reputation_consistent(trace: Trace) -> StageResult:
                    "claim truth and reporter authority are not tested")
 
 
+def _marketplace_transactions(
+        spec, trace: Trace) -> tuple[StageResult, StageResult, list[TownEvent]]:
+    """Bind the two marketplace negotiations to their ledger movements."""
+    buyers = [agent for agent in spec.agents if agent.role == "buyer"]
+    seller_specs = [agent for agent in spec.agents if agent.role == "seller"]
+    config_note = ("requires exactly one configured buyer and identifiable"
+                   " configured sellers with integer price terms")
+    if len(buyers) != 1 or not seller_specs:
+        missing = _missing("negotiation", config_note)
+        return missing, _missing("settlement", config_note), []
+
+    buyer = buyers[0]
+    buyer_config = buyer.config if isinstance(buyer.config, dict) else {}
+    cap = buyer_config.get("cap_cents")
+    quantity = buyer_config.get("quantity")
+    sku = buyer_config.get("sku")
+    if (not isinstance(buyer.name, str) or not buyer.name
+            or type(cap) is not int or cap < 0
+            or type(quantity) is not int or quantity < 1
+            or not isinstance(sku, str) or not sku):
+        missing = _missing("negotiation", config_note)
+        return missing, _missing("settlement", config_note), []
+
+    sellers = {}
+    for seller in seller_specs:
+        config = seller.config if isinstance(seller.config, dict) else {}
+        floor = config.get("floor_cents")
+        ask = config.get("ask_cents")
+        seller_sku = config.get("sku")
+        if (not isinstance(seller.name, str) or not seller.name
+                or seller.name in sellers
+                or type(floor) is not int or type(ask) is not int
+                or not isinstance(seller_sku, str) or not seller_sku):
+            missing = _missing("negotiation", config_note)
+            return missing, _missing("settlement", config_note), []
+        sellers[seller.name] = seller
+
+    run_created = trace.find("run_created")
+    starts = trace.find("negotiation_started")
+    proposals = trace.find("offer_made") + trace.find("counter_made")
+    accepted = trace.find("offer_accepted")
+    held = trace.find("escrow_held")
+    released = trace.find("escrow_released")
+    settled = trace.find("payment_settled")
+    orders = trace.find("message_sent", kind="purchase_order")
+    positions = {id(event): index
+                 for index, event in enumerate(trace.events)}
+
+    def ordered_ids(records):
+        return _event_ids(sorted(records, key=lambda event: positions[id(event)]))
+
+    def count_records(records, label, problems, gaps):
+        if len(records) < 2:
+            gaps.append(f"missing {label} evidence for one of two transactions")
+        elif len(records) > 2:
+            problems.append(f"expected exactly two {label} records")
+
+    def validate_metadata(records, problems, expected_run=None):
+        trace_id_counts: dict[str, int] = {}
+        for event in trace.events:
+            if isinstance(event.event_id, str) and event.event_id:
+                trace_id_counts[event.event_id] = (
+                    trace_id_counts.get(event.event_id, 0) + 1)
+        run_ids = set()
+        for event in records:
+            if (not isinstance(event.event_id, str) or not event.event_id
+                    or trace_id_counts.get(event.event_id) != 1):
+                problems.append("transaction evidence has ambiguous event IDs")
+            if not isinstance(event.run_id, str) or not event.run_id:
+                problems.append("transaction evidence has an invalid run ID")
+            else:
+                run_ids.add(event.run_id)
+                if expected_run is not None and event.run_id != expected_run:
+                    problems.append(
+                        "transaction evidence does not match the recorded run")
+        if len(run_ids) > 1:
+            problems.append("transaction evidence must come from one run")
+
+    def causally_ordered(records):
+        for earlier, later in zip(records, records[1:]):
+            if positions[id(earlier)] >= positions[id(later)]:
+                return False
+            if (type(earlier.at) not in (int, float)
+                    or type(later.at) not in (int, float)
+                    or not math.isfinite(earlier.at)
+                    or not math.isfinite(later.at)
+                    or earlier.at > later.at):
+                return False
+        return True
+
+    negotiation_problems: list[str] = []
+    negotiation_gaps: list[str] = []
+    if not run_created:
+        negotiation_gaps.append("missing run creation evidence")
+    elif len(run_created) > 1:
+        negotiation_problems.append("expected exactly one run creation record")
+    expected_run = (trace.run_id
+                    if isinstance(trace.run_id, str) and trace.run_id else None)
+    if len(run_created) == 1:
+        created = run_created[0]
+        created_detail = (created.detail
+                          if isinstance(created.detail, dict) else {})
+        if (not isinstance(created.run_id, str) or not created.run_id
+                or created.observer != "town"
+                or created.subject != created.run_id
+                or (expected_run is not None
+                    and created.run_id != expected_run)
+                or created_detail.get("scenario") != spec.name):
+            negotiation_problems.append(
+                "run creation does not identify this marketplace run")
+        else:
+            expected_run = created.run_id
+    count_records(starts, "negotiation", negotiation_problems,
+                  negotiation_gaps)
+    count_records(accepted, "acceptance", negotiation_problems,
+                  negotiation_gaps)
+    negotiation_records = run_created + starts + proposals + accepted
+    validate_metadata(negotiation_records, negotiation_problems, expected_run)
+    nids = [event.subject for event in starts]
+    if any(not isinstance(nid, str) or not nid for nid in nids):
+        negotiation_problems.append("negotiations require valid IDs")
+    elif len(nids) != len(set(nids)):
+        negotiation_problems.append("negotiation IDs must be unique")
+    if (len(starts) == 2
+            and any(event.subject not in nids for event in proposals)):
+        negotiation_problems.append(
+            "each negotiation offer must name one of the two negotiation IDs")
+
+    chains = []
+    if len(starts) == len(accepted) == 2:
+        ordered_starts = sorted(starts,
+                                key=lambda event: positions[id(event)])
+        for start in ordered_starts:
+            matching_acceptances = [
+                event for event in accepted if event.subject == start.subject
+            ]
+            if len(matching_acceptances) != 1:
+                negotiation_problems.append(
+                    "each negotiation ID needs exactly one acceptance")
+                continue
+            acceptance = matching_acceptances[0]
+            start_detail = (start.detail
+                            if isinstance(start.detail, dict) else {})
+            acceptance_detail = (acceptance.detail
+                                 if isinstance(acceptance.detail, dict) else {})
+            chain_proposals = sorted(
+                [event for event in proposals
+                 if event.subject == start.subject],
+                key=lambda event: positions[id(event)])
+            seller_name = start_detail.get("seller")
+            seller = (sellers.get(seller_name)
+                      if isinstance(seller_name, str) else None)
+            accepted_price = acceptance_detail.get("cents")
+            if (start.observer != buyer.name
+                    or seller is None
+                    or seller.config["sku"] != sku
+                    or start_detail.get("subject") != sku):
+                negotiation_problems.append(
+                    "negotiation does not name the configured buyer, seller,"
+                    " and subject")
+            participants = (buyer.name, seller_name)
+            proposal_ok = bool(chain_proposals)
+            previous_observer = None
+            for proposal in chain_proposals:
+                proposal_detail = (proposal.detail
+                                   if isinstance(proposal.detail, dict) else {})
+                expected_kind = ("offer_made"
+                                 if proposal.observer == buyer.name
+                                 else "counter_made")
+                if (proposal.observer not in participants
+                        or proposal.kind != expected_kind
+                        or type(proposal_detail.get("cents")) is not int
+                        or (previous_observer is not None
+                            and proposal.observer == previous_observer)):
+                    proposal_ok = False
+                previous_observer = proposal.observer
+            last_proposal_detail = (
+                chain_proposals[-1].detail
+                if (chain_proposals
+                    and isinstance(chain_proposals[-1].detail, dict)) else {})
+            if (not proposal_ok
+                    or chain_proposals[0].observer != buyer.name
+                    or acceptance.subject != start.subject
+                    or acceptance.observer not in participants
+                    or acceptance.observer == chain_proposals[-1].observer
+                    or accepted_price != last_proposal_detail.get("cents")):
+                negotiation_problems.append(
+                    "acceptance does not follow the negotiation's alternating"
+                    " buyer and seller offers")
+            if type(accepted_price) is not int:
+                negotiation_problems.append(
+                    "accepted unit price must be an exact integer number of cents")
+            elif seller is not None:
+                floor = seller.config["floor_cents"]
+                ask = seller.config["ask_cents"]
+                if not floor <= accepted_price <= min(ask, cap):
+                    negotiation_problems.append(
+                        "accepted price is outside the negotiated seller and"
+                        " buyer bounds")
+            causal_records = ([run_created[0], start,
+                               *chain_proposals, acceptance]
+                              if len(run_created) == 1
+                              else [start, *chain_proposals, acceptance])
+            if not causally_ordered(causal_records):
+                negotiation_problems.append(
+                    "negotiation and acceptance must be in causal order")
+            chains.append({
+                "start": start,
+                "accepted": acceptance,
+                "seller": seller_name,
+                "price": accepted_price,
+            })
+
+    negotiation_evidence = ordered_ids(negotiation_records)
+    if negotiation_problems:
+        negotiation_stage = _failed(
+            "negotiation", negotiation_evidence, negotiation_problems[0])
+    elif negotiation_gaps:
+        negotiation_stage = _missing("negotiation", negotiation_gaps[0])
+    else:
+        negotiation_stage = _passed(
+            "negotiation", negotiation_evidence,
+            "two configured negotiations have bounded integer acceptances")
+
+    settlement_problems = list(negotiation_problems)
+    settlement_gaps = list(negotiation_gaps)
+    for records, label in ((orders, "purchase order"),
+                           (held, "escrow hold"),
+                           (released, "escrow release"),
+                           (settled, "payment settlement")):
+        count_records(records, label, settlement_problems, settlement_gaps)
+    settlement_records = negotiation_records + orders + held + released + settled
+    validate_metadata(settlement_records, settlement_problems, expected_run)
+
+    order_ids = []
+    if (len(chains) == 2
+            and all(len(records) == 2
+                    for records in (orders, held, released, settled))):
+        for chain in chains:
+            nid = chain["start"].subject
+            matching_orders = []
+            for order in orders:
+                detail = order.detail if isinstance(order.detail, dict) else {}
+                body = detail.get("body")
+                if isinstance(body, dict) and body.get("nid") == nid:
+                    matching_orders.append(order)
+            if len(matching_orders) != 1:
+                settlement_problems.append(
+                    "each negotiation ID needs exactly one purchase order")
+                continue
+
+            order = matching_orders[0]
+            order_detail = (order.detail
+                            if isinstance(order.detail, dict) else {})
+            body = order_detail.get("body")
+            body = body if isinstance(body, dict) else {}
+            order_id = body.get("order_id")
+            linked_records = []
+            for label, records in (("escrow hold", held),
+                                   ("escrow release", released),
+                                   ("payment settlement", settled)):
+                matches = [event for event in records
+                           if event.subject == order_id]
+                if len(matches) != 1:
+                    settlement_problems.append(
+                        f"each order ID needs exactly one {label}")
+                    break
+                linked_records.append(matches[0])
+            if len(linked_records) != 3:
+                continue
+            hold, release, payment = linked_records
+            sequence = [chain["start"], chain["accepted"], hold, order,
+                        release, payment]
+            if not causally_ordered(sequence):
+                settlement_problems.append(
+                    "transaction records must be in causal order")
+
+            unit_cents = body.get("unit_cents")
+            ordered_quantity = body.get("quantity")
+            if not isinstance(order_id, str) or not order_id:
+                settlement_problems.append(
+                    "purchase order requires a valid order ID")
+            else:
+                order_ids.append(order_id)
+            if (order.observer != buyer.name
+                    or order_detail.get("to") != chain["seller"]
+                    or order_detail.get("kind") != "purchase_order"):
+                settlement_problems.append(
+                    "purchase order does not name the configured buyer and seller")
+            if (body.get("sku") != sku
+                    or type(ordered_quantity) is not int
+                    or ordered_quantity != quantity
+                    or type(unit_cents) is not int
+                    or unit_cents != chain["price"]
+                    or unit_cents > cap):
+                settlement_problems.append(
+                    "purchase order does not match negotiated SKU, quantity, and price")
+
+            total = (unit_cents * ordered_quantity
+                     if (type(unit_cents) is int
+                         and type(ordered_quantity) is int) else None)
+            hold_detail = hold.detail if isinstance(hold.detail, dict) else {}
+            release_detail = (release.detail
+                              if isinstance(release.detail, dict) else {})
+            payment_detail = (payment.detail
+                              if isinstance(payment.detail, dict) else {})
+            if (hold.observer != "town" or hold.subject != order_id
+                    or hold_detail.get("from") != buyer.name
+                    or type(hold_detail.get("cents")) is not int
+                    or hold_detail.get("cents") != total):
+                settlement_problems.append(
+                    "escrow hold does not match the order, buyer, and exact total")
+            if (release.observer != "town" or release.subject != order_id
+                    or release_detail.get("to") != chain["seller"]
+                    or type(release_detail.get("cents")) is not int
+                    or release_detail.get("cents") != total):
+                settlement_problems.append(
+                    "escrow release does not match the order, seller, and exact total")
+            if (payment.observer != "town" or payment.subject != order_id
+                    or payment_detail.get("from") != buyer.name
+                    or payment_detail.get("to") != chain["seller"]
+                    or payment_detail.get("via") != "escrow"
+                    or type(payment_detail.get("cents")) is not int
+                    or payment_detail.get("cents") != total):
+                settlement_problems.append(
+                    "settlement does not match the order, ledger parties,"
+                    " and exact total")
+
+    if len(order_ids) == 2 and len(set(order_ids)) != 2:
+        settlement_problems.append("order IDs must be unique")
+
+    settlement_evidence = ordered_ids(settlement_records)
+    if settlement_problems:
+        settlement_stage = _failed(
+            "settlement", settlement_evidence, settlement_problems[0])
+    elif settlement_gaps:
+        settlement_stage = _missing("settlement", settlement_gaps[0])
+    else:
+        settlement_stage = _passed(
+            "settlement", settlement_evidence,
+            "two orders match their negotiations and exact escrow settlements")
+    return negotiation_stage, settlement_stage, released
+
+
 @validator("marketplace")
 def marketplace(spec, trace: Trace) -> list[StageResult]:
     stages = []
@@ -227,37 +635,8 @@ def marketplace(spec, trace: Trace) -> list[StageResult]:
         " requests (two in round one, one remembered-seller request in"
         " round two)"))
 
-    accepted = trace.find("offer_accepted")
-    floors = [a.config["floor_cents"] for a in spec.agents
-              if a.role == "seller"]
-    asks = [a.config["ask_cents"] for a in spec.agents if a.role == "seller"]
-    buyer = next(a for a in spec.agents if a.role == "buyer")
-    cap = buyer.config["cap_cents"]
-    price_ok = all(min(floors) <= e.detail["cents"] <= min(max(asks), cap)
-                   for e in accepted)
-    stages.append(_check(
-        "negotiation", len(accepted) == 2 and price_ok,
-        [e.event_id for e in accepted],
-        "expected two agreed negotiations at a price between the floor"
-        " and the lesser of the ask and buyer cap"))
-
-    held = trace.find("escrow_held")
-    released = trace.find("escrow_released")
-    settled = trace.find("payment_settled", via="escrow")
-    orders = trace.find("message_sent", kind="purchase_order")
-    max_total = cap * buyer.config["quantity"]
-    ordered_within_cap = all(
-        order.detail["body"]["unit_cents"] <= cap for order in orders)
-    settled_within_cap = all(
-        event.detail["cents"] <= max_total
-        for event in held + released + settled)
-    stages.append(_check(
-        "settlement",
-        len(held) == len(released) == len(settled) == len(orders) == 2
-        and ordered_within_cap and settled_within_cap,
-        [event.event_id for event in held + released + settled + orders],
-        "expected exactly two capped purchase orders, escrow holds,"
-        " releases, and settlements"))
+    negotiation, settlement, released = _marketplace_transactions(spec, trace)
+    stages.extend((negotiation, settlement))
 
     dup_fault = trace.ids("message_duplicated")
     recognized = trace.ids("duplicate_recognized")
@@ -720,7 +1099,7 @@ def adapted(spec, trace: Trace) -> list[StageResult]:
 
 def evaluate_scenario(spec, run_id: str,
                       events: list[TownEvent]) -> EvidenceResult:
-    trace = Trace(events)
+    trace = Trace(events, run_id)
     fn = VALIDATORS.get(spec.validator)
     if fn is None:
         stages = [_missing("validator",
