@@ -12,6 +12,7 @@ import argparse
 import sys
 
 from . import __version__
+from .path_profiles import DEFAULT_PATH_PROFILE
 
 
 def _is_lab(name: str) -> bool:
@@ -725,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
                              " Town acts as deterministic counterpart"
                              " and observer")
     p_test.add_argument("--path-profile",
-                        default="a2a-capability-fulfillment@0.1",
+                        default=DEFAULT_PATH_PROFILE,
                         help="the exact versioned path profile")
     p_test.add_argument("--pin-card-digest", default=None,
                         help="expected agent card fingerprint; a"

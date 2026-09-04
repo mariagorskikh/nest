@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -175,6 +176,82 @@ def test_profile_is_frozen_and_fingerprinted():
     assert profile.fingerprint().startswith("sha256:")
     with pytest.raises(KeyError):
         get_path_profile("nonsense@9.9")
+
+
+def test_oversized_card_does_not_reach_path_invocation(tmp_path):
+    url = "http://fixture.invalid"
+    card = build_agent_card(url)
+    card["description"] = "x" * 1_048_576
+    methods = []
+    def handle(request):
+        methods.append(request.method)
+        return httpx.Response(200, json=card)
+    with httpx.Client(base_url=url, transport=httpx.MockTransport(handle)) as http:
+        bundle_dir, result = run_path_test(url, str(tmp_path), http=http)
+        assert not http.is_closed
+    assert methods == ["GET"]
+    assert stage(result, "agent_card_retrieval").status == "failed"
+    assert stage(result, "agent_card_retrieval").note == (
+        "a2a_response_budget_exceeded: selected local byte budget exceeded for this run")
+    assert stage(result, "semantic_result").status == "not_tested"
+    bundle = load_bundle(bundle_dir)
+    assert bundle["run"].profile_name == "a2a-capability-fulfillment@0.2"
+    assert bundle["run"].config["a2a_transport_policy"] == {
+        "policy_id": "a2a-bounded-json@0.1",
+        "max_response_bytes": 1_048_576,
+        "budget_basis": "profile",
+        "accept_encoding": "identity",
+        "follow_redirects": False,
+        "trust_env": "caller_controlled",
+        "transport_retries": "caller_controlled",
+        "client_ownership": "injected",
+        "phase_timeout_seconds": 15.0,
+        "total_deadline_seconds": None,
+    }
+    assert verify_bundle(bundle_dir) == []
+
+
+def test_old_profile_is_unchanged_and_new_bundles_replay(tmp_path):
+    old = get_path_profile("a2a-capability-fulfillment@0.1")
+    assert old.fingerprint() == "sha256:80d238c2de68dbe3de577ad88ae5eb742daeaf2628dc7802be2b11e68b8d4b83"
+    assert old.limits == {"timeout_seconds": 15.0}
+    new = get_path_profile("a2a-capability-fulfillment@0.2")
+    assert new.limits == {"timeout_seconds": 15.0, "max_response_bytes": 1_048_576}
+    assert old.fingerprint() != new.fingerprint()
+    for profile in (old, new):
+        with client() as http:
+            directory, result = run_path_test(SUBJECT, str(tmp_path), profile_ref=profile.ref, http=http)
+        assert result.verdict == "passed"
+        bundle = load_bundle(directory)
+        assert bundle["run"].profile_fingerprint == profile.fingerprint()
+        assert bundle["run"].config["a2a_transport_policy"]["budget_basis"] == (
+            "implementation_ceiling" if profile.version == "0.1" else "profile")
+        assert verify_bundle(directory) == []
+
+
+def test_owned_path_keeps_card_session_for_both_logical_requests(tmp_path, monkeypatch):
+    import nandatown.a2a_transport as transport
+    real_client = httpx.Client
+    clients = []
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=build_agent_card(SUBJECT),
+                                  headers={"set-cookie": "session=local; Path=/"})
+        assert request.headers.get("cookie") == "session=local"
+        order = json.loads(json.loads(request.content)["params"]["message"]["parts"][0]["text"])
+        return httpx.Response(200, json={"result": {
+            "kind": "task", "id": "local", "status": {"state": "completed"},
+            "artifacts": [{"parts": [{"kind": "text", "text": json.dumps({
+                "request_id": order["request_id"], "total_cents": 3990})}]}]}})
+    def client_factory(**kwargs):
+        kwargs.pop("transport", None)
+        http = real_client(**kwargs, transport=httpx.MockTransport(handle))
+        clients.append(http)
+        return http
+    monkeypatch.setattr(transport.httpx, "Client", client_factory)
+    _, result = run_path_test(SUBJECT, str(tmp_path))
+    assert result.verdict == "passed"
+    assert len(clients) == 1 and clients[0].is_closed
 
 
 def test_generated_rerun_keeps_explicit_path_profile_when_default_changes(
