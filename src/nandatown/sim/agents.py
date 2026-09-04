@@ -122,7 +122,7 @@ class Buyer(SimAgent):
             return
         seller, ask = min(self.quotes.items(), key=lambda kv: (kv[1], kv[0]))
         nid = self.api.negotiation_start(seller, self.config["sku"])
-        first = int(ask * 0.8)
+        first = min(int(ask * 0.8), self.config["cap_cents"])
         self.api.negotiation_offer(nid, first)
         self.active = {"nid": nid, "seller": seller, "ask": ask}
         self.api.send(seller, "nego_offer", {"nid": nid, "cents": first})
@@ -134,17 +134,24 @@ class Buyer(SimAgent):
             self._purchase(cents)
         else:
             neg = self.api._engine.layers["negotiation"]
-            neg.abandon(msg["body"]["nid"], self.name)
+            neg.abandon(msg["body"]["nid"], self.name,
+                        reason="price_above_cap")
 
     def handle_nego_accepted(self, msg):
         self._purchase(msg["body"]["cents"])
 
     def _purchase(self, unit_cents: int):
+        if unit_cents > self.config["cap_cents"]:
+            neg = self.api._engine.layers["negotiation"]
+            neg.abandon(self.active["nid"], self.name,
+                        reason="price_above_cap")
+            return
         qty = self.config["quantity"]
         order_id = f"order-{self.name}-{self.round}"
         self.api.escrow_hold(unit_cents * qty, ref=order_id)
         self.api.send(self.active["seller"], "purchase_order",
-                      {"order_id": order_id, "sku": self.config["sku"],
+                      {"nid": self.active["nid"], "order_id": order_id,
+                       "sku": self.config["sku"],
                        "quantity": qty, "unit_cents": unit_cents})
 
     def handle_delivery(self, msg):

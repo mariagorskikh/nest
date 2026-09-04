@@ -172,7 +172,8 @@ def test_weak_auth_remains_a_deliberately_failing_native_control():
 
 
 @pytest.mark.parametrize("old_version", [
-    "lab-0.2.0", "lab-0.2.1", "lab-0.2.2", "lab-0.2.3", "lab-0.2.4"])
+    "lab-0.2.0", "lab-0.2.1", "lab-0.2.2", "lab-0.2.3", "lab-0.2.4",
+    "lab-0.2.5"])
 def test_new_lab_bundles_replay_and_old_lab_versions_do_not(tmp_path, old_version):
     """The evaluator bump makes old Lab bundles explicitly non-reproducible."""
     bundle_dir, result = run_lab("marketplace", str(tmp_path))

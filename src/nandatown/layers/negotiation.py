@@ -54,10 +54,11 @@ class Haggle:
         self.engine.emit(by, "offer_accepted", nid, {"cents": cents})
         return cents
 
-    def abandon(self, nid: str, by: str) -> None:
+    def abandon(self, nid: str, by: str, reason: str = "") -> None:
         s = self.sessions[nid]
         s["state"] = "abandoned"
-        self.engine.emit(by, "negotiation_abandoned", nid, {})
+        detail = {"reason": reason} if reason else {}
+        self.engine.emit(by, "negotiation_abandoned", nid, detail)
 
     def agreed_price(self, nid: str) -> int | None:
         s = self.sessions[nid]
