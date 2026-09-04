@@ -43,26 +43,6 @@ async function clientIp(): Promise<string | null> {
   return h.get("x-real-ip");
 }
 
-/**
- * Best-effort check that a submitted URL actually answers. Never throws — a
- * failed or slow request just means we record `false`, we don't block the save.
- */
-async function checkReachable(url: string): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: { "user-agent": "NandaTown-SkillMD-Checker" },
-    });
-    clearTimeout(timer);
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 export async function submitSkill(
   _prev: SubmitState,
   formData: FormData,
@@ -107,12 +87,6 @@ export async function submitSkill(
     };
   }
 
-  // --- Best-effort reachability check for hosted links --------------------
-  let reachable: boolean | null = null;
-  if (sourceType === "url" || sourceType === "github") {
-    reachable = await checkReachable(sourceUrl);
-  }
-
   // --- Save ---------------------------------------------------------------
   try {
     const submitterIp = await clientIp();
@@ -125,7 +99,7 @@ export async function submitSkill(
       content: sourceType === "content" ? content : null,
       endpoints: endpoints || null,
       tags: tags || null,
-      reachable,
+      reachable: null,
       email: email || null,
       github_username: githubUsername || null,
       submitter_ip: submitterIp,

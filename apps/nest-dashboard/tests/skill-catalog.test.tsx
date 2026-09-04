@@ -104,17 +104,16 @@ for (const sourceType of ["url", "github"]) {
       expect(fetch).not.toHaveBeenCalled();
     });
 
-    test(`form retains its existing successful probe for ${sourceType} ${sourceUrl}`, async () => {
-      vi.mocked(fetch).mockResolvedValueOnce(new Response("ok"));
+    test(`form saves ${sourceType} ${sourceUrl} without claiming a probe`, async () => {
       const result = await submitSkill(initialSubmitState, form({
         name: skill.name, source_type: sourceType, source_url: `  ${sourceUrl}  `,
       }));
       expect(result.ok).toBe(true);
       expect(result.createdId).toBe(skill.id);
       expect(external.createSkill).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        source_type: sourceType, source_url: sourceUrl, reachable: true,
+        source_type: sourceType, source_url: sourceUrl, reachable: null,
       }));
-      expect(fetch).toHaveBeenCalledExactlyOnceWith(sourceUrl, expect.any(Object));
+      expect(fetch).not.toHaveBeenCalled();
     });
   }
 }

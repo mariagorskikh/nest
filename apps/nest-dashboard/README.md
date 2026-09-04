@@ -31,9 +31,10 @@ npm run typecheck
 ```
 
 The tests exercise the real API handler, form action and rendered page with
-external persistence, request context and fetch responses replaced by test
-doubles. They require no database, credentials or live endpoint. They do not
-prove database transactions, browser hydration or a deployed Next server.
+external persistence and request context replaced by test doubles. Unexpected
+network access is blocked. They require no database, credentials or live
+endpoint. They do not prove database transactions, browser hydration or a
+deployed Next server.
 
 The form lifecycle tests use the real React action queue and a DOM environment,
 with only the server action replaced. They cover repeated submit events, pending
@@ -43,10 +44,10 @@ HTTP retries or concurrent server requests. Server idempotency needs a separate
 contract with an explicit operation key and atomic persistence. A time-window
 lookup before insertion is not that guarantee.
 
-URL validation checks source syntax only. API submissions do not probe links
-and keep `reachable: null`; the page labels those links as not checked.
-The existing form's best-effort probe is unchanged. These observations are not
-capability, endorsement or permission to execute a submitted skill.
+URL validation checks source syntax only. API and form submissions do not probe
+links and keep `reachable: null`; the page labels those links as not checked.
+A saved catalog record is not evidence that a link is live or safe, an
+endorsement, or permission to execute a submitted skill.
 
 ## Learn More
 
