@@ -16,6 +16,11 @@ class PaymentError(Exception):
     pass
 
 
+def _require_cents(cents: int, minimum: int) -> None:
+    if type(cents) is not int or cents < minimum:
+        raise PaymentError(f"cents must be an integer >= {minimum}")
+
+
 @register("payments", "ledger.v1")
 class Ledger:
     """Balances, transfers, and escrow hold, release, refund."""
@@ -26,6 +31,7 @@ class Ledger:
         self.escrow: dict[str, dict[str, Any]] = {}
 
     def open_account(self, name: str, cents: int) -> None:
+        _require_cents(cents, 0)
         if name not in self.balances:
             self.balances[name] = cents
             self.engine.emit("town", "account_opened", name,
@@ -40,6 +46,7 @@ class Ledger:
                       if h["state"] == "held"))
 
     def transfer(self, frm: str, to: str, cents: int, memo: str) -> None:
+        _require_cents(cents, 1)
         if self.balance(frm) < cents:
             self.engine.emit("town", "payment_rejected", frm,
                              {"to": to, "cents": cents, "memo": memo,
@@ -51,6 +58,7 @@ class Ledger:
                          {"from": frm, "to": to, "cents": cents})
 
     def hold(self, frm: str, cents: int, ref: str) -> None:
+        _require_cents(cents, 1)
         if ref in self.escrow:
             raise PaymentError(f"escrow ref {ref} reused")
         if self.balance(frm) < cents:
