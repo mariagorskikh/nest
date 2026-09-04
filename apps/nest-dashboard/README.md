@@ -35,6 +35,14 @@ external persistence, request context and fetch responses replaced by test
 doubles. They require no database, credentials or live endpoint. They do not
 prove database transactions, browser hydration or a deployed Next server.
 
+The form lifecycle tests use the real React action queue and a DOM environment,
+with only the server action replaced. They cover repeated submit events, pending
+submissions, validation retries and new submissions after success. The guard
+prevents re-entry in one mounted form; it does not deduplicate separate tabs,
+HTTP retries or concurrent server requests. Server idempotency needs a separate
+contract with an explicit operation key and atomic persistence. A time-window
+lookup before insertion is not that guarantee.
+
 URL validation checks source syntax only. API submissions do not probe links
 and keep `reachable: null`; the page labels those links as not checked.
 The existing form's best-effort probe is unchanged. These observations are not
