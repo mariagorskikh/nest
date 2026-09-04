@@ -1,9 +1,16 @@
+import hashlib
 import json
 
-from nandatown.bundle import load_bundle, verify_bundle, write_bundle
+from nandatown.bundle import (
+    attest_bundle,
+    load_bundle,
+    verify_bundle,
+    write_bundle,
+)
+from nandatown.identity_portable import Keystore
 from nandatown.report import render_report
 from nandatown.evaluator import evaluate
-from nandatown.records import RunRecord, TestProfile
+from nandatown.records import RunRecord, fingerprint
 
 from test_evaluator import clean_events, profile
 
@@ -31,8 +38,19 @@ def make_bundle(tmp_path):
     return str(out), result
 
 
-def test_write_then_verify_is_clean(tmp_path):
+def refresh_file_hash(manifest, name, path):
+    manifest["files"][name] = "sha256:" + hashlib.sha256(
+        path.read_bytes()).hexdigest()
+
+
+def test_clean_unsigned_bundle_remains_allowed(tmp_path):
     path, _ = make_bundle(tmp_path)
+    assert verify_bundle(path) == []
+
+
+def test_clean_signed_bundle_is_valid(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    attest_bundle(path, keystore=Keystore(str(tmp_path / "keys")))
     assert verify_bundle(path) == []
     bundle = load_bundle(path)
     assert bundle["profile"].name == "quote-none"
@@ -76,12 +94,80 @@ def test_evaluator_mismatch_is_detected_even_with_valid_hashes(tmp_path):
     result_file.write_text(json.dumps(data))
     manifest_file = tmp_path / "bundle" / "manifest.json"
     manifest = json.loads(manifest_file.read_text())
-    import hashlib
-    manifest["files"]["result.json"] = "sha256:" + hashlib.sha256(
-        result_file.read_bytes()).hexdigest()
+    refresh_file_hash(manifest, "result.json", result_file)
+    manifest["bundle_fingerprint"] = fingerprint(manifest["files"])
     manifest_file.write_text(json.dumps(manifest))
     problems = verify_bundle(path)
     assert any("evaluator" in p for p in problems)
+
+
+def test_refreshed_file_hash_with_stale_root_is_detected(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    run_file = tmp_path / "bundle" / "run.json"
+    run = json.loads(run_file.read_text())
+    run["participants"][0]["name"] = "attacker"
+    run_file.write_text(json.dumps(run))
+    manifest_file = tmp_path / "bundle" / "manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    refresh_file_hash(manifest, "run.json", run_file)
+    manifest_file.write_text(json.dumps(manifest))
+
+    problems = verify_bundle(path)
+
+    assert any("bundle fingerprint mismatch" in p for p in problems)
+
+
+def test_refreshed_root_rejects_unchanged_attestation(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    attest_bundle(path, keystore=Keystore(str(tmp_path / "keys")))
+    run_file = tmp_path / "bundle" / "run.json"
+    run = json.loads(run_file.read_text())
+    run["participants"][0]["name"] = "attacker"
+    run_file.write_text(json.dumps(run))
+    manifest_file = tmp_path / "bundle" / "manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    refresh_file_hash(manifest, "run.json", run_file)
+    manifest["bundle_fingerprint"] = fingerprint(manifest["files"])
+    manifest_file.write_text(json.dumps(manifest))
+
+    problems = verify_bundle(path)
+
+    assert "attestation names a different bundle fingerprint" in problems
+
+
+def test_updated_attestation_root_with_original_signature_is_rejected(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    attest_bundle(path, keystore=Keystore(str(tmp_path / "keys")))
+    run_file = tmp_path / "bundle" / "run.json"
+    run = json.loads(run_file.read_text())
+    run["participants"][0]["name"] = "attacker"
+    run_file.write_text(json.dumps(run))
+    manifest_file = tmp_path / "bundle" / "manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    refresh_file_hash(manifest, "run.json", run_file)
+    manifest["bundle_fingerprint"] = fingerprint(manifest["files"])
+    manifest_file.write_text(json.dumps(manifest))
+    attestation_file = tmp_path / "bundle" / "attestation.json"
+    attestation = json.loads(attestation_file.read_text())
+    attestation["payload"]["bundle_fingerprint"] = \
+        manifest["bundle_fingerprint"]
+    attestation_file.write_text(json.dumps(attestation))
+
+    problems = verify_bundle(path)
+
+    assert "attestation signature does not verify" in problems
+
+
+def test_root_only_edit_is_detected(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    manifest_file = tmp_path / "bundle" / "manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    manifest["bundle_fingerprint"] = "sha256:attacker"
+    manifest_file.write_text(json.dumps(manifest))
+
+    problems = verify_bundle(path)
+
+    assert any("bundle fingerprint mismatch" in p for p in problems)
 
 
 def test_report_contains_scope_and_stages(tmp_path):
