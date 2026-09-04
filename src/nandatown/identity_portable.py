@@ -14,6 +14,7 @@ source of authority becomes portable.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from typing import Any
@@ -39,6 +40,18 @@ def default_keystore_dir() -> str:
 
 class IdentityError(Exception):
     pass
+
+
+def _finite_timestamp(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise IdentityError(f"{label} must be a timestamp")
+    try:
+        timestamp = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise IdentityError(f"{label} must be a timestamp") from exc
+    if not math.isfinite(timestamp):
+        raise IdentityError(f"{label} must be a timestamp")
+    return timestamp
 
 
 def _sign(private_hex: str, payload: Any) -> str:
@@ -160,17 +173,18 @@ def verify_grant(grant: dict[str, Any], grant_signature: str,
     controller signed this grant, for this run, unexpired, and the
     joiner holds the grant's session key."""
     now = time.time() if now is None else now
+    _finite_timestamp(now, "verifier clock")
     if grant.get("run_id") != run_id:
         raise IdentityError("grant names a different run")
-    if now > float(grant.get("expires_at", 0)):
-        raise IdentityError("grant expired")
     permissions = grant.get("permissions")
     if not isinstance(permissions, list) \
             or not all(isinstance(p, str) for p in permissions):
         raise IdentityError("grant permissions must be a list of names")
-    if not isinstance(grant.get("issued_at"), (int, float)) \
-            or isinstance(grant.get("issued_at"), bool):
-        raise IdentityError("grant issued_at must be a timestamp")
+    _finite_timestamp(grant.get("issued_at"), "grant issued_at")
+    expires_at = _finite_timestamp(grant.get("expires_at"),
+                                   "grant expires_at")
+    if now > expires_at:
+        raise IdentityError("grant expired")
     if not verify_signature(controller_public, grant, grant_signature):
         raise IdentityError("grant signature does not verify against"
                             " the pinned controller key")
