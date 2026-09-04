@@ -48,7 +48,8 @@ def start_reference_agent():
 
     for _ in range(50):
         try:
-            if httpx.get(url + "/.well-known/agent-card.json").status_code == 200:
+            if httpx.get(url + "/.well-known/agent-card.json",
+                         trust_env=False).status_code == 200:
                 return process, url
         except httpx.HTTPError:
             time.sleep(0.05)
