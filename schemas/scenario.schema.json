@@ -30,29 +30,39 @@
           "enum": [
             "drop",
             "duplicate",
-            "delay"
+            "delay",
+            "drop_rate"
           ],
           "title": "Action",
           "type": "string"
         },
         "delay": {
           "default": 0.0,
+          "minimum": 0,
           "title": "Delay",
           "type": "number"
         },
         "kind": {
+          "default": "",
           "title": "Kind",
           "type": "string"
         },
         "nth": {
           "default": 1,
+          "minimum": 1,
           "title": "Nth",
           "type": "integer"
+        },
+        "rate": {
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Rate",
+          "type": "number"
         }
       },
       "required": [
-        "action",
-        "kind"
+        "action"
       ],
       "title": "FaultRule",
       "type": "object"
@@ -60,6 +70,14 @@
   },
   "$id": "https://nandatown.local/schemas/scenario.schema.json",
   "properties": {
+    "adaptations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Adaptations",
+      "type": "array"
+    },
     "agents": {
       "items": {
         "$ref": "#/$defs/AgentSpec"
@@ -96,6 +114,14 @@
     "name": {
       "title": "Name",
       "type": "string"
+    },
+    "plugin_files": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Plugin Files",
+      "type": "array"
     },
     "redact_fields": {
       "default": [],
