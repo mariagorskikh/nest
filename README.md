@@ -298,7 +298,7 @@ nandatown test-agent --index my-index.json --agent-name maya-seller --pin-card-d
 
 Your agent is already running; you migrate nothing and supply no model
 key. Town acts as a deterministic counterpart and observer, walking an
-exact versioned profile (`a2a-capability-fulfillment@0.1`): resolve
+exact versioned profile (`a2a-capability-fulfillment@0.2`): resolve
 the subject, fetch and digest the agent card, check it against the
 pinned descriptor, make a native protocol exchange, check the semantic
 result (a two-widget order with a run nonce, exactly one terminal
@@ -311,6 +311,52 @@ ERROR, where ERROR means Town itself malfunctioned and is never blamed
 on your agent. Try the failure modes against the reference seller:
 `nandatown a2a serve --defect wrong_total` (or `duplicate_fulfillment`
 or `card_drift`).
+
+The default Path profile pins a **1,048,576-byte (1 MiB) response budget**
+for both AgentCard and JSON-RPC envelopes. The shared native A2A client
+requests identity encoding, rejects other content encodings before
+decompression, checks any declared length, and counts actual streamed
+bytes before retaining or parsing them. Malformed/non-object JSON and
+transport, HTTP, or RPC failures produce bounded diagnostic categories,
+not remote error bodies. An oversized response means this run exceeded
+the selected local budget; it does not establish maliciousness or general
+agent incapability. Later stages remain untested when retrieval fails.
+
+Redirects are refused per request. Internally owned clients ignore ambient
+proxy/environment configuration, use zero transport retries, and are closed
+after each native operation or complete Path run (which retains one session);
+card fallback is only for HTTP 404/410. This also
+disables environment-supplied corporate proxy and CA configuration. Trusted
+injected clients remain caller-owned and can supply explicit transport/TLS
+configuration; their proxy and retry behavior is recorded as caller-controlled,
+and allocations made by their already-buffered responses are outside the
+streaming guarantee. The deliberate second logical order is a test condition,
+not an automatic POST retry. Explicit localhost and LAN agents remain allowed.
+
+Each new bundle records `config.a2a_transport_policy`: policy ID
+`a2a-bounded-json@0.1`, effective byte limit and its basis, encoding,
+redirect/environment/retry settings, client ownership, phase timeout, and
+`total_deadline_seconds: null`. Path uses a 15-second HTTPX phase timeout;
+direct native card/RPC calls default to 15/30 seconds respectively. These
+are not hard wall-clock deadlines: a peer that keeps making progress may
+take longer. Cancellable total deadlines and connection-bound address
+policy remain follow-ups. This is not a public-hosted arbitrary-fetch policy,
+input URL sanitization, or business-output sanitization.
+
+The original `a2a-capability-fulfillment@0.1` profile and fingerprint remain
+unchanged, as does the evaluator version. Select it explicitly with
+`--path-profile a2a-capability-fulfillment@0.1`; newly executed old-profile
+runs disclose the same 1 MiB implementation ceiling rather than claiming
+the old profile specified it. Existing stored evidence is not reinterpreted.
+The generated rerun command currently uses `--profile` rather than
+`--path-profile`; correcting that separate defect is still a follow-up.
+
+Requirements credit: [#145 by abhishekeb211](https://github.com/projnanda/nandatown/pull/145)
+(`ddc5f4c5ee67db7b9784b1198446eee596facf53`), and bounded-read technique
+credit: [James's #222](https://github.com/projnanda/nandatown/pull/222)
+(`77c9ff3a39260e31640360be7ccb23652a13d307`). This replacement does not
+adopt their legacy middleware, Town-specific handshake, deployment code,
+or loopback-only origin restrictions.
 
 ## Receipts and Town Proof
 
