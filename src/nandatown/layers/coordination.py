@@ -34,6 +34,11 @@ class ContractNet:
                              {"bidder": bidder, "cents": cents,
                               "reason": "task closed"})
             return False
+        if bidder in task["bids"]:
+            self.engine.emit("town", "bid_rejected", task_id,
+                             {"bidder": bidder, "cents": cents,
+                              "reason": "duplicate bid"})
+            return False
         task["bids"][bidder] = cents
         self.engine.emit(bidder, "bid_placed", task_id, {"cents": cents})
         return True

@@ -187,6 +187,26 @@ def test_contract_net_rules_and_late_bids(eng):
     assert coord.award("task-2") == ("y", 900)
 
 
+def test_contract_net_rejects_duplicate_bid_and_preserves_first_amount(eng):
+    """Sealed-bid contract retained from legacy PR #5 (@mariagorskikh)."""
+    coord = eng.layers["coordination"]
+    coord.announce("auctioneer", "sealed-task", {"item": "print"},
+                   rule="highest")
+
+    assert coord.bid("sealed-task", "bidder", 700) is True
+    assert coord.bid("sealed-task", "bidder", 900) is False
+
+    assert coord.award("sealed-task") == ("bidder", 700)
+    placed = [event for event in eng.events
+              if event["kind"] == "bid_placed"]
+    assert len(placed) == 1
+    rejected = [event for event in eng.events
+                if event["kind"] == "bid_rejected"]
+    assert rejected[-1]["detail"] == {
+        "bidder": "bidder", "cents": 900, "reason": "duplicate bid",
+    }
+
+
 def test_memory_and_communication(eng):
     mem = eng.layers["memory"]
     mem.remember("buyer", "preferred_seller", "seller-b")
