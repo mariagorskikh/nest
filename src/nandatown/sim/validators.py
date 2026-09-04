@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from ..records import EvidenceResult, StageResult, TownEvent
 
-LAB_EVALUATOR_VERSION = "lab-0.2.3"
+LAB_EVALUATOR_VERSION = "lab-0.2.4"
 
 VALIDATORS: dict[str, Callable] = {}
 
@@ -350,32 +350,147 @@ def voting(spec, trace: Trace) -> list[StageResult]:
     return stages
 
 
+def quorum_commit(spec, trace: Trace) -> StageResult:
+    """Check the Lab's single-proposer majority, not a BFT certificate.
+
+    Delivery events omit sender/body, so follow message IDs back to sends
+    and conversation IDs back to delivered prepares. Counting deliveries or
+    trusting the proposer's acknowledgement list alone is insufficient.
+    """
+    committed = trace.find("consensus_committed")
+    if not committed:
+        return _missing("quorum_commit", "no consensus commit recorded")
+    proposers = [a for a in spec.agents if a.role == "proposer"]
+    acceptors = {a.name for a in spec.agents if a.role == "acceptor"}
+    if len(proposers) != 1 or not acceptors or "value" not in proposers[0].config:
+        return _missing("quorum_commit", "requires one configured proposer and acceptors")
+    proposer, value = proposers[0].name, proposers[0].config["value"]
+    quorum = len(acceptors) // 2 + 1
+    sends = trace.find("message_sent")
+    deliveries = trace.find("message_delivered")
+    problems, gaps, evidence = [], [], [e.event_id for e in committed]
+
+    def problem(event, note):
+        problems.append(note)
+        evidence.append(event.event_id)
+
+    def precedes(first, second):
+        return (first.run_id == second.run_id
+                and trace.index(first) < trace.index(second)
+                and first.at <= second.at)
+
+    def delivered_send(delivery, kind, to, before):
+        matches = [s for s in sends if s.subject == delivery.subject]
+        if not matches:
+            gaps.append(f"missing send for {delivery.subject}")
+            return None
+        if len(matches) != 1:
+            problem(delivery, f"ambiguous send ID {delivery.subject}")
+            return None
+        sent = matches[0]
+        if (not precedes(sent, delivery) or not precedes(delivery, before)
+                or delivery.observer != "town"
+                or delivery.detail.get("kind") != kind
+                or delivery.detail.get("to") != to
+                or sent.detail.get("kind") != kind
+                or sent.detail.get("to") != to):
+            problem(delivery, f"inconsistent or late {kind} delivery {delivery.subject}")
+            return None
+        rejected = [e for e in trace.events
+                    if e.subject == sent.subject
+                    and e.kind in {"signature_invalid", "delivery_failed"}
+                    and precedes(sent, e) and precedes(e, before)]
+        if rejected:
+            problem(rejected[0], f"rejected message {sent.subject} cannot support quorum")
+            return None
+        return sent
+
+    for commit in committed:
+        claimed = commit.detail.get("acks")
+        if (commit.observer != proposer or commit.subject != value
+                or type(commit.detail.get("quorum")) is not int
+                or commit.detail["quorum"] != quorum
+                or not isinstance(claimed, list)
+                or any(not isinstance(v, str) for v in claimed)
+                or len(set(claimed)) != len(claimed)
+                or not set(claimed) <= acceptors or len(claimed) < quorum):
+            problem(commit, "commit must name the configured value and a distinct eligible majority")
+            continue
+        voters = set()
+        for delivery in deliveries:
+            referenced = [s for s in sends if s.subject == delivery.subject]
+            # An uncounted response is not evidence for this commit. In
+            # particular, noise from an outsider must not spoil a real quorum.
+            if len(referenced) == 1 and referenced[0].observer not in claimed:
+                continue
+            if (trace.index(delivery) >= trace.index(commit)
+                    or not (delivery.detail.get("kind") == "prepare_ack"
+                            or any(s.detail.get("kind") == "prepare_ack" for s in referenced))):
+                continue
+            ack = delivered_send(delivery, "prepare_ack", proposer, commit)
+            if ack is None:
+                continue
+            if (ack.observer not in acceptors
+                    or not isinstance(ack.detail.get("body"), dict)
+                    or ack.detail["body"].get("value") != value):
+                problem(ack, "acknowledgement must come from an eligible voter for the proposed value")
+                continue
+            conversation = ack.detail.get("conversation")
+            if not isinstance(conversation, str) or not conversation:
+                problem(ack, "acknowledgement has no valid prepare conversation")
+                continue
+            matches = [s for s in sends if s.detail.get("kind") == "prepare"
+                       and s.detail.get("conversation") == conversation]
+            if not matches:
+                gaps.append(f"missing prepare for conversation {conversation}")
+                continue
+            if len(matches) != 1:
+                problem(ack, "acknowledgement has an ambiguous prepare conversation")
+                continue
+            prepare = matches[0]
+            if (prepare.observer != proposer
+                    or prepare.detail.get("to") != ack.observer
+                    or not isinstance(prepare.detail.get("body"), dict)
+                    or prepare.detail["body"].get("value") != value):
+                problem(prepare, "prepare must carry the configured proposer's value")
+                continue
+            arrivals = [d for d in deliveries if d.subject == prepare.subject]
+            if not arrivals:
+                gaps.append(f"missing prior prepare delivery to {ack.observer}")
+                continue
+            if delivered_send(arrivals[0], "prepare", ack.observer, ack) is not None:
+                voters.add(ack.observer)
+        if not set(claimed) <= voters:
+            late = [d for d in deliveries if trace.index(d) >= trace.index(commit)
+                    and any(s.subject == d.subject and s.observer in set(claimed) - voters
+                            and s.detail.get("kind") == "prepare_ack" for s in sends)]
+            if late:
+                problem(late[0], "claimed acknowledgement arrived after commit")
+            else:
+                gaps.append("not every claimed voter has a complete prepare/ack delivery chain")
+    if problems:
+        return _failed("quorum_commit", evidence, problems[0])
+    if gaps:
+        return _missing("quorum_commit", gaps[0])
+    return _passed("quorum_commit", evidence,
+                   f"each commit follows {quorum} distinct eligible acknowledgements for its value")
+
+
 @validator("consensus")
 def consensus(spec, trace: Trace) -> list[StageResult]:
-    stages = []
+    stages = [quorum_commit(spec, trace)]
     acceptors = [a.name for a in spec.agents if a.role == "acceptor"]
-    quorum = len(acceptors) // 2 + 1
-
-    committed = trace.find("consensus_committed")
-    quorum_ok = False
-    if committed:
-        idx = trace.index(committed[0])
-        acks_before = [e for e in trace.events[:idx]
-                       if e.kind == "message_delivered"
-                       and e.detail.get("kind") == "prepare_ack"]
-        quorum_ok = (len(acks_before) >= quorum
-                     and len(committed[0].detail["acks"]) >= quorum)
-    stages.append(_check(
-        "quorum_commit", quorum_ok,
-        [e.event_id for e in committed],
-        f"commit must follow at least {quorum} acknowledged prepares"))
+    proposers = [a for a in spec.agents if a.role == "proposer"]
 
     values = trace.find("value_committed")
-    agree = ({e.subject for e in values} == set(acceptors)
-             and len({e.detail["value"] for e in values}) == 1)
+    agree = (len(proposers) == 1 and "value" in proposers[0].config
+             and {e.subject for e in values} == set(acceptors)
+             and all(e.observer == e.subject
+                     and e.detail.get("value") == proposers[0].config["value"]
+                     for e in values))
     stages.append(_check(
         "agreement", agree, [e.event_id for e in values],
-        "every acceptor must commit the same value"))
+        "every acceptor must commit the configured proposed value"))
 
     dropped = trace.ids("message_dropped")
     retries = trace.ids("proposal_retry")
