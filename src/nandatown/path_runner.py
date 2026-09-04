@@ -32,7 +32,10 @@ from .a2a_transport import (
     DEFAULT_MAX_RESPONSE_BYTES, a2a_client, effective_policy,
     validate_response_budget,
 )
-from .path_profiles import DEFAULT_PATH_PROFILE, PathProfile, get_path_profile
+from .path_profiles import (
+    DEFAULT_PATH_PROFILE, QUOTE_INTENT_EVALUATOR, QUOTE_INTENT_FIELDS,
+    PathProfile, get_path_profile,
+)
 from .records import (
     EvidenceResult,
     RunRecord,
@@ -42,6 +45,35 @@ from .records import (
 )
 
 PATH_EVALUATOR_VERSION = "path-0.2"
+
+
+def path_evaluator_version(profile: PathProfile) -> str:
+    # Existing price-only profiles retain their evaluator and replay semantics.
+    if profile.evaluator == QUOTE_INTENT_EVALUATOR:
+        return "path-quote-intent-0.1"
+    return PATH_EVALUATOR_VERSION
+
+
+def _quote_intent_errors(profile: PathProfile, detail: dict[str, Any]) -> list[str]:
+    """Compare observed quote terms, never filling omissions from the request."""
+    errors = []
+    observed = detail.get("quote")
+    if not isinstance(observed, dict):
+        observed = {}
+    expected = profile.expected["quote"]
+    for field in QUOTE_INTENT_FIELDS:
+        value = observed.get(field)
+        wanted = expected[field]
+        # JSON booleans and floats are not integer item counts.
+        if type(value) is not type(wanted) or value != wanted:
+            errors.append(f"{field}: expected {wanted!r}, observed {value!r}")
+    total = detail.get("total_cents")
+    maximum = profile.expected["max_total_cents"]
+    if type(total) is not int or not 0 <= total <= maximum:
+        errors.append(f"total_cents: expected integer in [0, {maximum}],"
+                      f" observed {total!r}")
+    return errors
+
 
 STAGE_ORDER = ["resolution", "agent_card_retrieval",
                "descriptor_consistency", "protocol_invocation",
@@ -172,13 +204,23 @@ def run_path_test(subject_url: str | None, out_dir: str,
                     text = artifact_text(task)
                     try:
                         fulfillment = json.loads(text)
+                        if not isinstance(fulfillment, dict):
+                            recorder.emit("town-requester", "fulfillment_unparseable",
+                                          order_id, {"attempt": attempt,
+                                                     "reason": "quote is not a JSON object"})
+                            continue
+                        detail = {
+                            "attempt": attempt,
+                            "total_cents": fulfillment.get("total_cents"),
+                            "request_id": fulfillment.get("request_id"),
+                            "content_digest": fingerprint(fulfillment)}
+                        if profile.evaluator == QUOTE_INTENT_EVALUATOR:
+                            detail["quote"] = {
+                                field: fulfillment[field] for field in QUOTE_INTENT_FIELDS
+                                if field in fulfillment}
                         recorder.emit(
                             "town-requester", "fulfillment_observed",
-                            order_id,
-                            {"attempt": attempt,
-                             "total_cents": fulfillment.get("total_cents"),
-                             "request_id": fulfillment.get("request_id"),
-                             "content_digest": fingerprint(fulfillment)})
+                            order_id, detail)
                     except json.JSONDecodeError:
                         recorder.emit("town-requester",
                                       "fulfillment_unparseable", order_id,
@@ -220,7 +262,7 @@ def run_path_test(subject_url: str | None, out_dir: str,
              "role": "subject"},
         ],
         releases={"nandatown": __version__,
-                  "evaluator": PATH_EVALUATOR_VERSION,
+                  "evaluator": path_evaluator_version(profile),
                   "python": sys.version.split()[0]},
         config={"mode": "path", "subject": subject_url or agent_name,
                 "profile": profile.ref,
@@ -356,15 +398,22 @@ def evaluate_path(profile: PathProfile, run_id: str,
                       and bool(expected_request_id)
                       and isinstance(observed_request_id, str)
                       and observed_request_id == expected_request_id)
-        if observed_total == expected_total and request_ok:
+        quote_intent = profile.evaluator == QUOTE_INTENT_EVALUATOR
+        errors = _quote_intent_errors(profile, detail) if quote_intent else []
+        result_ok = not errors if quote_intent else observed_total == expected_total
+        if result_ok and request_ok:
             stages.append(StageResult(
                 name="semantic_result", status="passed",
                 evidence=[first_fulfillment[0].event_id],
-                note=f"exactly one fulfillment, total {observed_total}"))
+                note=(f"observed quote matches the item terms and budget;"
+                      f" total_cents {observed_total}; no purchase or delivery tested"
+                      if quote_intent else
+                      f"exactly one fulfillment, total {observed_total}")))
         else:
-            note = (f"protocol passed but the result is wrong:"
-                    f" expected total {expected_total}, observed"
-                    f" {observed_total}")
+            note = ("quote does not match the selected profile: " + "; ".join(errors)
+                    if quote_intent else
+                    f"protocol passed but the result is wrong:"
+                    f" expected total {expected_total}, observed {observed_total}")
             if not request_ok:
                 note += (f"; expected request_id {expected_request_id!r},"
                          f" observed request_id {observed_request_id!r}")
@@ -407,6 +456,6 @@ def evaluate_path(profile: PathProfile, run_id: str,
 
     cascade_unreached(stages)
     return EvidenceResult(run_id=run_id,
-                          evaluator_version=PATH_EVALUATOR_VERSION,
+                          evaluator_version=path_evaluator_version(profile),
                           stages=stages, verdict=stage_verdict(stages),
                           evaluated_at=time.time())

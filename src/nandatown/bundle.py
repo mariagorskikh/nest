@@ -173,8 +173,8 @@ def verify_bundle(directory: str) -> list[str]:
         expected_version = LAB_EVALUATOR_VERSION
         replay_fn = evaluate_scenario
     elif bundle["mode"] == "path":
-        from .path_runner import PATH_EVALUATOR_VERSION, evaluate_path
-        expected_version = PATH_EVALUATOR_VERSION
+        from .path_runner import evaluate_path, path_evaluator_version
+        expected_version = path_evaluator_version(bundle["profile"])
         replay_fn = evaluate_path
     else:
         expected_version = EVALUATOR_VERSION
