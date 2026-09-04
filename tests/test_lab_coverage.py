@@ -38,6 +38,7 @@ NATIVE_SCENARIO_STAGES = {
 }
 ADAPTED_STAGES = {
     "population_active", "discovery", "messages_flowed", "task_completed",
+    "original_scenario",
 }
 GENERIC_STAGES = {"ledger_conserved", "privacy"}
 UPSTREAM_FIXTURES = os.path.join(
@@ -170,7 +171,8 @@ def test_weak_auth_remains_a_deliberately_failing_native_control():
     assert stage(result, "containment").status == "failed"
 
 
-def test_new_lab_bundles_replay_and_old_lab_versions_do_not(tmp_path):
+@pytest.mark.parametrize("old_version", ["lab-0.2.0", "lab-0.2.1"])
+def test_new_lab_bundles_replay_and_old_lab_versions_do_not(tmp_path, old_version):
     """The evaluator bump makes old Lab bundles explicitly non-reproducible."""
     bundle_dir, result = run_lab("marketplace", str(tmp_path))
     assert result.evaluator_version == LAB_EVALUATOR_VERSION
@@ -178,7 +180,7 @@ def test_new_lab_bundles_replay_and_old_lab_versions_do_not(tmp_path):
 
     result_path = os.path.join(bundle_dir, "result.json")
     recorded = json.loads(open(result_path).read())
-    recorded["evaluator_version"] = "lab-0.2.0"
+    recorded["evaluator_version"] = old_version
     with open(result_path, "w") as handle:
         json.dump(recorded, handle)
     manifest_path = os.path.join(bundle_dir, "manifest.json")
@@ -191,6 +193,6 @@ def test_new_lab_bundles_replay_and_old_lab_versions_do_not(tmp_path):
         json.dump(manifest, handle)
 
     assert verify_bundle(bundle_dir) == [
-        "evaluator version differs: bundle lab-0.2.0, local "
-        "lab-0.2.1; reproducibility not checked",
+        f"evaluator version differs: bundle {old_version}, local "
+        "lab-0.2.2; reproducibility not checked",
     ]
