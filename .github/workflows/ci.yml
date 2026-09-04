@@ -6,6 +6,25 @@ on:
   pull_request:
 
 jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/nest-dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/nest-dashboard/package-lock.json
+      - name: Install dashboard test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Catalog boundary tests
+        run: npm test
+      - name: Dashboard typecheck
+        run: npm run typecheck
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -24,4 +43,3 @@ jobs:
         run: nandatown run marketplace --out /tmp/runs
       - name: Smoke run (Track)
         run: nandatown run quote-crash-restart --out /tmp/runs
-

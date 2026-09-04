@@ -20,6 +20,26 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Catalog regression tests
+
+Use Node 22.12+ (CI uses Node 22), then run:
+
+```bash
+npm ci --ignore-scripts
+npm test
+npm run typecheck
+```
+
+The tests exercise the real API handler, form action and rendered page with
+external persistence, request context and fetch responses replaced by test
+doubles. They require no database, credentials or live endpoint. They do not
+prove database transactions, browser hydration or a deployed Next server.
+
+URL validation checks source syntax only. API submissions do not probe links
+and keep `reachable: null`; the page labels those links as not checked.
+The existing form's best-effort probe is unchanged. These observations are not
+capability, endorsement or permission to execute a submitted skill.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
