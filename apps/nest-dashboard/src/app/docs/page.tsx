@@ -505,8 +505,11 @@ export default function DocsPage() {
                 <a href="/skills" className="text-rust hover:text-rust/80 underline underline-offset-2">
                   Skills page
                 </a>
-                . Agents can discover your service there and call it in sandbox
-                runs today, and in the live town once it is running.
+                . Registration only makes the catalog entry discoverable. It
+                does not verify, install, authorize, endorse, or execute the
+                submitted skill, agent, or service. For new URL and GitHub
+                entries, the catalog stores the source link without fetching or
+                hosting the linked content, agent, or service.
               </li>
             </ol>
 
