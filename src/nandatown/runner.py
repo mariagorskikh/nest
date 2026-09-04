@@ -34,6 +34,10 @@ class RunnerError(Exception):
     pass
 
 
+class RunnerUsageError(RunnerError):
+    """Invalid caller input that a command-line caller can report as usage."""
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -135,6 +139,19 @@ def _participant_command(profile: TestProfile, role: str,
     return [sys.executable, "-m", f"nandatown.participants.{role}"], {}
 
 
+def _validate_role_overrides(
+        profile: TestProfile,
+        harnesses: dict[str, str] | None,
+        external: dict[str, list[str] | None] | None) -> None:
+    """Reject override keys that cannot select a profile participant."""
+    for overrides in (harnesses, external):
+        for role in (overrides or {}):
+            if role not in profile.roles:
+                supported = ", ".join(sorted(profile.roles))
+                raise RunnerUsageError(
+                    f"unknown role {role!r}; supported roles: {supported}")
+
+
 def _grant_refused(events: list[dict[str, Any]]) -> str | None:
     """The first role that tried to join a pinned identity with a bare
     token, or None. Such a harness can never join, so waiting on is
@@ -178,6 +195,7 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
         raise RunnerError(f"unknown profile {profile_name!r};"
                           f" choose from {sorted(PROFILES)}")
     profile = PROFILES[profile_name]
+    _validate_role_overrides(profile, harnesses, external)
     model = model or os.environ.get("TOWN_MODEL", "mock:v1")
     admin_token = secrets.token_hex(16)
     port = port or _free_port()
