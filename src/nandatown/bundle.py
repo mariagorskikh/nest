@@ -148,6 +148,12 @@ def verify_bundle(directory: str) -> list[str]:
             manifest = json.load(f)
     except OSError as exc:
         return [f"manifest.json unreadable: {exc}"]
+    calculated_fingerprint = fingerprint(manifest.get("files", {}))
+    if manifest.get("bundle_fingerprint") != calculated_fingerprint:
+        problems.append(
+            "bundle fingerprint mismatch: manifest "
+            f"{manifest.get('bundle_fingerprint')}, calculated "
+            f"{calculated_fingerprint}")
     for name, expected in manifest.get("files", {}).items():
         path = os.path.join(directory, name)
         if not os.path.exists(path):

@@ -168,6 +168,11 @@ nandatown visualize runs/<id>
 
 `verify` recomputes every hash and replays the pinned evaluator over the recorded events; edits to the result or the events are caught. `visualize` writes a single HTML file: agents on a town map, messages animating along the timeline, the event log, and the stage table.
 
+Path evaluators are versioned. Replay a `path-0.1` bundle with its matching
+`path-0.1` evaluator; a newer evaluator reports the version difference rather
+than treating the bundle as corrupt. The bundle's existing signature remains
+valid for its recorded bytes.
+
 Stages are separate claims with separate failure boundaries. An HTTP success is never proof an agent understood or completed a task. Missing evidence stays missing. Every event names its observer, and the town cannot synthesize a participant's assertions.
 
 ## Tier two: real model participants
