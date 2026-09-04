@@ -7,7 +7,7 @@ import os
 import pytest
 
 from nandatown.bundle import verify_bundle
-from nandatown.records import StageResult, TownEvent
+from nandatown.records import StageResult, TownEvent, fingerprint
 from nandatown.sim.runner import build_engine, run_lab
 from nandatown.sim.scenario import load_bundled, load_scenario_file
 from nandatown.sim.validators import (
@@ -186,6 +186,7 @@ def test_new_lab_bundles_replay_and_old_lab_versions_do_not(tmp_path):
     manifest["files"]["result.json"] = "sha256:" + hashlib.sha256(
         open(result_path, "rb").read()
     ).hexdigest()
+    manifest["bundle_fingerprint"] = fingerprint(manifest["files"])
     with open(manifest_path, "w") as handle:
         json.dump(manifest, handle)
 
