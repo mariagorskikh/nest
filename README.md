@@ -344,7 +344,8 @@ policy remain follow-ups. This is not a public-hosted arbitrary-fetch policy,
 input URL sanitization, or business-output sanitization.
 
 The original `a2a-capability-fulfillment@0.1` profile and fingerprint remain
-unchanged, as does the evaluator version. Select it explicitly with
+unchanged. This transport-policy change does not change the evaluator version.
+Select the original profile explicitly with
 `--path-profile a2a-capability-fulfillment@0.1`; newly executed old-profile
 runs disclose the same 1 MiB implementation ceiling rather than claiming
 the old profile specified it. Existing stored evidence is not reinterpreted.
