@@ -18,6 +18,13 @@ import httpx
 from fastapi import FastAPI, Request
 
 from . import __version__
+from .a2a_transport import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    HTTPStatusError,
+    a2a_client,
+    read_json,
+    validate_response_budget,
+)
 
 CARD_PATHS = ["/.well-known/agent-card.json", "/.well-known/agent.json"]
 
@@ -131,29 +138,42 @@ def build_a2a_app(base_url: str = "http://127.0.0.1:8940",
 
 
 def fetch_card(base_url: str,
-               http: httpx.Client | None = None) -> dict[str, Any]:
-    client = http or httpx.Client(base_url=base_url, timeout=15.0)
-    for path in CARD_PATHS:
-        response = client.get(path)
-        if response.status_code == 200:
-            return response.json()
-    raise ValueError(f"no agent card at {base_url} under"
-                     f" {' or '.join(CARD_PATHS)}")
+               http: httpx.Client | None = None, *,
+               max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+               timeout_seconds: float = 15.0) -> dict[str, Any]:
+    budget = validate_response_budget(max_response_bytes)
+    with a2a_client(base_url, http, timeout_seconds) as client:
+        for path in CARD_PATHS:
+            try:
+                return read_json(client, "GET", path,
+                                 max_response_bytes=budget,
+                                 timeout_seconds=timeout_seconds)
+            except HTTPStatusError as exc:
+                if exc.status_code not in (404, 410):
+                    raise
+    raise ValueError("a2a_card_missing")
 
 
 def send_message(base_url: str, text: str,
-                 http: httpx.Client | None = None) -> dict[str, Any]:
-    client = http or httpx.Client(base_url=base_url, timeout=30.0)
-    response = client.post("/", json={
+                 http: httpx.Client | None = None, *,
+                 max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+                 timeout_seconds: float = 30.0) -> dict[str, Any]:
+    budget = validate_response_budget(max_response_bytes)
+    request = {
         "jsonrpc": "2.0", "id": 1, "method": "message/send",
         "params": {"message": {
             "role": "user",
             "messageId": "m-" + uuid.uuid4().hex[:8],
-            "parts": [{"kind": "text", "text": text}]}}})
-    response.raise_for_status()
-    payload = response.json()
+            "parts": [{"kind": "text", "text": text}]}}}
+    with a2a_client(base_url, http, timeout_seconds) as client:
+        payload = read_json(client, "POST", "/", payload=request,
+                            max_response_bytes=budget,
+                            timeout_seconds=timeout_seconds,
+                            success_statuses=range(200, 300))
     if "error" in payload:
-        raise ValueError(f"message/send failed: {payload['error']}")
+        raise ValueError("a2a_rpc_error")
+    if not isinstance(payload.get("result"), dict):
+        raise ValueError("a2a_rpc_invalid_result")
     return payload["result"]
 
 

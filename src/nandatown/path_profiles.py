@@ -50,9 +50,21 @@ PATH_PROFILES: dict[str, PathProfile] = {
         limits={"timeout_seconds": 15.0},
         evaluator="path-evaluator@0.1",
     ),
+    "a2a-capability-fulfillment@0.2": PathProfile(
+        profile_id="a2a-capability-fulfillment",
+        version="0.2",
+        protocol="a2a",
+        capability="quote",
+        request={"sku": "widget", "quantity": 2,
+                 "unit_price_cents": 1995},
+        expected={"total_cents": 3990, "terminal_fulfillments": 1},
+        controlled_condition="duplicate_request",
+        limits={"timeout_seconds": 15.0, "max_response_bytes": 1_048_576},
+        evaluator="path-evaluator@0.1",
+    ),
 }
 
-DEFAULT_PATH_PROFILE = "a2a-capability-fulfillment@0.1"
+DEFAULT_PATH_PROFILE = "a2a-capability-fulfillment@0.2"
 
 
 def get_path_profile(ref: str) -> PathProfile:

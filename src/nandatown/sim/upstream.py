@@ -5,9 +5,10 @@ uses different layer keys and plugin ids, tick durations, and rate
 based failures. This adapter translates any of that into a runnable
 local ScenarioSpec, mapping upstream roles onto the town's reference
 roles per task type and substituting upstream layer plugins with the
-local defaults. Every substitution and fill-in is recorded as an
-adaptation, and adapted runs are judged by the generic adapted
-validator, so the report says exactly what was translated.
+local defaults. Adaptation notes disclose mapped roles, substituted
+plugins, and unsupported failure declarations. The generic adapted
+validator judges the local reference flow, not the original scenario's
+agent configuration, protocol implementation, or validators.
 """
 
 from __future__ import annotations
@@ -218,10 +219,13 @@ def adapt_upstream(data: dict[str, Any]) -> ScenarioSpec:
         if drop > 0.2:
             adaptations.append(f"message_drop {drop} capped at 0.2 so"
                                " the flow can still complete")
-    byzantine = float(failures.get("byzantine_agents", 0) or 0)
-    if byzantine > 0:
-        adaptations.append(f"byzantine_agents {byzantine} not modeled;"
-                           " the population runs honest")
+    for key in failures:
+        if key != "message_drop":
+            # Do not interpret unsupported values or copy their payloads
+            # into public evidence. Even a zero/disabled declaration needs
+            # disclosure: accepting it does not establish support for it.
+            adaptations.append(f"failures.{key} not modeled by the"
+                               " adapted reference flow")
 
     return ScenarioSpec(
         name=f"upstream-{name}",

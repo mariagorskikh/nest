@@ -1,4 +1,11 @@
+import argparse
 import json
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import time
 
 import httpx
 import pytest
@@ -6,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from nandatown.a2a_adapter import build_a2a_app, build_agent_card
 from nandatown.bundle import load_bundle, verify_bundle
-from nandatown.path_profiles import get_path_profile
+from nandatown.path_profiles import PATH_PROFILES, get_path_profile
 from nandatown.path_runner import evaluate_path, run_path_test
 from nandatown.records import TownEvent, fingerprint
 from nandatown.report import render_report
@@ -55,6 +62,32 @@ def stage(result, name):
 
 def statuses(result):
     return {s.name: s.status for s in result.stages}
+
+
+def start_reference_agent():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
+                       PYTHONPATH=os.path.join(source_root, "src"))
+    process = subprocess.Popen(
+        [sys.executable, "-m", "nandatown.cli", "a2a", "serve",
+         "--port", str(port)], env=environment,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    url = f"http://127.0.0.1:{port}"
+    import httpx
+
+    for _ in range(50):
+        try:
+            if httpx.get(url + "/.well-known/agent-card.json",
+                         trust_env=False).status_code == 200:
+                return process, url
+        except httpx.HTTPError:
+            time.sleep(0.05)
+    process.terminate()
+    process.wait()
+    raise RuntimeError("reference A2A agent did not start")
 
 
 def test_healthy_agent_passes_the_path(tmp_path):
@@ -228,3 +261,118 @@ def test_profile_is_frozen_and_fingerprinted():
     assert profile.fingerprint().startswith("sha256:")
     with pytest.raises(KeyError):
         get_path_profile("nonsense@9.9")
+
+
+def test_oversized_card_does_not_reach_path_invocation(tmp_path):
+    url = "http://fixture.invalid"
+    card = build_agent_card(url)
+    card["description"] = "x" * 1_048_576
+    methods = []
+    def handle(request):
+        methods.append(request.method)
+        return httpx.Response(200, json=card)
+    with httpx.Client(base_url=url, transport=httpx.MockTransport(handle)) as http:
+        bundle_dir, result = run_path_test(url, str(tmp_path), http=http)
+        assert not http.is_closed
+    assert methods == ["GET"]
+    assert stage(result, "agent_card_retrieval").status == "failed"
+    assert stage(result, "agent_card_retrieval").note == (
+        "a2a_response_budget_exceeded: selected local byte budget exceeded for this run")
+    assert stage(result, "semantic_result").status == "not_tested"
+    bundle = load_bundle(bundle_dir)
+    assert bundle["run"].profile_name == "a2a-capability-fulfillment@0.2"
+    assert bundle["run"].config["a2a_transport_policy"] == {
+        "policy_id": "a2a-bounded-json@0.1",
+        "max_response_bytes": 1_048_576,
+        "budget_basis": "profile",
+        "accept_encoding": "identity",
+        "follow_redirects": False,
+        "trust_env": "caller_controlled",
+        "transport_retries": "caller_controlled",
+        "client_ownership": "injected",
+        "phase_timeout_seconds": 15.0,
+        "total_deadline_seconds": None,
+    }
+    assert verify_bundle(bundle_dir) == []
+
+
+def test_old_profile_is_unchanged_and_new_bundles_replay(tmp_path):
+    old = get_path_profile("a2a-capability-fulfillment@0.1")
+    assert old.fingerprint() == "sha256:80d238c2de68dbe3de577ad88ae5eb742daeaf2628dc7802be2b11e68b8d4b83"
+    assert old.limits == {"timeout_seconds": 15.0}
+    new = get_path_profile("a2a-capability-fulfillment@0.2")
+    assert new.limits == {"timeout_seconds": 15.0, "max_response_bytes": 1_048_576}
+    assert old.fingerprint() != new.fingerprint()
+    for profile in (old, new):
+        with client() as http:
+            directory, result = run_path_test(SUBJECT, str(tmp_path), profile_ref=profile.ref, http=http)
+        assert result.verdict == "passed"
+        bundle = load_bundle(directory)
+        assert bundle["run"].profile_fingerprint == profile.fingerprint()
+        assert bundle["run"].config["a2a_transport_policy"]["budget_basis"] == (
+            "implementation_ceiling" if profile.version == "0.1" else "profile")
+        assert verify_bundle(directory) == []
+
+
+def test_owned_path_keeps_card_session_for_both_logical_requests(tmp_path, monkeypatch):
+    import nandatown.a2a_transport as transport
+    real_client = httpx.Client
+    clients = []
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=build_agent_card(SUBJECT),
+                                  headers={"set-cookie": "session=local; Path=/"})
+        assert request.headers.get("cookie") == "session=local"
+        order = json.loads(json.loads(request.content)["params"]["message"]["parts"][0]["text"])
+        return httpx.Response(200, json={"result": {
+            "kind": "task", "id": "local", "status": {"state": "completed"},
+            "artifacts": [{"parts": [{"kind": "text", "text": json.dumps({
+                "request_id": order["request_id"], "total_cents": 3990})}]}]}})
+    def client_factory(**kwargs):
+        kwargs.pop("transport", None)
+        http = real_client(**kwargs, transport=httpx.MockTransport(handle))
+        clients.append(http)
+        return http
+    monkeypatch.setattr(transport.httpx, "Client", client_factory)
+    _, result = run_path_test(SUBJECT, str(tmp_path))
+    assert result.verdict == "passed"
+    assert len(clients) == 1 and clients[0].is_closed
+
+
+def test_generated_rerun_keeps_explicit_path_profile_when_default_changes(
+        tmp_path, monkeypatch):
+    """Catches a generated --profile being parsed as the Track flag."""
+    fallback = get_path_profile("a2a-capability-fulfillment@0.1").model_copy(
+        update={"version": "0.2"})
+    monkeypatch.setitem(PATH_PROFILES, fallback.ref, fallback)
+    original_add_argument = argparse.ArgumentParser.add_argument
+
+    def different_path_default(parser, *names, **kwargs):
+        if "--path-profile" in names:
+            kwargs["default"] = fallback.ref
+        return original_add_argument(parser, *names, **kwargs)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "add_argument",
+                        different_path_default)
+    process, url = start_reference_agent()
+    try:
+        expected_digest = fingerprint(build_agent_card(url))
+        bundle_dir, _ = run_path_test(
+            url, str(tmp_path),
+            profile_ref="a2a-capability-fulfillment@0.1",
+            pin_card_digest=expected_digest)
+        rerun = load_bundle(bundle_dir)["run"].config["rerun_command"]
+        assert url in rerun
+        assert "--pin-card-digest " + expected_digest in rerun
+
+        monkeypatch.chdir(tmp_path)
+        from nandatown.cli import main
+
+        assert main(shlex.split(rerun)[1:]) == 0
+        rerun_bundle = next((tmp_path / "runs").iterdir())
+        replayed = load_bundle(str(rerun_bundle))
+        assert replayed["run"].profile_name == "a2a-capability-fulfillment@0.1"
+        assert replayed["run"].config["pinned_card_digest"] == expected_digest
+    finally:
+        process.terminate()
+        process.wait()

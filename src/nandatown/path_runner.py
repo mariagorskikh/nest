@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import ExitStack
 from typing import Any
 
 import httpx
@@ -27,7 +28,11 @@ import httpx
 from . import __version__
 from .bundle import attest_bundle, write_bundle
 from .evaluator import cascade_unreached, stage_verdict
-from .path_profiles import PathProfile, get_path_profile
+from .a2a_transport import (
+    DEFAULT_MAX_RESPONSE_BYTES, a2a_client, effective_policy,
+    validate_response_budget,
+)
+from .path_profiles import DEFAULT_PATH_PROFILE, PathProfile, get_path_profile
 from .records import (
     EvidenceResult,
     RunRecord,
@@ -106,86 +111,92 @@ def run_path_test(subject_url: str | None, out_dir: str,
                   ) -> tuple[str, EvidenceResult]:
     from .a2a_adapter import artifact_text, fetch_card, send_message
 
-    profile = get_path_profile(profile_ref
-                               or "a2a-capability-fulfillment@0.1")
+    profile = get_path_profile(profile_ref or DEFAULT_PATH_PROFILE)
     run_id = "path-" + uuid.uuid4().hex[:12]
     nonce = uuid.uuid4().hex[:10]
     recorder = _Recorder(run_id)
     timeout = profile.limits.get("timeout_seconds", 15.0)
+    response_budget = validate_response_budget(profile.limits.get(
+        "max_response_bytes", DEFAULT_MAX_RESPONSE_BYTES))
 
     url, index_digest = _resolve(recorder, subject_url, index_file,
                                  agent_name)
     pinned = pin_card_digest or index_digest
 
-    card_ok = False
-    descriptor_mismatch = False
-    if url is not None:
-        recorder.intend("town-requester", "fetch_card", {"url": url})
-        try:
-            client = http or httpx.Client(base_url=url, timeout=timeout)
-            card = fetch_card(url, http=client)
-            observed_digest = fingerprint(card)
-            recorder.emit("town-requester", "card_retrieved", url,
-                          {"digest": observed_digest,
-                           "name": card.get("name"),
-                           "version": card.get("version")})
-            card_ok = True
-            if pinned:
-                recorder.emit("town-requester", "descriptor_expected",
-                              url, {"digest": pinned})
-                descriptor_mismatch = pinned != observed_digest
-        except (ValueError, httpx.HTTPError) as exc:
-            recorder.emit("town-requester", "card_fetch_failed", url,
-                          {"reason": str(exc)})
-
-    if card_ok and not descriptor_mismatch:
-        order_id = f"order-{nonce}"
-        request_body = dict(profile.request, request_id=order_id,
-                            nonce=nonce)
-        for attempt in (1, 2):
-            if attempt == 2 and profile.controlled_condition \
-                    != "duplicate_request":
-                break
-            recorder.intend("town-requester", "message_send",
-                            {"attempt": attempt, "body": request_body})
+    with ExitStack() as clients:
+        card_ok = False
+        descriptor_mismatch = False
+        if url is not None:
+            recorder.intend("town-requester", "fetch_card", {"url": url})
             try:
-                task = send_message(url, json.dumps(request_body),
-                                    http=client)
-                state = task.get("status", {}).get("state")
-                recorder.emit("town-requester", "protocol_exchange",
-                              order_id,
-                              {"attempt": attempt, "ok": True,
-                               "task_id": task.get("id"),
-                               "kind": task.get("kind"),
-                               "state": state})
-                text = artifact_text(task)
-                try:
-                    fulfillment = json.loads(text)
-                    recorder.emit(
-                        "town-requester", "fulfillment_observed",
-                        order_id,
-                        {"attempt": attempt,
-                         "total_cents": fulfillment.get("total_cents"),
-                         "request_id": fulfillment.get("request_id"),
-                         "content_digest": fingerprint(fulfillment)})
-                except json.JSONDecodeError:
-                    recorder.emit("town-requester",
-                                  "fulfillment_unparseable", order_id,
-                                  {"attempt": attempt,
-                                   "text": text[:200]})
+                client = clients.enter_context(a2a_client(url, http, timeout))
+                card = fetch_card(url, http=client,
+                                  max_response_bytes=response_budget,
+                                  timeout_seconds=timeout)
+                observed_digest = fingerprint(card)
+                recorder.emit("town-requester", "card_retrieved", url,
+                              {"digest": observed_digest,
+                               "name": card.get("name"),
+                               "version": card.get("version")})
+                card_ok = True
+                if pinned:
+                    recorder.emit("town-requester", "descriptor_expected",
+                                  url, {"digest": pinned})
+                    descriptor_mismatch = pinned != observed_digest
             except (ValueError, httpx.HTTPError) as exc:
-                recorder.emit("town-requester", "protocol_exchange",
-                              order_id,
-                              {"attempt": attempt, "ok": False,
-                               "reason": str(exc)})
-                break
-            except Exception as exc:
-                # Town's own driver misbehaved. That is Town's fault
-                # and must never read as a subject failure.
-                recorder.emit("town", "town_driver_error", order_id,
-                              {"attempt": attempt,
-                               "reason": f"{type(exc).__name__}: {exc}"})
-                break
+                recorder.emit("town-requester", "card_fetch_failed", url,
+                              {"reason": str(exc)})
+
+        if card_ok and not descriptor_mismatch:
+            order_id = f"order-{nonce}"
+            request_body = dict(profile.request, request_id=order_id,
+                                nonce=nonce)
+            for attempt in (1, 2):
+                if attempt == 2 and profile.controlled_condition \
+                        != "duplicate_request":
+                    break
+                recorder.intend("town-requester", "message_send",
+                                {"attempt": attempt, "body": request_body})
+                try:
+                    task = send_message(url, json.dumps(request_body),
+                                        http=client,
+                                        max_response_bytes=response_budget,
+                                        timeout_seconds=timeout)
+                    state = task.get("status", {}).get("state")
+                    recorder.emit("town-requester", "protocol_exchange",
+                                  order_id,
+                                  {"attempt": attempt, "ok": True,
+                                   "task_id": task.get("id"),
+                                   "kind": task.get("kind"),
+                                   "state": state})
+                    text = artifact_text(task)
+                    try:
+                        fulfillment = json.loads(text)
+                        recorder.emit(
+                            "town-requester", "fulfillment_observed",
+                            order_id,
+                            {"attempt": attempt,
+                             "total_cents": fulfillment.get("total_cents"),
+                             "request_id": fulfillment.get("request_id"),
+                             "content_digest": fingerprint(fulfillment)})
+                    except json.JSONDecodeError:
+                        recorder.emit("town-requester",
+                                      "fulfillment_unparseable", order_id,
+                                      {"attempt": attempt,
+                                       "text": text[:200]})
+                except (ValueError, httpx.HTTPError) as exc:
+                    recorder.emit("town-requester", "protocol_exchange",
+                                  order_id,
+                                  {"attempt": attempt, "ok": False,
+                                   "reason": str(exc)})
+                    break
+                except Exception as exc:
+                    # Town's own driver misbehaved. That is Town's fault
+                    # and must never read as a subject failure.
+                    recorder.emit("town", "town_driver_error", order_id,
+                                  {"attempt": attempt,
+                                   "reason": f"{type(exc).__name__}: {exc}"})
+                    break
 
     result = evaluate_path(profile, run_id, recorder.events)
 
@@ -194,7 +205,7 @@ def run_path_test(subject_url: str | None, out_dir: str,
         rerun += f" --index {index_file} --agent-name {agent_name}"
     else:
         rerun += f" --url {subject_url}"
-    rerun += f" --profile {profile.ref}"
+    rerun += f" --path-profile {profile.ref}"
     if pin_card_digest:
         rerun += f" --pin-card-digest {pin_card_digest}"
 
@@ -215,6 +226,9 @@ def run_path_test(subject_url: str | None, out_dir: str,
                 "profile": profile.ref,
                 "pinned_card_digest": pinned,
                 "nonce": nonce,
+                "a2a_transport_policy": effective_policy(
+                    response_budget, timeout, injected=http is not None,
+                    profile_budget="max_response_bytes" in profile.limits),
                 "rerun_command": rerun},
     )
     bundle_dir = os.path.join(out_dir, run_id)
