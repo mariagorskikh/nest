@@ -231,20 +231,33 @@ def marketplace(spec, trace: Trace) -> list[StageResult]:
     floors = [a.config["floor_cents"] for a in spec.agents
               if a.role == "seller"]
     asks = [a.config["ask_cents"] for a in spec.agents if a.role == "seller"]
-    price_ok = all(min(floors) <= e.detail["cents"] <= max(asks)
+    buyer = next(a for a in spec.agents if a.role == "buyer")
+    cap = buyer.config["cap_cents"]
+    price_ok = all(min(floors) <= e.detail["cents"] <= min(max(asks), cap)
                    for e in accepted)
     stages.append(_check(
         "negotiation", len(accepted) == 2 and price_ok,
         [e.event_id for e in accepted],
         "expected two agreed negotiations at a price between the floor"
-        " and the ask"))
+        " and the lesser of the ask and buyer cap"))
 
-    held = trace.ids("escrow_held")
-    released = trace.ids("escrow_released")
+    held = trace.find("escrow_held")
+    released = trace.find("escrow_released")
+    settled = trace.find("payment_settled", via="escrow")
+    orders = trace.find("message_sent", kind="purchase_order")
+    max_total = cap * buyer.config["quantity"]
+    ordered_within_cap = all(
+        order.detail["body"]["unit_cents"] <= cap for order in orders)
+    settled_within_cap = all(
+        event.detail["cents"] <= max_total
+        for event in held + released + settled)
     stages.append(_check(
-        "settlement", len(held) == 2 and len(released) == 2,
-        held + released,
-        "expected exactly two escrow holds and two releases"))
+        "settlement",
+        len(held) == len(released) == len(settled) == len(orders) == 2
+        and ordered_within_cap and settled_within_cap,
+        [event.event_id for event in held + released + settled + orders],
+        "expected exactly two capped purchase orders, escrow holds,"
+        " releases, and settlements"))
 
     dup_fault = trace.ids("message_duplicated")
     recognized = trace.ids("duplicate_recognized")
