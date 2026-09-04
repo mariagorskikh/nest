@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { revalidateTag } from "next/cache";
 import { createSkill, listSkillsCached, SKILLS_CACHE_TAG, type SkillSourceType } from "@/lib/skills";
+import { isValidHttpUrl } from "@/lib/skill-source";
 
 // This registry is read/written at request time, never prerendered.
 export const dynamic = "force-dynamic";
@@ -56,6 +57,12 @@ export async function POST(request: NextRequest) {
   if ((sourceType === "url" || sourceType === "github") && !sourceUrl) {
     return Response.json(
       { error: "source_url is required for url/github submissions" },
+      { status: 400 },
+    );
+  }
+  if ((sourceType === "url" || sourceType === "github") && !isValidHttpUrl(sourceUrl)) {
+    return Response.json(
+      { error: "source_url must be a valid http(s) URL" },
       { status: 400 },
     );
   }

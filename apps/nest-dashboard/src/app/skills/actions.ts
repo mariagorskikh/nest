@@ -4,18 +4,10 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { headers } from "next/headers";
 import { createSkill, SKILLS_CACHE_TAG, type SkillSourceType } from "@/lib/skills";
 import { initialSubmitState, type SubmitState } from "./form-state";
+import { isValidHttpUrl } from "@/lib/skill-source";
 
 function str(value: FormDataEntryValue | null): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function isValidHttpUrl(value: string): boolean {
-  try {
-    const u = new URL(value);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function isValidEmail(value: string): boolean {
