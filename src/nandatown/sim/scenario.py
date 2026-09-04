@@ -8,10 +8,11 @@ dropped messages or adversarial agents, and the seed.
 from __future__ import annotations
 
 import importlib.resources
+import math
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..layers import DEFAULT_PLUGINS, LAYER_NAMES
 
@@ -29,9 +30,23 @@ class FaultRule(BaseModel):
 
     action: Literal["drop", "duplicate", "delay", "drop_rate"]
     kind: str = ""
-    nth: int = 1
-    delay: float = 0.0
-    rate: float = 0.0
+    nth: int = Field(default=1, ge=1)
+    delay: float = Field(default=0.0, ge=0)
+    rate: float = Field(default=0.0, ge=0, le=1)
+
+    @field_validator("nth", mode="before")
+    @classmethod
+    def _validate_nth(cls, value):
+        if type(value) is not int:
+            raise ValueError("nth must be an integer")
+        return value
+
+    @field_validator("delay", "rate", mode="before")
+    @classmethod
+    def _validate_real_number(cls, value):
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError("must be a finite real number")
+        return value
 
 
 class ScenarioSpec(BaseModel):
