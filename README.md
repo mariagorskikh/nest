@@ -348,8 +348,6 @@ unchanged, as does the evaluator version. Select it explicitly with
 `--path-profile a2a-capability-fulfillment@0.1`; newly executed old-profile
 runs disclose the same 1 MiB implementation ceiling rather than claiming
 the old profile specified it. Existing stored evidence is not reinterpreted.
-The generated rerun command currently uses `--profile` rather than
-`--path-profile`; correcting that separate defect is still a follow-up.
 
 Requirements credit: [#145 by abhishekeb211](https://github.com/projnanda/nandatown/pull/145)
 (`ddc5f4c5ee67db7b9784b1198446eee596facf53`), and bounded-read technique
