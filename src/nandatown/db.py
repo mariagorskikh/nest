@@ -297,19 +297,23 @@ class TownDB:
     ) -> tuple[float, bool]:
         """Accept work durably. Returns (accepted_at, replay).
 
-        The message row and its notification row are written in one
-        transaction. Retrying the same identity with identical content
-        returns the original acceptance; different content raises
-        IdentityReuse.
+        Lookup, message, notification and event writes share one write
+        transaction. Retrying the same identity with the same sender,
+        recipient, kind and body fingerprint returns the original
+        acceptance; a different envelope raises IdentityReuse.
         """
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT accepted_at, content_fingerprint FROM messages"
+                "SELECT accepted_at, sender, recipient, kind,"
+                " content_fingerprint FROM messages"
                 " WHERE run_id=? AND message_id=?",
                 (run_id, message_id),
             ).fetchone()
             if row is not None:
-                if row["content_fingerprint"] != content_fingerprint:
+                if (row["sender"], row["recipient"], row["kind"],
+                    row["content_fingerprint"]) != (sender, to, kind,
+                                                    content_fingerprint):
                     self._event(conn, run_id, now, "town",
                                 "identity_reuse_rejected", message_id,
                                 {"sender": sender})
@@ -319,30 +323,28 @@ class TownDB:
                                 message_id, {"sender": sender})
                     reject = False
             else:
-                reject = None
-        if reject is True:
+                conn.execute(
+                    "INSERT INTO messages (run_id, message_id, sender, recipient,"
+                    " kind, body_json, content_fingerprint, accepted_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (run_id, message_id, sender, to, kind,
+                     json.dumps(body), content_fingerprint, now),
+                )
+                conn.execute(
+                    "INSERT INTO notifications (run_id, recipient, message_id,"
+                    " status) VALUES (?,?,?,?)",
+                    (run_id, to, message_id,
+                     "suppressed" if suppress_notify else "pending"),
+                )
+                self._event(conn, run_id, now, "town", "message_accepted",
+                            message_id,
+                            {"sender": sender, "to": to, "kind": kind,
+                             "content_fingerprint": content_fingerprint})
+                return now, False
+        # Leave the transaction normally so rejection evidence commits.
+        if reject:
             raise IdentityReuse(message_id)
-        if reject is False:
-            return row["accepted_at"], True
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT INTO messages (run_id, message_id, sender, recipient,"
-                " kind, body_json, content_fingerprint, accepted_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (run_id, message_id, sender, to, kind,
-                 json.dumps(body), content_fingerprint, now),
-            )
-            conn.execute(
-                "INSERT INTO notifications (run_id, recipient, message_id,"
-                " status) VALUES (?,?,?,?)",
-                (run_id, to, message_id,
-                 "suppressed" if suppress_notify else "pending"),
-            )
-            self._event(conn, run_id, now, "town", "message_accepted",
-                        message_id,
-                        {"sender": sender, "to": to, "kind": kind,
-                         "content_fingerprint": content_fingerprint})
-            return now, False
+        return row["accepted_at"], True
 
     def message_kind(self, run_id: str, message_id: str) -> str | None:
         with self._conn() as conn:

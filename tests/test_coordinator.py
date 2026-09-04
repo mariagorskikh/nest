@@ -137,6 +137,44 @@ def test_replay_and_identity_reuse(client):
     assert r3.json()["detail"]["error"] == "identity_reuse"
 
 
+@pytest.mark.parametrize("field", ["sender", "to", "kind", "body"])
+@pytest.mark.parametrize("fault", ["none", "drop_wakeup"])
+def test_envelope_conflicts_and_completed_replay_do_not_reschedule(client, field, fault):
+    run_id, sessions, _ = make_run(client, fault=fault)
+    first = send_q1(client, run_id, sessions)
+    assert first.status_code == 202 and first.json()["replay"] is False
+    notify_url = f"/runs/{run_id}/inbox/notify"
+    claim_url = f"/runs/{run_id}/inbox/claim"
+    assert client.get(notify_url, params={"wait": 0}, headers=sessions["seller"]).json() == {
+        "hint": fault == "none"}
+    claim = client.post(claim_url, headers=sessions["seller"]).json()
+    ack = client.post(f"/runs/{run_id}/inbox/ack", headers=sessions["seller"],
+                      json={"message_id": "q-1", "fence": claim["fence"],
+                            "status": "processed", "note": {"applied": True}})
+    assert ack.status_code == 200
+
+    replay = send_q1(client, run_id, sessions)
+    assert replay.status_code == 202
+    assert replay.json() == {**first.json(), "replay": True}
+    payload = {"message_id": "q-1", "to": "seller", "kind": "quote_request", "body": BODY}
+    if field != "sender":
+        payload[field] = {"to": "buyer", "kind": "quote_response", "body": {"quantity": 3}}[field]
+    conflict = client.post(f"/runs/{run_id}/messages", json=payload,
+                           headers=sessions["seller" if field == "sender" else "buyer"])
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {"error": "identity_reuse", "message_id": "q-1"}
+    for name in ["buyer", "seller"]:
+        assert client.get(notify_url, params={"wait": 0}, headers=sessions[name]).json() == {"hint": False}
+        assert client.post(claim_url, headers=sessions[name]).status_code == 204
+    kinds = event_kinds(client, run_id)
+    assert kinds.count("message_accepted") == 1
+    assert kinds.count("replay_returned") == 1
+    assert kinds.count("identity_reuse_rejected") == 1
+    assert kinds.count("message_claimed") == 1
+    assert kinds.count("ack_recorded") == 1
+    assert kinds.count("notify_suppressed") == (1 if fault == "drop_wakeup" else 0)
+
+
 def test_stale_fence_over_http(client):
     run_id, sessions, _ = make_run(client, lease=0.0)
     send_q1(client, run_id, sessions)
