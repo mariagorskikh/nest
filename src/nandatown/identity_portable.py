@@ -172,8 +172,8 @@ def verify_grant(grant: dict[str, Any], grant_signature: str,
     """Raises IdentityError unless the whole chain holds: the pinned
     controller signed this grant, for this run, unexpired, and the
     joiner holds the grant's session key."""
-    now = _finite_timestamp(time.time() if now is None else now,
-                            "verifier clock")
+    now = time.time() if now is None else now
+    _finite_timestamp(now, "verifier clock")
     if grant.get("run_id") != run_id:
         raise IdentityError("grant names a different run")
     permissions = grant.get("permissions")

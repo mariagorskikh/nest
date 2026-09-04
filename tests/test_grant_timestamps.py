@@ -136,6 +136,35 @@ def test_invalid_default_verifier_clock_is_rejected(clock, monkeypatch, tmp_path
         )
 
 
+@pytest.mark.parametrize("clock_source", ["explicit", "default"])
+def test_large_integer_clock_keeps_exact_expiry_boundary(
+        clock_source, monkeypatch, tmp_path):
+    """Rounding a valid clock must not make a just-expired grant live."""
+    boundary = 2 ** 53
+    keystore = Keystore(str(tmp_path / "keys"))
+    identity = keystore.new_identity("buyer")
+    bundle = keystore.make_grant("buyer", "run-1", now=boundary, ttl=0)
+    proof = session_proof(bundle["session_private"], "run-1", "buyer")
+
+    if clock_source == "explicit":
+        verify_grant(bundle["grant"], bundle["grant_signature"],
+                     identity["controller_public"], "run-1", "buyer", proof,
+                     now=boundary)
+        with pytest.raises(IdentityError, match="grant expired"):
+            verify_grant(bundle["grant"], bundle["grant_signature"],
+                         identity["controller_public"], "run-1", "buyer", proof,
+                         now=boundary + 1)
+    else:
+        monkeypatch.setattr(identity_portable.time, "time", lambda: boundary)
+        verify_grant(bundle["grant"], bundle["grant_signature"],
+                     identity["controller_public"], "run-1", "buyer", proof)
+        monkeypatch.setattr(identity_portable.time, "time",
+                            lambda: boundary + 1)
+        with pytest.raises(IdentityError, match="grant expired"):
+            verify_grant(bundle["grant"], bundle["grant_signature"],
+                         identity["controller_public"], "run-1", "buyer", proof)
+
+
 def _create_pinned_run(client, keystore):
     identity = keystore.new_identity("buyer")
     created = client.post("/runs", headers={"X-Town-Admin": "test-admin"},
