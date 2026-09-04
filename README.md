@@ -111,7 +111,9 @@ Legacy scenario files (agent populations declared as roles with counts, tick dur
 
 **A passing adapted run is not a pass for the original contribution.** The report and exported result include `original_scenario: not_tested`; the verdict applies only to the adapted reference flow. Original agent configuration, plugin code and validators are not executed. Duration becomes bounded local logical time, not a reproduction of legacy event-count ticks. `message_drop` maps to seeded drops, capped at 0.2 with the cap disclosed. Every other declared failure key, including `network_partition` and `byzantine_agents`, is explicitly reported as not modeled, even when its value is zero or disabled. These notes travel in `profile.json` and the human report; unsupported payload values are not copied into the notes. Testing streaming-payment or gossip-partition invariants requires a scenario and implementation that actually exercise those semantics.
 
-The coverage change is versioned as Lab evaluator `lab-0.2.2`. Older Lab bundles retain their recorded results, but verification reports an evaluator-version mismatch rather than replaying them as if the checks were unchanged.
+The current Lab evaluator is `lab-0.2.3`. Marketplace reputation checks now match each score update to a prior receipt event from the same observer, about the same subject and outcome, and replay the reference +1/-1 arithmetic. Missing receipts mean insufficient evidence; conflicting attribution, repeated receipt use or incorrect arithmetic fail. This validates recorded claims, not their truth, reporter authority or receipt signatures. A bad outcome can reduce a still-positive total. Other scoring algorithms need their own declared evaluator.
+
+Older Lab bundles retain their recorded results, but verification reports an evaluator-version mismatch rather than replaying them as if the checks were unchanged.
 
 ## Lab scenarios
 

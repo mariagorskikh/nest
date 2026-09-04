@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from ..records import EvidenceResult, StageResult, TownEvent
 
-LAB_EVALUATOR_VERSION = "lab-0.2.2"
+LAB_EVALUATOR_VERSION = "lab-0.2.3"
 
 VALIDATORS: dict[str, Callable] = {}
 
@@ -145,6 +145,76 @@ def privacy_clean(trace: Trace, redact_fields: list[str]) -> StageResult:
                    f"fields {sorted(redact_fields)} never left the run")
 
 
+def reputation_consistent(trace: Trace) -> StageResult:
+    """Replay the reference +1/-1 formula against attributed receipt events.
+
+    This checks the recorded claim, not whether the reporter told the truth,
+    held authority, or proved misconduct. Receipt signatures are not present
+    in these events and are not cryptographically verified by this check.
+    """
+    receipts: dict[str, list[tuple[int, TownEvent]]] = {}
+    for index, event in enumerate(trace.events):
+        if event.kind == "receipt_attested":
+            record_id = event.detail.get("record_id")
+            if isinstance(record_id, str) and record_id:
+                receipts.setdefault(record_id, []).append((index, event))
+
+    scores: dict[str, int] = {}
+    used: set[str] = set()
+    evidence: list[str] = []
+    missing_receipt = False
+    for index, event in enumerate(trace.events):
+        if event.kind != "reputation_updated":
+            continue
+        detail = event.detail
+        outcome = detail.get("outcome")
+        delta = 1 if outcome == "good" else -1
+        score = scores.get(event.subject, 0) + delta
+        if (outcome not in ("good", "bad")
+                or type(detail.get("delta")) is not int
+                or detail["delta"] != delta
+                or type(detail.get("score")) is not int
+                or detail["score"] != score):
+            return _failed("reputation", [event.event_id],
+                           "score update does not follow the reference +1/-1 formula")
+        scores[event.subject] = score
+        evidence.append(event.event_id)
+
+        record_id = detail.get("receipt")
+        if not isinstance(record_id, str) or not record_id:
+            return _failed("reputation", [event.event_id],
+                           "score update has no valid receipt reference")
+        if record_id in used:
+            return _failed("reputation", [event.event_id],
+                           "one receipt was counted more than once")
+        used.add(record_id)
+        matches = receipts.get(record_id, [])
+        if not matches:
+            missing_receipt = True
+            continue
+        if len(matches) != 1:
+            return _failed("reputation", [event.event_id],
+                           "receipt reference is ambiguous")
+        receipt_index, receipt = matches[0]
+        refs = [receipt.event_id, event.event_id]
+        if (receipt_index >= index or receipt.at > event.at
+                or receipt.run_id != event.run_id
+                or receipt.observer != event.observer
+                or receipt.subject != event.subject
+                or receipt.observer == receipt.subject
+                or receipt.detail.get("claim") != "trade.outcome"
+                or receipt.detail.get("value") != outcome):
+            return _failed("reputation", refs,
+                           "score update does not match a prior attributed trade receipt")
+        evidence.append(receipt.event_id)
+
+    if not evidence or missing_receipt:
+        return _missing("reputation", "score updates or their receipt events are missing")
+    return _passed("reputation", evidence,
+                   "recorded receipt claims and reference score arithmetic agree; "
+                   "claim truth and reporter authority are not tested")
+
+
 @validator("marketplace")
 def marketplace(spec, trace: Trace) -> list[StageResult]:
     stages = []
@@ -185,11 +255,13 @@ def marketplace(spec, trace: Trace) -> list[StageResult]:
         "the duplicated delivery must be recognized and released once"))
 
     reps = trace.find("reputation_updated")
-    stages.append(_check(
-        "reputation", len(reps) == 2 and reps[-1].detail["score"] == 2,
-        [e.event_id for e in reps],
-        "expected the winning seller to end with reputation 2 from two"
-        " good receipts"))
+    reputation = reputation_consistent(trace)
+    if reputation.status != "failed" and reps and not (
+            len(reps) == 2 and reps[-1].detail["score"] == 2):
+        reputation = _failed(
+            "reputation", reputation.evidence,
+            "expected the winning seller to end with reputation 2 from two good receipts")
+    stages.append(reputation)
 
     remembered = trace.ids("memory_written")
     stages.append(_check(
