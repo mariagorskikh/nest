@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from ..records import EvidenceResult, StageResult, TownEvent
 
-LAB_EVALUATOR_VERSION = "lab-0.2.4"
+LAB_EVALUATOR_VERSION = "lab-0.2.5"
 
 VALIDATORS: dict[str, Callable] = {}
 
@@ -272,6 +272,80 @@ def marketplace(spec, trace: Trace) -> list[StageResult]:
     return stages
 
 
+def auction_settlement(spec, trace: Trace) -> StageResult:
+    """Bind the single-auction payment to its recorded award and issuer.
+
+    Conservation alone cannot detect crediting the wrong participant. These
+    are correlated Lab records, not independent external account read-back;
+    the separate award stage evaluates the bidding outcome.
+    """
+    issuers = [a for a in spec.agents if a.role == "auctioneer"]
+    if len(issuers) != 1 or "item" not in issuers[0].config:
+        return _missing("settlement", "requires one configured auctioneer and item")
+    issuer = issuers[0]
+    item = issuer.config["item"]
+    task = f"auction-{item}"
+    bidders = {a.name for a in spec.agents if a.role == "bidder"}
+    kinds = ("run_created", "task_announced", "task_awarded", "payment_settled")
+    records, problems, gaps = {}, [], []
+    for kind in kinds:
+        matches = trace.find(kind)
+        if not matches:
+            gaps.append(f"missing {kind} evidence")
+        else:
+            records[kind] = matches[0]
+            if len(matches) != 1:
+                problems.append(f"expected exactly one {kind} record")
+    present = list(records.values())
+    evidence = [e.event_id for e in present]
+    if len(set(evidence)) != len(evidence):
+        problems.append("auction records have ambiguous event IDs")
+
+    for kind, event in records.items():
+        expected_observer = ("town" if kind in {"run_created", "payment_settled"}
+                             else issuer.name)
+        expected_subject = event.run_id if kind == "run_created" else task
+        if event.observer != expected_observer or event.subject != expected_subject:
+            problems.append(f"{kind} names the wrong observer or task")
+    for before, after in zip(present, present[1:]):
+        if (before.run_id != after.run_id
+                or trace.index(before) >= trace.index(after)
+                or not before.at <= after.at):
+            problems.append("auction records must be from one run and in causal order")
+
+    announced = records.get("task_announced")
+    if announced is not None:
+        terms = announced.detail.get("spec")
+        if (announced.detail.get("rule") != "highest"
+                or not isinstance(terms, dict) or terms.get("item") != item):
+            problems.append("announcement does not describe the configured auction")
+    award = records.get("task_awarded")
+    if award is not None:
+        winner = award.detail.get("winner")
+        if (not isinstance(winner, str) or winner not in bidders
+                or type(award.detail.get("cents")) is not int
+                or award.detail.get("rule") != "highest"):
+            problems.append("award must name a configured bidder and integer amount")
+    payment = records.get("payment_settled")
+    if payment is not None:
+        payer = payment.detail.get("from")
+        if (payment.detail.get("to") != issuer.name
+                or not isinstance(payer, str) or payer not in bidders
+                or type(payment.detail.get("cents")) is not int):
+            problems.append("payment must credit the auctioneer from a bidder in integer cents")
+        if award is not None and (
+                payer != award.detail.get("winner")
+                or payment.detail.get("cents") != award.detail.get("cents")):
+            problems.append("payment does not match the recorded winner and amount")
+    # Known contradictions must not be hidden by a different missing record.
+    if problems:
+        return _failed("settlement", evidence, problems[0])
+    if gaps:
+        return _missing("settlement", gaps[0])
+    return _passed("settlement", evidence,
+                   "one payment to the auctioneer for this task's recorded award")
+
+
 @validator("auction")
 def auction(spec, trace: Trace) -> list[StageResult]:
     stages = []
@@ -296,13 +370,7 @@ def auction(spec, trace: Trace) -> list[StageResult]:
         "award", ok, [e.event_id for e in awards],
         "the award must go to the highest on-time bid"))
 
-    payments = trace.find("payment_settled")
-    pay_ok = (len(payments) == 1 and awards
-              and payments[0].detail["cents"] == awards[0].detail["cents"]
-              and payments[0].detail["from"] == awards[0].detail["winner"])
-    stages.append(_check(
-        "settlement", pay_ok, [e.event_id for e in payments],
-        "exactly one payment, by the winner, for the winning amount"))
+    stages.append(auction_settlement(spec, trace))
 
     delivered = trace.find("message_delivered", kind="item_delivery")
     stages.append(_check(
