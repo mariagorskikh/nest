@@ -112,7 +112,10 @@ def render_report(bundle: dict[str, Any]) -> str:
         created = time.strftime("%Y-%m-%d %H:%M:%S UTC",
                                 time.gmtime(run.created_at))
         add(f"Started:   {created}")
-    add(f"Verdict:   {result.verdict.upper()}")
+    scope = (" (adapted reference flow only)"
+             if bundle.get("mode") == "lab" and profile.validator == "adapted"
+             else "")
+    add(f"Verdict:   {result.verdict.upper()}{scope}")
     if result.verdict != "passed":
         broken = next((s for s in result.stages
                        if s.status in ("failed", "error")), None)

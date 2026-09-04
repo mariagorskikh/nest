@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from ..records import EvidenceResult, StageResult, TownEvent
 
-LAB_EVALUATOR_VERSION = "lab-0.2.1"
+LAB_EVALUATOR_VERSION = "lab-0.2.2"
 
 VALIDATORS: dict[str, Callable] = {}
 
@@ -412,8 +412,15 @@ COMPLETION_KINDS = ["offer_accepted", "vote_result",
 def adapted(spec, trace: Trace) -> list[StageResult]:
     """Generic system fitness for scenarios adapted from upstream:
     the population came up, discovery worked, messages moved, and the
-    task flow reached a completion fact."""
-    stages = []
+    task flow reached a completion fact. These checks do not establish
+    the original upstream scenario's protocol or failure semantics."""
+    stages = [StageResult(
+        name="original_scenario", status="not_tested",
+        note=("Only the adapted reference flow is evaluated. Original"
+              " agent configuration, plugins, validators, and declared"
+              " failure semantics are not validated by this run; see"
+              " the profile's adaptation notes and effective faults."),
+    )]
     joined = trace.find("participant_joined")
     stages.append(_check(
         "population_active", len(joined) == len(spec.agents),

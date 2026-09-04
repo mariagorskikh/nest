@@ -107,7 +107,11 @@ Same agents, same scenario, same seed; only the rules differ. The comparison rep
 
 ## Upstream scenarios run here
 
-Scenario files from the projnanda/nandatown repository (agent populations declared as roles with counts, tick durations, rate-based failures) are detected and adapted automatically: roles map onto the reference agents per task type, upstream layer plugins substitute to local defaults, and every substitution is disclosed in the report as an adaptation. `nandatown import-pr N` then `nandatown run <imported scenario>` just works, judged by the generic adapted validator: population active, discovery worked, messages flowed, the task completed, money conserved.
+Legacy scenario files (agent populations declared as roles with counts, tick durations, rate-based failures) are detected and adapted automatically. `nandatown import-pr N` then `nandatown run <imported scenario>` runs a local reference flow: roles map onto Town's reference agents and upstream layer plugins are replaced by local defaults. The generic checks cover population activity, discovery, message flow, a completion fact, and money conservation.
+
+**A passing adapted run is not a pass for the original contribution.** The report and exported result include `original_scenario: not_tested`; the verdict applies only to the adapted reference flow. Original agent configuration, plugin code and validators are not executed. Duration becomes bounded local logical time, not a reproduction of legacy event-count ticks. `message_drop` maps to seeded drops, capped at 0.2 with the cap disclosed. Every other declared failure key, including `network_partition` and `byzantine_agents`, is explicitly reported as not modeled, even when its value is zero or disabled. These notes travel in `profile.json` and the human report; unsupported payload values are not copied into the notes. Testing streaming-payment or gossip-partition invariants requires a scenario and implementation that actually exercise those semantics.
+
+The coverage change is versioned as Lab evaluator `lab-0.2.2`. Older Lab bundles retain their recorded results, but verification reports an evaluator-version mismatch rather than replaying them as if the checks were unchanged.
 
 ## Lab scenarios
 
