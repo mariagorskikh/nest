@@ -130,7 +130,7 @@ def test_path_traversal_is_blocked(tmp_path, monkeypatch):
         "repo": "projnanda/nandatown", "number": 321, "title": "evil",
         "author": "attacker", "state": "open",
         "head_sha": "abc123def4567890", "head_repo": "a/n",
-        "files": [{"path": "../../escape.py", "content": "print('out')"},
+        "files": [{"path": "../../escape.py", "content": PLUGIN_SOURCE},
                   {"path": "ok.py", "content": "x = 1"}],
         "skipped": [],
     }
@@ -142,6 +142,64 @@ def test_path_traversal_is_blocked(tmp_path, monkeypatch):
     with open(os.path.join(protocol_dir, "metadata.json")) as f:
         metadata = json.load(f)
     assert any("escapes the snapshot" in s for s in metadata["skipped"])
+    assert metadata["classification"]["plugins"] == []
+    assert metadata["usage"] == []
+    with open(os.path.join(protocol_dir, "checks.jsonl")) as f:
+        checks = [json.loads(line) for line in f]
+    assert next(check for check in checks if check["test"] == "files-fetched")["result"] == "not_enough_evidence"
+    assert protocol_entries(str(tmp_path / "protocols"))[0]["checks"]["unknown"] > 0
+
+
+def test_import_usage_quotes_literal_file_paths(tmp_path):
+    import shlex
+    name = "plugins/odd name;echo nope.py"
+    directory = import_pr(321, out_dir=str(tmp_path), http=fake_github({name: PLUGIN_SOURCE}))
+    with open(os.path.join(directory, "metadata.json")) as f:
+        metadata = json.load(f)
+
+    command = shlex.split(metadata["usage"][0])
+    assert command == ["nandatown", "run", "marketplace", "--plugin",
+                       os.path.join(directory, name), "--layer", "trust=webweight.v2"]
+
+
+def test_import_does_not_follow_existing_snapshot_symlinks(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    output = tmp_path / "protocols"
+    snapshot = output / "321-add-webweight-trust"
+    snapshot.mkdir(parents=True)
+    (snapshot / "plugins").symlink_to(outside, target_is_directory=True)
+
+    directory = import_pr(321, out_dir=str(output), http=fake_github(FILES))
+
+    assert list(outside.iterdir()) == []
+    with open(os.path.join(directory, "metadata.json")) as f:
+        metadata = json.load(f)
+    assert metadata["classification"]["plugins"] == []
+    assert any("symbolic link" in reason for reason in metadata["skipped"])
+
+
+@pytest.mark.parametrize("path", ["metadata.json", "checks.jsonl", "metadata.json/evil.py"])
+def test_import_reserves_its_metadata_paths(tmp_path, path):
+    directory = import_pr(321, out_dir=str(tmp_path),
+                          http=fake_github({path: PLUGIN_SOURCE, "ok.py": "x=1"}))
+    with open(os.path.join(directory, "metadata.json")) as f:
+        metadata = json.load(f)
+    assert metadata["classification"]["plugins"] == []
+    assert any("reserved snapshot metadata" in reason for reason in metadata["skipped"])
+
+
+@pytest.mark.parametrize("path", ["metadata.json", "checks.jsonl", "../catalog.json"])
+def test_import_does_not_write_through_metadata_symlinks(tmp_path, path):
+    outside = tmp_path / "outside"
+    outside.write_text("preserve")
+    output = tmp_path / "protocols"
+    snapshot = output / "321-add-webweight-trust"
+    snapshot.mkdir(parents=True)
+    (snapshot / path).symlink_to(outside)
+    with pytest.raises(ProtocolImportError, match="symbolic link"):
+        import_pr(321, out_dir=str(output), http=fake_github(FILES))
+    assert outside.read_text() == "preserve"
 
 
 def test_missing_pr_fails_cleanly():
