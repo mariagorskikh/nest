@@ -24,7 +24,8 @@
             "passed",
             "failed",
             "not_enough_evidence",
-            "not_tested"
+            "not_tested",
+            "error"
           ],
           "title": "Status",
           "type": "string"
@@ -64,7 +65,8 @@
       "enum": [
         "passed",
         "failed",
-        "incomplete"
+        "incomplete",
+        "error"
       ],
       "title": "Verdict",
       "type": "string"

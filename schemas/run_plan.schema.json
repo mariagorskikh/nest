@@ -58,7 +58,9 @@
         "drop_wakeup",
         "duplicate_delivery",
         "lost_ack",
-        "crash_after_claim"
+        "crash_after_claim",
+        "context_truncation",
+        "tool_error"
       ],
       "title": "Fault",
       "type": "string"
@@ -76,6 +78,14 @@
         "type": "string"
       },
       "title": "Roles",
+      "type": "object"
+    },
+    "runtimes": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "title": "Runtimes",
       "type": "object"
     },
     "task": {
