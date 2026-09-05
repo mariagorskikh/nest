@@ -426,9 +426,13 @@ def cmd_proof(args: argparse.Namespace) -> int:
 
 
 def cmd_mirror(args: argparse.Namespace) -> int:
-    from .mirror import mirror_bundle
+    from .mirror import MirrorError, mirror_bundle
 
-    destination = mirror_bundle(args.bundle_dir, args.mirror_dir)
+    try:
+        destination = mirror_bundle(args.bundle_dir, args.mirror_dir)
+    except MirrorError as exc:
+        print(f"mirror failed: {exc}")
+        return 1
     print(f"mirrored to {destination}")
     print("the address is the bundle fingerprint; any mirror holding it"
           " can restore the run")

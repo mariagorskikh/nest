@@ -217,3 +217,11 @@ def test_cli_compare_and_mirror(tmp_path, capsys):
     assert main(["recover", fingerprint, "--mirror",
                  str(tmp_path / "m"), "--out", out]) == 0
     assert "recovered and verified" in capsys.readouterr().out
+def test_mirror_cli_reports_invalid_source_without_traceback(tmp_path, capsys):
+    from nandatown.cli import main
+
+    source = tmp_path / "broken"
+    source.mkdir()
+    (source / "manifest.json").write_text("{")
+    assert main(["mirror", str(source), str(tmp_path / "mirror")]) == 1
+    assert "mirror failed:" in capsys.readouterr().out
