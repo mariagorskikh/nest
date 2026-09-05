@@ -14,12 +14,19 @@ handshake against any external MCP server and reports what it found.
 from __future__ import annotations
 
 import json
+import os
+import queue
+import signal
+import subprocess
 import sys
+import threading
+import time
 from typing import Any
 
 from . import __version__
 
 PROTOCOL_VERSION = "2025-06-18"
+MAX_PROBE_RESPONSE_BYTES = 1024 * 1024
 
 TOOLS = [
     {"name": "town_status",
@@ -169,21 +176,107 @@ class MCPTownServer:
                 stdout.flush()
 
 
-def probe(command: list[str], timeout: float = 15.0) -> dict[str, Any]:
-    """Client side of the handshake against any external MCP server."""
-    import subprocess
+class _ProbeFailure(Exception):
+    pass
 
+
+def _stop_probe_process(process: subprocess.Popen) -> None:
+    """Stop the probe and its process group on POSIX.
+
+    Non-POSIX platforms fall back to stopping the direct child because
+    Python does not expose one portable descendant-process primitive.
+    """
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        pass
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
+        process.kill()
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
+    for stream in (process.stdin, process.stdout):
+        if stream is not None:
+            stream.close()
+
+
+def probe(command: list[str], timeout: float = 15.0) -> dict[str, Any]:
+    """Client side of the handshake against any external MCP server.
+
+    ``timeout`` is one wall-clock deadline for the entire handshake, not a
+    per-read timeout. Responses are line-delimited and individually bounded.
+    """
     report: dict[str, Any] = {"ok": False, "problems": []}
-    process = subprocess.Popen(command, stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + max(timeout, 0.0)
+    process = subprocess.Popen(
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        start_new_session=(os.name == "posix"))
+    responses: queue.Queue[bytes | BaseException | None] = queue.Queue()
+
+    def read_responses() -> None:
+        assert process.stdout is not None
+        try:
+            while True:
+                line = process.stdout.readline(MAX_PROBE_RESPONSE_BYTES + 1)
+                if not line:
+                    responses.put(None)
+                    return
+                if len(line) > MAX_PROBE_RESPONSE_BYTES:
+                    responses.put(_ProbeFailure(
+                        "MCP response is too large (limit 1048576 bytes)"))
+                    return
+                responses.put(line)
+        except (OSError, ValueError) as exc:
+            responses.put(exc)
+
+    reader = threading.Thread(target=read_responses, daemon=True)
+    reader.start()
 
     def rpc(message: dict[str, Any]) -> dict[str, Any] | None:
-        process.stdin.write(json.dumps(message) + "\n")
-        process.stdin.flush()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _ProbeFailure("MCP probe timed out")
+        assert process.stdin is not None
+        try:
+            process.stdin.write((json.dumps(message) + "\n").encode())
+            process.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            raise _ProbeFailure("MCP server closed stdin") from exc
         if "id" not in message:
             return None
-        line = process.stdout.readline()
-        return json.loads(line) if line else None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _ProbeFailure("MCP probe timed out")
+        try:
+            response = responses.get(timeout=remaining)
+        except queue.Empty as exc:
+            raise _ProbeFailure("MCP probe timed out") from exc
+        if isinstance(response, BaseException):
+            if isinstance(response, _ProbeFailure):
+                raise response
+            raise _ProbeFailure("could not read MCP response") from response
+        if response is None:
+            raise _ProbeFailure("MCP server closed stdout")
+        try:
+            decoded = json.loads(response)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise _ProbeFailure("MCP server returned malformed JSON") from exc
+        if not isinstance(decoded, dict):
+            raise _ProbeFailure("MCP server returned non-object JSON")
+        return decoded
 
     try:
         init = rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -217,12 +310,12 @@ def probe(command: list[str], timeout: float = 15.0) -> dict[str, Any]:
                     f"tool {tool.get('name')} has no input schema")
         report["ok"] = not report["problems"]
         return report
+    except _ProbeFailure as exc:
+        report["problems"].append(str(exc))
+        return report
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        _stop_probe_process(process)
+        reader.join(timeout=0.2)
 
 
 def main() -> None:

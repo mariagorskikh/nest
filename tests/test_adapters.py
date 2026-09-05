@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import sys
 import threading
@@ -121,6 +122,46 @@ def test_mcp_probe_against_own_server():
     assert report["ok"], report
     assert report["protocolVersion"] == PROTOCOL_VERSION
     assert "town_claim" in report["tools"]
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_mcp_probe_enforces_wall_deadline_and_reaps_child(
+        tmp_path, partial):
+    pid_path = tmp_path / ("partial.pid" if partial else "silent.pid")
+    prelude = (
+        "import os,pathlib,sys,time;"
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));"
+    )
+    if partial:
+        prelude += "sys.stdout.write('{');sys.stdout.flush();"
+    command = [sys.executable, "-c", prelude + "time.sleep(0.8)",
+               str(pid_path)]
+
+    started = time.monotonic()
+    report = probe(command, timeout=0.15)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.65
+    assert report["ok"] is False
+    assert any("timed out" in problem for problem in report["problems"])
+    pid = int(pid_path.read_text())
+    if os.name == "posix":
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+
+def test_mcp_probe_rejects_oversized_response_without_crashing():
+    script = (
+        "import sys;"
+        "sys.stdin.readline();"
+        "sys.stdout.write('x' * (1024 * 1024 + 1) + '\\n');"
+        "sys.stdout.flush()"
+    )
+
+    report = probe([sys.executable, "-c", script], timeout=1.0)
+
+    assert report["ok"] is False
+    assert any("too large" in problem for problem in report["problems"])
 
 
 def test_a2a_card_and_quote():
