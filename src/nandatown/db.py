@@ -392,6 +392,7 @@ class TownDB:
                    now: float) -> dict[str, Any] | None:
         """Claim one bounded piece of work for a limited time."""
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             self._expire_stale_claims(conn, run_id, now)
             row = conn.execute(
                 "SELECT * FROM messages WHERE run_id=? AND recipient=?"
@@ -403,11 +404,13 @@ class TownDB:
             attempt = row["attempts"] + 1
             fence = "fence-" + uuid.uuid4().hex
             lease_expires_at = now + lease_seconds
-            conn.execute(
+            updated = conn.execute(
                 "UPDATE messages SET status='claimed', attempts=? WHERE run_id=?"
-                " AND message_id=?",
+                " AND message_id=? AND status='accepted'",
                 (attempt, run_id, row["message_id"]),
             )
+            if updated.rowcount != 1:
+                return None
             conn.execute(
                 "INSERT INTO claims (run_id, message_id, claimant, fence,"
                 " lease_expires_at, attempt) VALUES (?,?,?,?,?,?)",
@@ -467,6 +470,7 @@ class TownDB:
             status: str, note: dict, now: float) -> None:
         """Acknowledge claimed work. A stale or expired fence is rejected."""
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             claim = conn.execute(
                 "SELECT * FROM claims WHERE run_id=? AND message_id=?"
                 " AND fence=? AND claimant=?",
@@ -491,30 +495,44 @@ class TownDB:
                 self._event(conn, run_id, now, "town", "stale_fence_rejected",
                             message_id,
                             {"participant": participant, "fence": fence})
-        if stale:
-            raise StaleFence(fence)
-        with self._conn() as conn:
-            conn.execute("UPDATE claims SET active=0 WHERE claim_seq=?",
-                         (claim["claim_seq"],))
-            if status == "retryable":
-                new_status, done = "accepted", None
             else:
-                new_status, done = "done", status
-            conn.execute(
-                "UPDATE messages SET status=?, done_status=? WHERE run_id=?"
-                " AND message_id=? AND status IN ('claimed','done')",
-                (new_status, done, run_id, message_id),
-            )
-            conn.execute(
-                "INSERT INTO acks (run_id, message_id, participant, fence,"
-                " status, note_json, at) VALUES (?,?,?,?,?,?,?)",
-                (run_id, message_id, participant, fence, status,
-                 json.dumps(note), now),
-            )
-            self._event(conn, run_id, now, participant, "ack_recorded",
+                deactivated = conn.execute(
+                    "UPDATE claims SET active=0 WHERE claim_seq=? AND active=1"
+                    " AND lease_expires_at>=?",
+                    (claim["claim_seq"], now),
+                )
+                if deactivated.rowcount != 1:
+                    stale = True
+                    self._event(
+                        conn, run_id, now, "town", "stale_fence_rejected",
+                        message_id,
+                        {"participant": participant, "fence": fence},
+                    )
+                else:
+                    if status == "retryable":
+                        new_status, done = "accepted", None
+                    else:
+                        new_status, done = "done", status
+                    conn.execute(
+                        "UPDATE messages SET status=?, done_status=?"
+                        " WHERE run_id=? AND message_id=?"
+                        " AND status IN ('claimed','done')",
+                        (new_status, done, run_id, message_id),
+                    )
+                    conn.execute(
+                        "INSERT INTO acks (run_id, message_id, participant,"
+                        " fence, status, note_json, at) VALUES (?,?,?,?,?,?,?)",
+                        (run_id, message_id, participant, fence, status,
+                         json.dumps(note), now),
+                    )
+                    self._event(
+                        conn, run_id, now, participant, "ack_recorded",
                         message_id,
                         {"status": status, "note": note, "fence": fence,
-                         "attempt": claim["attempt"]})
+                         "attempt": claim["attempt"]},
+                    )
+        if stale:
+            raise StaleFence(fence)
 
     # -- events and intents ---------------------------------------------
 
