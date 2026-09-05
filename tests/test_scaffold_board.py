@@ -130,3 +130,23 @@ def test_board_retains_evaluator_mismatch_as_unverified(tmp_path):
 
     assert "evaluator version differs" in board
     assert "1/1 passed" not in board
+
+
+def test_unverified_bundle_remains_visible_in_terminal_browser(tmp_path):
+    import asyncio
+    from textual.widgets import DataTable, Static
+    from nandatown.tui import TownApp
+
+    bad = tmp_path / "broken"
+    bad.mkdir()
+    (bad / "manifest.json").write_text("{")
+
+    async def browse():
+        app = TownApp(out_dir=str(tmp_path))
+        async with app.run_test():
+            table = app.query_one("#bundle-table", DataTable)
+            assert table.row_count == 1
+            assert "unverified" in table.get_row("broken")
+            assert "0 passed" in str(app.query_one("#town-status", Static).render())
+
+    asyncio.run(browse())

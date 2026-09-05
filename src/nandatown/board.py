@@ -26,7 +26,8 @@ def scan_bundles(directory: str) -> list[dict[str, Any]]:
         problems = verify_bundle(bundle_dir)
         if problems:
             rows.append({"run_id": entry, "verified": False,
-                         "problems": problems})
+                         "problems": problems, "profile": "unverified",
+                         "mode": "unknown", "verdict": "unverified", "at": 0.0})
             continue
         bundle = load_bundle(bundle_dir)
         run, result = bundle["run"], bundle["result"]
