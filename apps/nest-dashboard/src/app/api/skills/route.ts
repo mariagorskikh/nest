@@ -1,14 +1,14 @@
 import type { NextRequest } from "next/server";
 import { revalidateTag } from "next/cache";
-import { createSkill, listSkillsCached, SKILLS_CACHE_TAG, type SkillSourceType } from "@/lib/skills";
-import { isValidHttpUrl } from "@/lib/skill-source";
+import { createSkill, listSkillsCached, SKILLS_CACHE_TAG } from "@/lib/skills";
+import { readBoundedJson, RequestTooLargeError } from "@/lib/bounded-json";
+import {
+  MAX_SKILL_REQUEST_BYTES,
+  validateSkillSubmission,
+} from "@/lib/skill-submission";
 
 // This registry is read/written at request time, never prerendered.
 export const dynamic = "force-dynamic";
-
-function s(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 /**
  * GET /api/skills
@@ -27,65 +27,32 @@ export async function GET() {
  *     author?, description?, endpoints?, tags? }
  */
 export async function POST(request: NextRequest) {
-  let body: Record<string, unknown>;
+  let body: unknown;
   try {
-    body = (await request.json()) as Record<string, unknown>;
-  } catch {
+    body = await readBoundedJson(request, MAX_SKILL_REQUEST_BYTES);
+  } catch (error) {
+    if (error instanceof RequestTooLargeError) {
+      return Response.json({ error: error.message }, { status: 413 });
+    }
     return Response.json({ error: "Send a JSON body." }, { status: 400 });
   }
 
-  const name = s(body.name);
-  const sourceType = s(body.source_type) as SkillSourceType;
-  const sourceUrl = s(body.source_url);
-  const content = typeof body.content === "string" ? body.content : "";
-  const email = s(body.email);
-  const githubUsername = s(body.github_username).replace(/^@/, "");
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return Response.json({ error: "Send a JSON object." }, { status: 400 });
+  }
+
   const forwarded = request.headers.get("x-forwarded-for");
   const submitterIp = forwarded
     ? forwarded.split(",")[0].trim() || null
     : request.headers.get("x-real-ip");
-
-  if (!name) {
-    return Response.json({ error: "name is required" }, { status: 400 });
-  }
-  if (!["url", "github", "content"].includes(sourceType)) {
-    return Response.json(
-      { error: "source_type must be one of: url, github, content" },
-      { status: 400 },
-    );
-  }
-  if ((sourceType === "url" || sourceType === "github") && !sourceUrl) {
-    return Response.json(
-      { error: "source_url is required for url/github submissions" },
-      { status: 400 },
-    );
-  }
-  if ((sourceType === "url" || sourceType === "github") && !isValidHttpUrl(sourceUrl)) {
-    return Response.json(
-      { error: "source_url must be a valid http(s) URL" },
-      { status: 400 },
-    );
-  }
-  if (sourceType === "content" && content.trim().length < 20) {
-    return Response.json(
-      { error: "content is required (and must be the full SkillMD)" },
-      { status: 400 },
-    );
+  const validated = validateSkillSubmission(body as Record<string, unknown>);
+  if (!validated.ok) {
+    return Response.json({ error: validated.error }, { status: 400 });
   }
 
   try {
     const skill = await createSkill({
-      name,
-      author: s(body.author) || null,
-      description: s(body.description) || null,
-      source_type: sourceType,
-      source_url: sourceType === "content" ? null : sourceUrl,
-      content: sourceType === "content" ? content : null,
-      endpoints: s(body.endpoints) || null,
-      tags: s(body.tags) || null,
-      reachable: null,
-      email: email || null,
-      github_username: githubUsername || null,
+      ...validated.value,
       submitter_ip: submitterIp,
     });
     revalidateTag(SKILLS_CACHE_TAG, "max");

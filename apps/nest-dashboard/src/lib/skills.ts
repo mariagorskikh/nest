@@ -88,33 +88,48 @@ export async function getSkill(id: string): Promise<Skill | null> {
 export async function createSkill(input: NewSkill): Promise<Skill> {
   await ensureSchema();
   const db = sql();
-  const rows = await db`
-    insert into skills
-      (name, author, description, source_type, source_url, content,
-       endpoints, tags, reachable, email, github_username, submitter_ip)
-    values
-      (${input.name}, ${input.author ?? null}, ${input.description ?? null},
-       ${input.source_type}, ${input.source_url ?? null}, ${input.content ?? null},
-       ${input.endpoints ?? null}, ${input.tags ?? null}, ${input.reachable ?? null},
-       ${input.email ?? null}, ${input.github_username ?? null}, ${input.submitter_ip ?? null})
-    returning id, name, author, description, source_type, source_url,
-              content, endpoints, tags, reachable, created_at
-  `;
+  const id = crypto.randomUUID();
+  const [rows] = await db.transaction((tx) => [
+    tx`
+      insert into skills
+        (id, name, author, description, source_type, source_url, content,
+         endpoints, tags, reachable, email, github_username, submitter_ip)
+      values
+        (${id}, ${input.name}, ${input.author ?? null}, ${input.description ?? null},
+         ${input.source_type}, ${input.source_url ?? null}, ${input.content ?? null},
+         ${input.endpoints ?? null}, ${input.tags ?? null}, ${input.reachable ?? null},
+         ${input.email ?? null}, ${input.github_username ?? null}, ${input.submitter_ip ?? null})
+      returning id, name, author, description, source_type, source_url,
+                content, endpoints, tags, reachable, created_at
+    `,
+    // The transaction keeps the public row and its private audit snapshot
+    // all-or-nothing. Build the snapshot from the inserted row so its database
+    // timestamp and normalized columns are the committed values.
+    tx`
+      insert into skill_history (skill_id, action, snapshot)
+      select id, 'created', jsonb_build_object(
+        'id', id,
+        'name', name,
+        'author', author,
+        'description', description,
+        'source_type', source_type,
+        'source_url', source_url,
+        'content', content,
+        'endpoints', endpoints,
+        'tags', tags,
+        'reachable', reachable,
+        'created_at', created_at,
+        'email', email,
+        'github_username', github_username,
+        'submitter_ip', submitter_ip
+      )
+      from skills
+      where id = ${id}
+    `,
+  ]);
+
   const skill = (rows as unknown as Skill[])[0];
-
-  // Record the creation in the append-only audit log. The snapshot keeps the
-  // private columns too — skill_history is never exposed by the public API.
-  const snapshot = {
-    ...skill,
-    email: input.email ?? null,
-    github_username: input.github_username ?? null,
-    submitter_ip: input.submitter_ip ?? null,
-  };
-  await db`
-    insert into skill_history (skill_id, action, snapshot)
-    values (${skill.id}, 'created', ${JSON.stringify(snapshot)}::jsonb)
-  `;
-
+  if (!skill) throw new Error("Catalog transaction returned no skill row.");
   return skill;
 }
 
