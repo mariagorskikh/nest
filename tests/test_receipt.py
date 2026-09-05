@@ -1,12 +1,14 @@
 import json
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
-from nandatown.a2a_adapter import build_a2a_app
+from nandatown.a2a_adapter import build_a2a_app, build_agent_card
 from nandatown.cli import main
 from nandatown.path_runner import run_path_test
 from nandatown.receipt import make_receipt, render_proof, verify_receipt
+from nandatown.records import fingerprint
 
 
 def passed_bundle(tmp_path):
@@ -14,6 +16,17 @@ def passed_bundle(tmp_path):
         "http://testserver", str(tmp_path),
         http=TestClient(build_a2a_app("http://testserver")))
     assert result.verdict == "passed"
+    return bundle_dir
+
+
+def complete_passed_bundle(tmp_path):
+    url = "http://testserver"
+    bundle_dir, result = run_path_test(
+        url, str(tmp_path),
+        pin_card_digest=fingerprint(build_agent_card(url)),
+        http=TestClient(build_a2a_app(url)))
+    assert result.verdict == "passed"
+    assert all(stage.status == "passed" for stage in result.stages)
     return bundle_dir
 
 
@@ -59,7 +72,7 @@ def test_tampered_receipt_is_caught(tmp_path):
 
 
 def test_proof_renders_only_from_passing_fresh_evidence(tmp_path):
-    bundle_dir = passed_bundle(tmp_path)
+    bundle_dir = complete_passed_bundle(tmp_path)
     ok, text = render_proof(bundle_dir)
     assert ok, text
     assert "TOWN-TESTED" in text
@@ -74,7 +87,7 @@ def test_proof_renders_only_from_passing_fresh_evidence(tmp_path):
 
 
 def test_stale_evidence_refuses_a_badge(tmp_path):
-    bundle_dir = passed_bundle(tmp_path)
+    bundle_dir = complete_passed_bundle(tmp_path)
     path = make_receipt(bundle_dir)
     ok, text = render_proof(bundle_dir, freshness_days=0.0)
     assert not ok
@@ -83,7 +96,7 @@ def test_stale_evidence_refuses_a_badge(tmp_path):
 
 
 def test_cli_receipt_verify_proof(tmp_path, capsys):
-    bundle_dir = passed_bundle(tmp_path)
+    bundle_dir = complete_passed_bundle(tmp_path)
     assert main(["receipt", bundle_dir]) == 0
     assert main(["verify-receipt", f"{bundle_dir}/receipt.json",
                  "--bundle", bundle_dir]) == 0
@@ -91,3 +104,32 @@ def test_cli_receipt_verify_proof(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "TOWN-TESTED" in out
     assert "commitment is not truth" in out
+
+
+@pytest.mark.parametrize("freshness_days", [float("nan"), float("inf"), -1.0],
+                         ids=["nan", "infinite", "negative"])
+def test_proof_rejects_invalid_freshness_domain(tmp_path, freshness_days):
+    bundle_dir = complete_passed_bundle(tmp_path)
+
+    ok, text = render_proof(bundle_dir, freshness_days=freshness_days)
+
+    assert not ok
+    assert "freshness days must be a finite non-negative number" in text
+
+
+@pytest.mark.parametrize("document", [[], {"payload": []},
+                                         {"payload": {},
+                                          "controller_public": [],
+                                          "signature": []}],
+                         ids=["list", "payload-list", "non-string-signature"])
+def test_malformed_receipt_is_reported_not_raised(tmp_path, document):
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(document))
+
+    try:
+        problems = verify_receipt(str(receipt_path))
+    except Exception as exc:  # pragma: no cover - the assertion is the contract
+        pytest.fail(f"malformed receipt raised {type(exc).__name__}: {exc}")
+
+    assert problems
+    assert any("receipt" in problem for problem in problems)

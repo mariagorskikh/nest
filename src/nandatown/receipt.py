@@ -17,6 +17,7 @@ reputation score.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from typing import Any
@@ -31,6 +32,41 @@ DEFAULT_LIMITATIONS = [
 ]
 
 
+def _bundle_receipt_fields(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Derive every receipt field that makes a claim about one bundle."""
+    run = bundle["run"]
+    result = bundle["result"]
+    profile = bundle["profile"]
+    capability = getattr(profile, "capability", None) \
+        or getattr(getattr(profile, "task", None), "kind", None) \
+        or run.profile_name
+    subject = run.config.get("subject") \
+        or ", ".join(p["name"] for p in run.participants)
+    release_basis = {"profile_fingerprint": run.profile_fingerprint}
+    if run.config.get("pinned_card_digest"):
+        release_basis["card_digest"] = run.config["pinned_card_digest"]
+    tested = [s.name for s in result.stages if s.status != "not_tested"]
+    not_tested = [s.name for s in result.stages
+                  if s.status == "not_tested"]
+    return {
+        "claim": {
+            "capability": capability,
+            "subject": subject,
+            "release_basis": release_basis,
+            "profile": run.profile_name,
+            "verdict": result.verdict,
+        },
+        "window": {"started": run.created_at,
+                   "evaluated": result.evaluated_at},
+        "coverage": {"tested": tested, "not_tested": not_tested},
+        "evidence": {
+            "bundle_fingerprint": bundle["manifest"]["bundle_fingerprint"],
+            "result_digest": fingerprint(result.model_dump()),
+            "run_id": run.run_id,
+        },
+    }
+
+
 def make_receipt(bundle_dir: str, keystore=None,
                  signer: str | None = None,
                  limitations: list[str] | None = None) -> str:
@@ -42,46 +78,19 @@ def make_receipt(bundle_dir: str, keystore=None,
     )
 
     bundle = load_bundle(bundle_dir)
-    run = bundle["run"]
-    result = bundle["result"]
-    profile = bundle["profile"]
-
-    capability = getattr(profile, "capability", None) \
-        or getattr(getattr(profile, "task", None), "kind", None) \
-        or run.profile_name
-    subject = run.config.get("subject") \
-        or ", ".join(p["name"] for p in run.participants)
-    release_basis = {"profile_fingerprint": run.profile_fingerprint}
-    if run.config.get("pinned_card_digest"):
-        release_basis["card_digest"] = run.config["pinned_card_digest"]
-
-    tested = [s.name for s in result.stages if s.status != "not_tested"]
-    not_tested = [s.name for s in result.stages
-                  if s.status == "not_tested"]
+    fields = _bundle_receipt_fields(bundle)
 
     keystore = keystore or Keystore(default_keystore_dir())
     signer = signer or OPERATOR_NAME
     identity = keystore.new_identity(signer)
 
     payload = {
-        "claim": {
-            "capability": capability,
-            "subject": subject,
-            "release_basis": release_basis,
-            "profile": run.profile_name,
-            "verdict": result.verdict,
-        },
+        "claim": fields["claim"],
         "observer": identity["agent_id"],
-        "window": {"started": run.created_at,
-                   "evaluated": result.evaluated_at},
-        "coverage": {"tested": tested, "not_tested": not_tested},
+        "window": fields["window"],
+        "coverage": fields["coverage"],
         "limitations": limitations or DEFAULT_LIMITATIONS,
-        "evidence": {
-            "bundle_fingerprint":
-                bundle["manifest"]["bundle_fingerprint"],
-            "result_digest": fingerprint(result.model_dump()),
-            "run_id": run.run_id,
-        },
+        "evidence": fields["evidence"],
     }
     receipt = {"payload": payload,
                "signature": keystore.sign(signer, payload),
@@ -104,27 +113,58 @@ def verify_receipt(receipt_path: str,
             receipt = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         return [f"receipt unreadable: {exc}"]
-    payload = receipt.get("payload", {})
-    if not verify_signature(receipt.get("controller_public", ""),
-                            payload, receipt.get("signature", "")):
+    if not isinstance(receipt, dict):
+        return ["receipt must be a JSON object"]
+    payload = receipt.get("payload")
+    if not isinstance(payload, dict):
+        return ["receipt payload must be a JSON object"]
+    controller_public = receipt.get("controller_public")
+    signature = receipt.get("signature")
+    if not isinstance(controller_public, str) \
+            or not isinstance(signature, str):
+        problems.append("receipt signature and controller key must be strings")
+    elif not verify_signature(controller_public, payload, signature):
         problems.append("signature does not verify over the payload")
-    derived = ("did:town:"
-               + fingerprint(receipt.get("controller_public", ""))
-               .removeprefix("sha256:")[:24])
-    if derived != payload.get("observer"):
-        problems.append("observer id does not match the signing key")
+    if isinstance(controller_public, str):
+        derived = ("did:town:"
+                   + fingerprint(controller_public)
+                   .removeprefix("sha256:")[:24])
+        if derived != payload.get("observer"):
+            problems.append("observer id does not match the signing key")
     if bundle_dir:
         from .bundle import load_bundle
 
-        bundle = load_bundle(bundle_dir)
-        if payload.get("evidence", {}).get("bundle_fingerprint") \
-                != bundle["manifest"]["bundle_fingerprint"]:
-            problems.append("receipt names a different bundle"
-                            " fingerprint")
-        if payload.get("evidence", {}).get("result_digest") \
-                != fingerprint(bundle["result"].model_dump()):
-            problems.append("receipt result digest does not match the"
-                            " bundle's result")
+        try:
+            bundle = load_bundle(bundle_dir)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError,
+                ValueError) as exc:
+            problems.append(f"bundle unreadable for receipt verification: {exc}")
+            return problems
+        expected = _bundle_receipt_fields(bundle)
+        claim = payload.get("claim")
+        if not isinstance(claim, dict):
+            problems.append("receipt claim must be a JSON object")
+        else:
+            for name, value in expected["claim"].items():
+                if claim.get(name) != value:
+                    problems.append(
+                        f"receipt claim {name.replace('_', ' ')} does not match bundle")
+        for name in ("coverage", "window"):
+            if payload.get(name) != expected[name]:
+                problems.append(f"receipt {name} does not match bundle")
+        evidence = payload.get("evidence")
+        if not isinstance(evidence, dict):
+            problems.append("receipt evidence must be a JSON object")
+        else:
+            labels = {
+                "bundle_fingerprint": "bundle fingerprint",
+                "result_digest": "result digest",
+                "run_id": "evidence run id",
+            }
+            for name, value in expected["evidence"].items():
+                if evidence.get(name) != value:
+                    problems.append(
+                        f"receipt {labels[name]} does not match bundle")
     return problems
 
 
@@ -133,6 +173,12 @@ def render_proof(bundle_dir: str,
     """The TOWN-TESTED badge, rendered only when the evidence is
     conclusive, covered, fresh, and the bundle and receipt verify."""
     from .bundle import verify_bundle
+
+    if isinstance(freshness_days, bool) \
+            or not isinstance(freshness_days, (int, float)) \
+            or not math.isfinite(freshness_days) or freshness_days < 0:
+        return (False, "No Town Proof. freshness days must be a finite"
+                " non-negative number.\n")
 
     bundle_problems = verify_bundle(bundle_dir)
     if bundle_problems:
@@ -144,6 +190,10 @@ def render_proof(bundle_dir: str,
     if not os.path.exists(receipt_path):
         make_receipt(bundle_dir)
     problems = verify_receipt(receipt_path, bundle_dir)
+    if problems:
+        lines = ["No Town Proof. Receipt verification failed:"]
+        lines += [f"  {problem}" for problem in problems]
+        return False, "\n".join(lines) + "\n"
     with open(receipt_path) as f:
         payload = json.load(f)["payload"]
 
@@ -159,6 +209,9 @@ def render_proof(bundle_dir: str,
                        " window")
     if not payload["coverage"]["tested"]:
         reasons.append("nothing was tested")
+    if payload["coverage"]["not_tested"]:
+        reasons.append("not tested: "
+                       + ", ".join(payload["coverage"]["not_tested"]))
 
     if reasons:
         lines = ["No Town Proof. The badge renders only from"
