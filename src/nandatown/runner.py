@@ -94,6 +94,8 @@ def _stop_process(process: subprocess.Popen, grace: float = 0.5) -> int | None:
     Other platforms use a direct-child fallback; Python has no portable
     descendant-process primitive.
     """
+    if getattr(process, "_town_cleanup_complete", False):
+        return process.returncode
     # Reap an already-exited group leader first. Darwin reports EPERM when
     # killpg targets a group containing only an unreaped (defunct) leader.
     process.poll()
@@ -101,7 +103,10 @@ def _stop_process(process: subprocess.Popen, grace: float = 0.5) -> int | None:
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
-            pass
+            # Do not address this numeric PGID again: after ESRCH it could
+            # belong to an unrelated group before a defensive finally pass.
+            process._town_cleanup_complete = True
+            return process.wait(timeout=grace)
     elif process.poll() is None:
         process.terminate()
     try:
@@ -116,9 +121,13 @@ def _stop_process(process: subprocess.Popen, grace: float = 0.5) -> int | None:
     elif process.poll() is None:
         process.kill()
     try:
-        return process.wait(timeout=grace)
+        result = process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         return process.poll()
+    # SIGKILL has been issued to any remaining POSIX descendants. A zombie
+    # descendant may await its own parent's reap, but needs no second signal.
+    process._town_cleanup_complete = True
+    return result
 
 
 def _participant_extra_env(kind: str, explicit: dict[str, str],
@@ -132,6 +141,11 @@ def _participant_extra_env(kind: str, explicit: dict[str, str],
         # commands inherit ambient variables in _spawn_participant regardless.
         if kind == "cmd" or not effective_model.startswith("mock:"):
             for key in ("TOWN_MODEL_URL", "TOWN_MODEL_KEY"):
+                if key in os.environ:
+                    env[key] = os.environ[key]
+        if kind == "llm" and not effective_model.startswith("mock:"):
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                        "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
                 if key in os.environ:
                     env[key] = os.environ[key]
     env.update(explicit)

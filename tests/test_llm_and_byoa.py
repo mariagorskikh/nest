@@ -190,3 +190,34 @@ def test_runner_stops_command_descendants_before_bundle_export(
     assert result.verdict == "passed"
     assert ready.exists(), "the real descendant never started"
     assert not late_write.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group ownership")
+def test_process_cleanup_never_resignals_a_settled_group(monkeypatch):
+    import subprocess
+
+    process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    process.wait(timeout=5)
+    signals = []
+
+    def missing_group(pgid, sig):
+        signals.append((pgid, sig))
+        raise ProcessLookupError
+
+    monkeypatch.setattr(runner_module.os, "killpg", missing_group)
+    assert runner_module._stop_process(process) == 0
+    first_cleanup = list(signals)
+    assert runner_module._stop_process(process) == 0
+    assert signals == first_cleanup
+
+
+def test_only_hosted_model_harness_preserves_explicit_proxy_environment(monkeypatch):
+    keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+            "http_proxy", "https_proxy", "all_proxy", "no_proxy")
+    for key in keys:
+        monkeypatch.setenv(key, "http://proxy.invalid:8080")
+    hosted = _participant_extra_env("llm", {}, "hosted:model")
+    assert all(hosted.get(key) == "http://proxy.invalid:8080" for key in keys)
+    for kind, model in (("scripted", "hosted:model"), ("a2a", "hosted:model"),
+                        ("llm", "mock:v1")):
+        assert all(key not in _participant_extra_env(kind, {}, model) for key in keys)
