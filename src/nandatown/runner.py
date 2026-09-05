@@ -123,10 +123,11 @@ def _stop_process(process: subprocess.Popen, grace: float = 0.5) -> int | None:
     try:
         result = process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
-        return process.poll()
+        result = process.poll()
     # SIGKILL has been issued to any remaining POSIX descendants. A zombie
     # descendant may await its own parent's reap, but needs no second signal.
-    process._town_cleanup_complete = True
+    if result is not None:
+        process._town_cleanup_complete = True
     return result
 
 

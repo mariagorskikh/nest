@@ -211,6 +211,33 @@ def test_process_cleanup_never_resignals_a_settled_group(monkeypatch):
     assert signals == first_cleanup
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group ownership")
+def test_cleanup_records_exit_observed_just_after_wait_timeout(monkeypatch):
+    import subprocess
+
+    class SlowReap:
+        pid = 424242
+        returncode = None
+        polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls > 1:
+                self.returncode = 0
+            return self.returncode
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("slow-reap", timeout)
+
+    process = SlowReap()
+    signals = []
+    monkeypatch.setattr(runner_module.os, "killpg", lambda *args: signals.append(args))
+    assert runner_module._stop_process(process) == 0
+    first_cleanup = list(signals)
+    assert runner_module._stop_process(process) == 0
+    assert signals == first_cleanup
+
+
 def test_only_hosted_model_harness_preserves_explicit_proxy_environment(monkeypatch):
     keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
             "http_proxy", "https_proxy", "all_proxy", "no_proxy")
