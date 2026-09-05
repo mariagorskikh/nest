@@ -32,6 +32,122 @@ DEFAULT_LIMITATIONS = [
     "a favorable result grants no permissions and endorses nothing",
 ]
 
+RECEIPT_FIELDS = {"payload", "signature", "controller_public"}
+PAYLOAD_FIELDS = {
+    "claim", "observer", "window", "coverage", "limitations", "evidence",
+}
+CLAIM_FIELDS = {
+    "capability", "subject", "release_basis", "profile", "verdict",
+}
+WINDOW_FIELDS = {"started", "evaluated"}
+COVERAGE_FIELDS = {"tested", "not_tested"}
+EVIDENCE_FIELDS = {"bundle_fingerprint", "result_digest", "run_id"}
+RELEASE_BASIS_FIELDS = {"profile_fingerprint"}
+RELEASE_BASIS_OPTIONAL_FIELDS = {"card_digest"}
+RECEIPT_VERDICTS = {"passed", "failed", "incomplete", "error"}
+
+
+def _field_set_problems(value: dict[str, Any], label: str,
+                        required: set[str],
+                        optional: set[str] | None = None) -> list[str]:
+    optional = optional or set()
+    keys = set(value)
+    missing = sorted(required - keys)
+    unexpected = sorted(keys - required - optional)
+    problems = []
+    if missing:
+        problems.append(f"{label} is missing fields: {missing}")
+    if unexpected:
+        problems.append(f"{label} has unexpected fields: {unexpected}")
+    return problems
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _receipt_shape_problems(receipt: dict[str, Any],
+                            payload: dict[str, Any]) -> list[str]:
+    problems = _field_set_problems(receipt, "receipt", RECEIPT_FIELDS)
+    problems += _field_set_problems(payload, "receipt payload", PAYLOAD_FIELDS)
+
+    observer = payload.get("observer")
+    if not _nonempty_string(observer):
+        problems.append("receipt observer must be a non-empty string")
+
+    claim = payload.get("claim")
+    if not isinstance(claim, dict):
+        problems.append("receipt claim must be a JSON object")
+    else:
+        problems += _field_set_problems(
+            claim, "receipt claim", CLAIM_FIELDS)
+        for name in ("capability", "subject", "profile"):
+            if not _nonempty_string(claim.get(name)):
+                problems.append(
+                    f"receipt claim {name} must be a non-empty string")
+        if claim.get("verdict") not in RECEIPT_VERDICTS:
+            problems.append("receipt claim verdict is invalid")
+        release_basis = claim.get("release_basis")
+        if not isinstance(release_basis, dict):
+            problems.append("receipt claim release basis must be a JSON object")
+        else:
+            problems += _field_set_problems(
+                release_basis, "receipt claim release basis",
+                RELEASE_BASIS_FIELDS, RELEASE_BASIS_OPTIONAL_FIELDS)
+            for name in RELEASE_BASIS_FIELDS | RELEASE_BASIS_OPTIONAL_FIELDS:
+                if name in release_basis \
+                        and not _nonempty_string(release_basis[name]):
+                    problems.append(
+                        "receipt claim release basis"
+                        f" {name.replace('_', ' ')} must be a non-empty string")
+
+    window = payload.get("window")
+    if not isinstance(window, dict):
+        problems.append("receipt window must be a JSON object")
+    else:
+        problems += _field_set_problems(
+            window, "receipt window", WINDOW_FIELDS)
+        for name in WINDOW_FIELDS:
+            value = window.get(name)
+            if isinstance(value, bool) \
+                    or not isinstance(value, (int, float)) \
+                    or not math.isfinite(value):
+                problems.append(
+                    f"receipt window {name} must be a finite number")
+
+    coverage = payload.get("coverage")
+    if not isinstance(coverage, dict):
+        problems.append("receipt coverage must be a JSON object")
+    else:
+        problems += _field_set_problems(
+            coverage, "receipt coverage", COVERAGE_FIELDS)
+        for name in COVERAGE_FIELDS:
+            values = coverage.get(name)
+            if not isinstance(values, list) \
+                    or any(not _nonempty_string(value) for value in values):
+                problems.append(
+                    f"receipt coverage {name} must be a list of"
+                    " non-empty strings")
+
+    limitations = payload.get("limitations")
+    if not isinstance(limitations, list) or not limitations \
+            or any(not _nonempty_string(value) for value in limitations):
+        problems.append(
+            "receipt limitations must be a non-empty list of non-empty strings")
+
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict):
+        problems.append("receipt evidence must be a JSON object")
+    else:
+        problems += _field_set_problems(
+            evidence, "receipt evidence", EVIDENCE_FIELDS)
+        for name in EVIDENCE_FIELDS:
+            if not _nonempty_string(evidence.get(name)):
+                problems.append(
+                    f"receipt evidence {name.replace('_', ' ')}"
+                    " must be a non-empty string")
+    return problems
+
 
 def _receipt_file_problem(path: str, *, missing_ok: bool = False) -> str | None:
     try:
@@ -79,8 +195,21 @@ def _bundle_receipt_fields(bundle: dict[str, Any]) -> dict[str, Any]:
     capability = getattr(profile, "capability", None) \
         or getattr(getattr(profile, "task", None), "kind", None) \
         or run.profile_name
-    subject = run.config.get("subject") \
-        or ", ".join(p["name"] for p in run.participants)
+    subject = run.config.get("subject")
+    if subject is not None and subject != "":
+        if not _nonempty_string(subject):
+            raise ValueError("bundle receipt subject must be a non-empty string")
+    else:
+        participant_names = []
+        for index, participant in enumerate(run.participants):
+            name = participant.get("name")
+            if not _nonempty_string(name):
+                raise ValueError(
+                    f"bundle participant {index} has no valid name")
+            participant_names.append(name)
+        if not participant_names:
+            raise ValueError("bundle has no participant name for receipt subject")
+        subject = ", ".join(participant_names)
     release_basis = {"profile_fingerprint": run.profile_fingerprint}
     if run.config.get("pinned_card_digest"):
         release_basis["card_digest"] = run.config["pinned_card_digest"]
@@ -159,6 +288,7 @@ def verify_receipt(receipt_path: str,
     payload = receipt.get("payload")
     if not isinstance(payload, dict):
         return ["receipt payload must be a JSON object"]
+    problems.extend(_receipt_shape_problems(receipt, payload))
     controller_public = receipt.get("controller_public")
     signature = receipt.get("signature")
     if not isinstance(controller_public, str) \
@@ -181,7 +311,12 @@ def verify_receipt(receipt_path: str,
                 ValueError) as exc:
             problems.append(f"bundle unreadable for receipt verification: {exc}")
             return problems
-        expected = _bundle_receipt_fields(bundle)
+        try:
+            expected = _bundle_receipt_fields(bundle)
+        except (KeyError, TypeError, ValueError) as exc:
+            problems.append(
+                f"bundle cannot produce receipt claims: {exc}")
+            return problems
         claim = payload.get("claim")
         if not isinstance(claim, dict):
             problems.append("receipt claim must be a JSON object")

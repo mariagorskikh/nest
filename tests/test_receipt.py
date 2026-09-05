@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from nandatown.a2a_adapter import build_a2a_app, build_agent_card
 from nandatown.cli import main
+from nandatown.identity_portable import Keystore
 from nandatown.path_runner import run_path_test
 from nandatown.receipt import make_receipt, render_proof, verify_receipt
 from nandatown.records import fingerprint
@@ -159,3 +160,60 @@ def test_fifo_receipt_is_rejected_before_open(tmp_path, monkeypatch):
     problems = verify_receipt(str(receipt_path))
 
     assert any("not a regular file" in problem for problem in problems), problems
+
+
+def test_detached_verification_rejects_signed_sparse_payload(tmp_path):
+    keys = Keystore(str(tmp_path / "keys"))
+    identity = keys.new_identity("reviewer")
+    payload = {"observer": identity["agent_id"]}
+    receipt = {
+        "payload": payload,
+        "signature": keys.sign("reviewer", payload),
+        "controller_public": identity["controller_public"],
+    }
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+
+    problems = verify_receipt(str(receipt_path))
+
+    assert any("payload" in problem and "missing" in problem
+               for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("claim-extra", "claim has unexpected fields"),
+        ("evidence-extra", "evidence has unexpected fields"),
+        ("payload-extra", "payload has unexpected fields"),
+        ("receipt-extra", "receipt has unexpected fields"),
+        ("missing-limitations", "payload is missing fields"),
+    ],
+)
+def test_signed_receipt_rejects_unrecognized_or_missing_claim_shape(
+        tmp_path, change, expected):
+    bundle_dir = complete_passed_bundle(tmp_path)
+    keys = Keystore(str(tmp_path / "keys"))
+    receipt_path = make_receipt(
+        bundle_dir, keystore=keys, signer="reviewer")
+    with open(receipt_path) as stream:
+        receipt = json.load(stream)
+    if change == "claim-extra":
+        receipt["payload"]["claim"]["universally_safe"] = True
+    elif change == "evidence-extra":
+        receipt["payload"]["evidence"]["independently_observed"] = True
+    elif change == "payload-extra":
+        receipt["payload"]["endorsement"] = True
+    elif change == "receipt-extra":
+        receipt["endorsement"] = True
+    else:
+        receipt["payload"].pop("limitations")
+    receipt["signature"] = keys.sign("reviewer", receipt["payload"])
+    with open(receipt_path, "w") as stream:
+        json.dump(receipt, stream)
+
+    detached = verify_receipt(receipt_path)
+    bundle_aware = verify_receipt(receipt_path, bundle_dir)
+
+    assert any(expected in problem for problem in detached), detached
+    assert any(expected in problem for problem in bundle_aware), bundle_aware
