@@ -15,7 +15,12 @@ import shutil
 import stat
 import tempfile
 
-from .bundle import DIGEST_RE, verify_bundle
+from .bundle import DIGEST_RE, RECORD_FILES, load_bundle, verify_bundle
+
+
+MIRROR_COPY_FILES = frozenset(
+    [*RECORD_FILES, "manifest.json", "attestation.json", "receipt.json"])
+MIRROR_ALLOWED_FILES = MIRROR_COPY_FILES | {"report.md"}
 
 
 class MirrorError(Exception):
@@ -42,7 +47,7 @@ def _fingerprint_of(bundle_dir: str) -> str:
 
 
 def _tree_problem(bundle_dir: str, *, ignore_state: bool = False) -> str | None:
-    """Reject links and special files without following them."""
+    """Reject links, special files, and unsupported top-level payloads."""
     try:
         root_metadata = os.lstat(bundle_dir)
     except OSError as exc:
@@ -50,29 +55,22 @@ def _tree_problem(bundle_dir: str, *, ignore_state: bool = False) -> str | None:
     if not stat.S_ISDIR(root_metadata.st_mode):
         return "bundle path is not a regular directory"
 
-    def inspect(directory: str, relative: str) -> str | None:
-        try:
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    if ignore_state and entry.name == "state":
-                        continue
-                    entry_relative = os.path.join(relative, entry.name)
-                    try:
-                        metadata = entry.stat(follow_symlinks=False)
-                    except OSError as exc:
-                        return f"{entry_relative} is unreadable: {exc}"
-                    if stat.S_ISDIR(metadata.st_mode):
-                        problem = inspect(entry.path, entry_relative)
-                        if problem:
-                            return problem
-                    elif not stat.S_ISREG(metadata.st_mode):
-                        return f"{entry_relative} is not a regular file"
-        except OSError as exc:
-            shown = relative or "."
-            return f"{shown} is unreadable: {exc}"
-        return None
-
-    return inspect(bundle_dir, "")
+    try:
+        with os.scandir(bundle_dir) as entries:
+            for entry in entries:
+                if ignore_state and entry.name == "state":
+                    continue
+                if entry.name not in MIRROR_ALLOWED_FILES:
+                    return f"{entry.name} is an unsupported bundle member"
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    return f"{entry.name} is unreadable: {exc}"
+                if not stat.S_ISREG(metadata.st_mode):
+                    return f"{entry.name} is not a regular file"
+    except OSError as exc:
+        return f". is unreadable: {exc}"
+    return None
 
 
 def _validate_bundle(bundle_dir: str, label: str, *,
@@ -84,6 +82,14 @@ def _validate_bundle(bundle_dir: str, label: str, *,
     problems = verify_bundle(bundle_dir)
     if problems:
         raise MirrorError(f"{label} bundle fails verification: {problems}")
+    receipt_path = os.path.join(bundle_dir, "receipt.json")
+    if os.path.lexists(receipt_path):
+        from .receipt import verify_receipt
+
+        receipt_problems = verify_receipt(receipt_path, bundle_dir)
+        if receipt_problems:
+            raise MirrorError(
+                f"{label} receipt fails verification: {receipt_problems}")
     fingerprint = _fingerprint_of(bundle_dir)
     if expected_fingerprint is not None \
             and fingerprint != expected_fingerprint:
@@ -92,17 +98,25 @@ def _validate_bundle(bundle_dir: str, label: str, *,
     return fingerprint
 
 
-def _copy_bundle(bundle_dir: str, destination: str, fingerprint: str,
-                 *, ignore_state: bool = False) -> None:
+def _copy_bundle(bundle_dir: str, destination: str, fingerprint: str) -> None:
     parent = os.path.dirname(destination)
     os.makedirs(parent, exist_ok=True)
     staging_root = tempfile.mkdtemp(prefix=".nandatown-copy-", dir=parent)
     staged_bundle = os.path.join(staging_root, "bundle")
     try:
-        ignore = shutil.ignore_patterns("state") if ignore_state else None
-        shutil.copytree(bundle_dir, staged_bundle, symlinks=True, ignore=ignore)
+        os.mkdir(staged_bundle)
+        for name in sorted(MIRROR_COPY_FILES):
+            source = os.path.join(bundle_dir, name)
+            if not os.path.lexists(source):
+                continue
+            shutil.copy2(source, os.path.join(staged_bundle, name),
+                         follow_symlinks=False)
         _validate_bundle(
             staged_bundle, "copied", expected_fingerprint=fingerprint)
+        from .report import render_report
+
+        with open(os.path.join(staged_bundle, "report.md"), "w") as stream:
+            stream.write(render_report(load_bundle(staged_bundle)))
         if os.path.lexists(destination):
             raise MirrorError(
                 f"destination already exists and was left unchanged:"
@@ -126,8 +140,7 @@ def mirror_bundle(bundle_dir: str, mirror_dir: str) -> str:
             destination, "existing mirror",
             expected_fingerprint=fingerprint)
         return destination
-    _copy_bundle(
-        bundle_dir, destination, fingerprint, ignore_state=True)
+    _copy_bundle(bundle_dir, destination, fingerprint)
     return destination
 
 

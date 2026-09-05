@@ -1,12 +1,14 @@
 import json
 import os
 import shutil
+from pathlib import Path
 
 import pytest
 
 from nandatown.cli import main
 from nandatown.compare import run_comparison
 from nandatown.mirror import MirrorError, mirror_bundle, recover_bundle
+from nandatown.receipt import make_receipt, verify_receipt
 from nandatown.sim.runner import run_lab
 
 
@@ -217,6 +219,8 @@ def test_cli_compare_and_mirror(tmp_path, capsys):
     assert main(["recover", fingerprint, "--mirror",
                  str(tmp_path / "m"), "--out", out]) == 0
     assert "recovered and verified" in capsys.readouterr().out
+
+
 def test_mirror_cli_reports_invalid_source_without_traceback(tmp_path, capsys):
     from nandatown.cli import main
 
@@ -225,3 +229,54 @@ def test_mirror_cli_reports_invalid_source_without_traceback(tmp_path, capsys):
     (source / "manifest.json").write_text("{")
     assert main(["mirror", str(source), str(tmp_path / "mirror")]) == 1
     assert "mirror failed:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("extra", ["unsigned.txt", "state/secret.txt"])
+def test_recovery_rejects_unsigned_mirror_payload(tmp_path, extra):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    manifest = json.loads(Path(bundle_dir, "manifest.json").read_text())
+    fingerprint = manifest["bundle_fingerprint"]
+    mirror = str(tmp_path / "mirror")
+    stored = Path(mirror_bundle(bundle_dir, mirror))
+    extra_path = stored / extra
+    extra_path.parent.mkdir(parents=True, exist_ok=True)
+    extra_path.write_text("must not be recovered")
+
+    with pytest.raises(MirrorError, match="unsupported bundle member"):
+        recover_bundle(fingerprint, [mirror], str(tmp_path / "fresh"))
+
+    assert not (tmp_path / "fresh").exists()
+
+
+def test_recovery_regenerates_unsigned_report(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    manifest = json.loads(Path(bundle_dir, "manifest.json").read_text())
+    fingerprint = manifest["bundle_fingerprint"]
+    mirror = str(tmp_path / "mirror")
+    stored = Path(mirror_bundle(bundle_dir, mirror))
+    stored.joinpath("report.md").write_text("UNSIGNED MIRROR CLAIM")
+
+    restored = Path(recover_bundle(
+        fingerprint, [mirror], str(tmp_path / "fresh")))
+
+    report = restored.joinpath("report.md").read_text()
+    assert "UNSIGNED MIRROR CLAIM" not in report
+    assert "NANDA Town System Fitness Report" in report
+
+
+def test_recovery_rejects_invalid_receipt_and_preserves_valid_one(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    receipt_path = make_receipt(bundle_dir)
+    manifest = json.loads(Path(bundle_dir, "manifest.json").read_text())
+    fingerprint = manifest["bundle_fingerprint"]
+    good_mirror = str(tmp_path / "good-mirror")
+    mirror_bundle(bundle_dir, good_mirror)
+    restored = Path(recover_bundle(
+        fingerprint, [good_mirror], str(tmp_path / "fresh")))
+    assert verify_receipt(str(restored / "receipt.json"), str(restored)) == []
+
+    bad_mirror = str(tmp_path / "bad-mirror")
+    stored = Path(mirror_bundle(bundle_dir, bad_mirror))
+    stored.joinpath("receipt.json").write_text("{}")
+    with pytest.raises(MirrorError, match="receipt"):
+        recover_bundle(fingerprint, [bad_mirror], str(tmp_path / "other"))
