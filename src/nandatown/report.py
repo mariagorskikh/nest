@@ -31,7 +31,7 @@ STAGE_MEANING = {
                             " handled",
     "wakeup_loss_tolerated": "a lost wake-up hint did not lose inbox work",
     "ack_retry_survived": "a lost acknowledgement was retried and recorded",
-    "portable_identity": "not exercised in this run",
+    "portable_identity": "the participant joined with a verified portable identity grant",
     "discovery": "cards published and peers found through the index",
     "negotiation": "offers alternated to an agreed price inside bounds",
     "settlement": "money moved only through recorded escrow",
@@ -135,7 +135,8 @@ def render_report(bundle: dict[str, Any]) -> str:
     name_width = max(len(s.name) for s in result.stages)
     for s in result.stages:
         label = STATUS_LABEL[s.status]
-        meaning = STAGE_MEANING.get(s.name, "")
+        meaning = ("not exercised in this run" if s.status == "not_tested"
+                   else STAGE_MEANING.get(s.name, ""))
         evidence = f" [{', '.join(s.evidence)}]" if s.evidence else ""
         add(f"  {s.name.ljust(name_width)}  {label:<20} {meaning}{evidence}")
         if s.note:
