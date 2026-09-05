@@ -1,4 +1,4 @@
-"""The local leaderboard: what has been proven on this machine.
+"""The local leaderboard over verified recorded evidence.
 
 Scans a runs directory for evidence bundles and shows, per profile or
 scenario, how many runs exist and how many passed. Rankings derive from
@@ -8,9 +8,10 @@ record.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
+
+from .bundle import load_bundle, verify_bundle
 
 
 def scan_bundles(directory: str) -> list[dict[str, Any]]:
@@ -20,24 +21,23 @@ def scan_bundles(directory: str) -> list[dict[str, Any]]:
     for entry in sorted(os.listdir(directory)):
         bundle_dir = os.path.join(directory, entry)
         manifest_path = os.path.join(bundle_dir, "manifest.json")
-        run_path = os.path.join(bundle_dir, "run.json")
-        result_path = os.path.join(bundle_dir, "result.json")
-        if not (os.path.exists(manifest_path)
-                and os.path.exists(run_path)
-                and os.path.exists(result_path)):
+        if not os.path.lexists(manifest_path):
             continue
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-        with open(run_path) as f:
-            run = json.load(f)
-        with open(result_path) as f:
-            result = json.load(f)
+        problems = verify_bundle(bundle_dir)
+        if problems:
+            rows.append({"run_id": entry, "verified": False,
+                         "problems": problems})
+            continue
+        bundle = load_bundle(bundle_dir)
+        run, result = bundle["run"], bundle["result"]
         rows.append({
-            "run_id": run["run_id"],
-            "profile": run["profile_name"],
-            "mode": manifest.get("mode", "track"),
-            "verdict": result["verdict"],
-            "at": manifest.get("created_at", 0.0),
+            "run_id": run.run_id,
+            "profile": run.profile_name,
+            "mode": bundle["mode"],
+            "verdict": result.verdict,
+            "at": run.created_at,
+            "verified": True,
+            "problems": [],
         })
     return rows
 
@@ -49,6 +49,8 @@ def render_board(directory: str) -> str:
                 " nandatown run\n")
     groups: dict[str, dict[str, Any]] = {}
     for row in rows:
+        if not row["verified"]:
+            continue
         g = groups.setdefault(row["profile"],
                               {"mode": row["mode"], "runs": 0,
                                "passed": 0, "last_verdict": "",
@@ -58,7 +60,7 @@ def render_board(directory: str) -> str:
         if row["at"] >= g["last_at"]:
             g["last_at"] = row["at"]
             g["last_verdict"] = row["verdict"]
-    width = max(len(name) for name in groups)
+    width = max((len(name) for name in groups), default=0)
     lines = [f"Town board over {directory} ({len(rows)} bundles)",
              "=" * 40]
     ranked = sorted(groups.items(),
@@ -70,7 +72,13 @@ def render_board(directory: str) -> str:
                      f" {g['passed']}/{g['runs']} passed"
                      f" ({rate:5.1f}%), last {g['last_verdict']}")
     lines.append("")
-    lines.append("Every line is backed by a verifiable bundle:"
-                 " nandatown verify <dir>. The board is a view, not a"
-                 " record.")
+    unverified = [row for row in rows if not row["verified"]]
+    if unverified:
+        lines.append("Unverified bundles (excluded from rankings):")
+        for row in unverified:
+            lines.append(f"  {row['run_id']}: {'; '.join(row['problems'])}")
+        lines.append("")
+    lines.append("Rankings include only bundles verified with the local evaluator."
+                 " Verification checks recorded evidence, not independent truth."
+                 " The board is a view, not a record.")
     return "\n".join(lines) + "\n"

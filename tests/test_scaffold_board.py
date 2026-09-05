@@ -1,4 +1,6 @@
 import pytest
+import json
+from pathlib import Path
 
 from nandatown.board import render_board, scan_bundles
 from nandatown.cli import main
@@ -75,3 +77,56 @@ def test_cli_new_and_board(tmp_path, capsys):
     assert main(["board", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert "no evidence bundles" in out
+
+
+def test_board_excludes_tampered_results_from_rankings(tmp_path):
+    directory, _ = run_lab("capability_spoofing_weak_auth", str(tmp_path))
+    result_path = Path(directory) / "result.json"
+    result = json.loads(result_path.read_text())
+    result["verdict"] = "passed"
+    result_path.write_text(json.dumps(result))
+    run_lab("voting", str(tmp_path))
+
+    rows = scan_bundles(str(tmp_path))
+    bad = next(row for row in rows if row["run_id"] == Path(directory).name)
+    assert bad["verified"] is False
+    assert any("hash mismatch" in problem for problem in bad["problems"])
+    board = render_board(str(tmp_path))
+    assert board.count("1/1 passed") == 1
+    assert "excluded from rankings" in board
+    assert "hash mismatch" in board
+
+
+def test_board_reports_malformed_bundles_without_losing_good_runs(tmp_path):
+    bad = tmp_path / "broken"
+    bad.mkdir()
+    (bad / "manifest.json").write_text("{")
+    (bad / "run.json").write_text("{")
+    (bad / "result.json").write_text("{")
+    run_lab("voting", str(tmp_path))
+
+    board = render_board(str(tmp_path))
+
+    assert "1/1 passed" in board
+    assert "broken" in board
+    assert "unreadable" in board
+
+
+def test_board_retains_evaluator_mismatch_as_unverified(tmp_path):
+    directory, _ = run_lab("voting", str(tmp_path))
+    result_path = Path(directory) / "result.json"
+    result = json.loads(result_path.read_text())
+    result["evaluator_version"] = "historical-version"
+    result_path.write_text(json.dumps(result))
+    import hashlib
+    from nandatown.records import fingerprint
+    manifest_path = Path(directory) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["result.json"] = "sha256:" + hashlib.sha256(result_path.read_bytes()).hexdigest()
+    manifest["bundle_fingerprint"] = fingerprint(manifest["files"])
+    manifest_path.write_text(json.dumps(manifest))
+
+    board = render_board(str(tmp_path))
+
+    assert "evaluator version differs" in board
+    assert "1/1 passed" not in board
