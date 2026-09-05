@@ -126,6 +126,24 @@ def test_onramp_does_not_write_through_a_candidate_symlink(tmp_path):
     assert list(other.iterdir()) == []
 
 
+@pytest.mark.parametrize("field,value", [("kind", "profile"), ("name", "other"),
+                                         ("version", "999")])
+def test_onramp_reuse_binds_the_complete_release(tmp_path, field, value):
+    candidate = Path(onramp(FIXTURE, out_dir=str(tmp_path)))
+    path = candidate / "release.json"
+    release = json.loads(path.read_text())
+    release[field] = value
+    path.write_text(json.dumps(release))
+    before = {file.relative_to(tmp_path): file.read_bytes()
+              for file in tmp_path.rglob("*") if file.is_file()}
+
+    with pytest.raises(OnrampError, match="release"):
+        onramp(FIXTURE, out_dir=str(tmp_path))
+
+    assert before == {file.relative_to(tmp_path): file.read_bytes()
+                      for file in tmp_path.rglob("*") if file.is_file()}
+
+
 def test_embedded_secret_is_caught(tmp_path):
     with open(FIXTURE) as f:
         spec = json.load(f)

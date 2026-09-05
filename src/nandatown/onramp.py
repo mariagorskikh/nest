@@ -213,6 +213,9 @@ def onramp(spec_path: str, name: str | None = None,
     name = slugify(name or analysis["title"])
     snapshot_fp = fingerprint(raw)
     subject = f"{name}@{snapshot_fp}"
+    release = ReleaseRef(kind="service", name=name,
+                         version=analysis["version"],
+                         content_fingerprint=snapshot_fp)
 
     candidate_dir = os.path.join(out_dir, name)
     ext = "yaml" if spec_path.endswith((".yaml", ".yml")) else "json"
@@ -230,6 +233,8 @@ def onramp(spec_path: str, name: str | None = None,
                 raise OnrampError(
                     f"{name!r} already has a different pinned snapshot;"
                     " choose a new --name or --out directory")
+            if previous != release:
+                raise ValueError("release does not match the requested candidate")
             with open(snapshot_path) as f:
                 if f.read() != raw:
                     raise ValueError("snapshot differs from its release")
@@ -255,9 +260,6 @@ def onramp(spec_path: str, name: str | None = None,
     with open(os.path.join(candidate_dir, "SKILL.md"), "w") as f:
         f.write(skill_text)
 
-    release = ReleaseRef(kind="service", name=name,
-                         version=analysis["version"],
-                         content_fingerprint=snapshot_fp)
     with open(os.path.join(candidate_dir, "release.json"), "w") as f:
         f.write(release.model_dump_json(indent=2))
 
