@@ -53,6 +53,10 @@ STRICT_PATH_EVALUATORS = {
     STRICT_PATH_EVALUATOR,
     STRICT_QUOTE_INTENT_EVALUATOR,
 }
+LEGACY_PATH_EVALUATORS = {
+    PATH_EVALUATOR,
+    QUOTE_INTENT_EVALUATOR,
+}
 QUOTE_INTENT_EVALUATORS = {
     QUOTE_INTENT_EVALUATOR,
     STRICT_QUOTE_INTENT_EVALUATOR,
@@ -68,13 +72,15 @@ def path_evaluator_version(profile: PathProfile) -> str:
         return "path-quote-intent-0.1"
     if profile.evaluator == PATH_EVALUATOR:
         return PATH_EVALUATOR_VERSION
-    # Preserve the historical fallback for old price-only profiles and any
-    # already-issued profile that relied on it.
-    return PATH_EVALUATOR_VERSION
+    raise ValueError(f"unsupported path evaluator {profile.evaluator!r}")
 
 
 def _strict_path_semantics(profile: PathProfile) -> bool:
-    return profile.evaluator in STRICT_PATH_EVALUATORS
+    if profile.evaluator in STRICT_PATH_EVALUATORS:
+        return True
+    if profile.evaluator in LEGACY_PATH_EVALUATORS:
+        return False
+    raise ValueError(f"unsupported path evaluator {profile.evaluator!r}")
 
 
 def _quote_intent_semantics(profile: PathProfile) -> bool:
@@ -259,7 +265,12 @@ def run_path_test(subject_url: str | None, out_dir: str,
                                         http=client,
                                         max_response_bytes=response_budget,
                                         timeout_seconds=timeout)
-                    state = task.get("status", {}).get("state")
+                    status = task.get("status", {})
+                    if strict_semantics:
+                        state = (status.get("state")
+                                 if isinstance(status, dict) else None)
+                    else:
+                        state = status.get("state")
                     exchange_detail = {
                         "attempt": attempt,
                         "ok": True,
@@ -466,6 +477,12 @@ def evaluate_path(profile: PathProfile, run_id: str,
             note="Town's own driver malfunctioned: "
                  + driver_errors[0].detail.get("reason", "")
                  + "; this run is an error, not an agent failure"))
+    elif strict_semantics and len(first_exchange) > 1:
+        stages.append(StageResult(
+            name="protocol_invocation", status="failed",
+            evidence=[event.event_id for event in first_exchange],
+            note="expected exactly one protocol exchange for attempt 1,"
+                 f" observed {len(first_exchange)}"))
     elif first_exchange and first_exchange[0].detail.get("ok"):
         detail = first_exchange[0].detail
         if detail.get("kind") != "task" or not detail.get("state"):
@@ -497,10 +514,11 @@ def evaluate_path(profile: PathProfile, run_id: str,
 
     first_fulfillment = find("fulfillment_observed", attempt=1)
     first_bad = find("fulfillment_unparseable", attempt=1)
+    first_outcomes = first_fulfillment + first_bad
     expected_outputs = profile.expected.get("terminal_fulfillments", 1)
     if strict_semantics:
         successful_exchange = (
-            first_exchange
+            len(first_exchange) == 1
             and first_exchange[0].detail.get("ok")
             and first_exchange[0].detail.get("kind") == "task"
             and first_exchange[0].detail.get("state") == "completed"
@@ -522,6 +540,13 @@ def evaluate_path(profile: PathProfile, run_id: str,
                     evidence=evidence,
                     note="expected exactly one terminal text output,"
                          f" observed {output_count!r}"))
+            elif len(first_outcomes) != output_count:
+                stages.append(StageResult(
+                    name="semantic_result", status="failed",
+                    evidence=[event.event_id for event in first_outcomes],
+                    note=f"recorded {output_count} terminal text output but"
+                         f" observed {len(first_outcomes)} fulfillment"
+                         " evaluation events"))
             elif first_fulfillment:
                 stages.append(_semantic_fulfillment_stage(
                     profile, first_fulfillment[0]))
@@ -550,7 +575,16 @@ def evaluate_path(profile: PathProfile, run_id: str,
     second = find("fulfillment_observed", attempt=2)
     second_exchange = find("protocol_exchange", attempt=2)
     second_bad = find("fulfillment_unparseable", attempt=2)
-    if strict_semantics and first_fulfillment and second_exchange:
+    second_outcomes = second + second_bad
+    if strict_semantics and len(first_fulfillment) == 1 \
+            and len(second_exchange) > 1:
+        stages.append(StageResult(
+            name="duplicate_request", status="failed",
+            evidence=[event.event_id for event in second_exchange],
+            note="expected exactly one protocol exchange for attempt 2,"
+                 f" observed {len(second_exchange)}"))
+    elif strict_semantics and len(first_fulfillment) == 1 \
+            and len(second_exchange) == 1:
         detail = second_exchange[0].detail
         if not detail.get("ok"):
             stages.append(StageResult(
@@ -576,6 +610,13 @@ def evaluate_path(profile: PathProfile, run_id: str,
                 note="expected exactly one terminal text output from the"
                      " duplicate request, observed"
                      f" {detail.get('terminal_output_count')!r}"))
+        elif len(second_outcomes) != detail.get("terminal_output_count"):
+            stages.append(StageResult(
+                name="duplicate_request", status="failed",
+                evidence=[event.event_id for event in second_outcomes],
+                note="recorded one terminal text output from the duplicate"
+                     f" request but observed {len(second_outcomes)}"
+                     " fulfillment evaluation events"))
         elif second:
             same = (second[0].detail.get("content_digest")
                     == first_fulfillment[0].detail.get("content_digest"))
