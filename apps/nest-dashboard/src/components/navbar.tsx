@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 type NavChild = { href: string; label: string; sub?: boolean };
 type NavItem = {
@@ -36,6 +36,25 @@ const items: NavItem[] = [
     ],
   },
 ];
+
+const SIDEBAR_STORAGE_KEY = "nt-sidebar-collapsed";
+const SIDEBAR_CHANGE_EVENT = "nt-sidebar-collapsed-change";
+
+function subscribeSidebarPreference(onStoreChange: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === SIDEBAR_STORAGE_KEY) onStoreChange();
+  };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(SIDEBAR_CHANGE_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(SIDEBAR_CHANGE_EVENT, onStoreChange);
+  };
+}
+
+function sidebarPreferenceSnapshot() {
+  return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1";
+}
 
 function NavList({
   pathname,
@@ -109,23 +128,17 @@ function NavList({
 
 export function Navbar() {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    if (localStorage.getItem("nt-sidebar-collapsed") === "1") setCollapsed(true);
-  }, []);
-
-  // Close the mobile drawer whenever the route changes.
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
+  const collapsed = useSyncExternalStore(
+    subscribeSidebarPreference,
+    sidebarPreferenceSnapshot,
+    () => false,
+  );
+  const [mobileOpenPath, setMobileOpenPath] = useState<string | null>(null);
+  const mobileOpen = mobileOpenPath === pathname;
 
   function toggle() {
-    setCollapsed((c) => {
-      localStorage.setItem("nt-sidebar-collapsed", c ? "0" : "1");
-      return !c;
-    });
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? "0" : "1");
+    window.dispatchEvent(new Event(SIDEBAR_CHANGE_EVENT));
   }
 
   const toggleBtnCls =
@@ -142,7 +155,7 @@ export function Navbar() {
           </Link>
           <button
             type="button"
-            onClick={() => setMobileOpen((o) => !o)}
+            onClick={() => setMobileOpenPath(mobileOpen ? null : pathname)}
             className={toggleBtnCls}
             aria-label={mobileOpen ? "Close menu" : "Open menu"}
             aria-expanded={mobileOpen}
@@ -154,7 +167,7 @@ export function Navbar() {
         {/* Slide-down menu anchored under the bar */}
         {mobileOpen && (
           <div className="absolute inset-x-0 top-14 max-h-[calc(100vh-3.5rem)] overflow-y-auto border-b border-cream-400/60 bg-cream-100 px-3 py-4 shadow-lg">
-            <NavList pathname={pathname} onNavigate={() => setMobileOpen(false)} />
+            <NavList pathname={pathname} onNavigate={() => setMobileOpenPath(null)} />
             <div className="mt-4 flex items-center gap-5 border-t border-cream-400/60 px-3 pt-4">
               <a
                 href="https://github.com/projnanda/nandatown"
