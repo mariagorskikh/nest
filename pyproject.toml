@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "nandatown"
 version = "0.2.0"
 description = "Local-first NANDA Town sandbox and test harness. Bring an agent, give it a task, break something on purpose, leave with evidence."
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",

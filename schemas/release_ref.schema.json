@@ -12,7 +12,8 @@
         "scenario",
         "plugin",
         "package",
-        "profile"
+        "profile",
+        "service"
       ],
       "title": "Kind",
       "type": "string"
