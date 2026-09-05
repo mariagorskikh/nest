@@ -72,6 +72,18 @@ def test_board_groups_and_ranks(tmp_path):
     assert voting_line < weak_line
 
 
+def test_lab_board_uses_committed_evaluation_time(tmp_path):
+    directory, result = run_lab("voting", str(tmp_path))
+    run = json.loads(Path(directory, "run.json").read_text())
+    assert run["created_at"] == 0.0
+
+    row = scan_bundles(str(tmp_path))[0]
+
+    assert row["verified"] is True
+    assert row["at"] == result.evaluated_at
+    assert row["at"] > 0.0
+
+
 def test_cli_new_and_board(tmp_path, capsys):
     assert main(["new", "scenario", "demo", "--dir", str(tmp_path)]) == 0
     assert main(["board", str(tmp_path)]) == 0

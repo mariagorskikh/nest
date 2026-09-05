@@ -48,7 +48,9 @@ def scan_bundles(directory: str) -> list[dict[str, Any]]:
             "profile": run.profile_name,
             "mode": bundle["mode"],
             "verdict": result.verdict,
-            "at": run.created_at,
+            # Lab starts at logical time zero. The result's hash-committed
+            # evaluation time gives every mode the same wall-clock chronology.
+            "at": result.evaluated_at,
             "verified": True,
             "problems": [],
         })
