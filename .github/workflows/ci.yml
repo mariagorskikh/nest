@@ -43,3 +43,28 @@ jobs:
         run: nandatown run marketplace --out /tmp/runs
       - name: Smoke run (Track)
         run: nandatown run quote-crash-restart --out /tmp/runs
+
+  distribution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build source and wheel artifacts
+        run: |
+          python -m pip install build
+          python -m build
+          python scripts/check_distributions.py dist
+      - name: Install the wheel outside the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/town-wheel-env"
+          "$RUNNER_TEMP/town-wheel-env/bin/python" -m pip install dist/*.whl
+      - name: Installed-wheel controls
+        working-directory: ${{ runner.temp }}
+        env:
+          NANDATOWN_HOME: ${{ runner.temp }}/town-wheel-state
+        run: |
+          "$RUNNER_TEMP/town-wheel-env/bin/nandatown" run marketplace --out "$RUNNER_TEMP/town-wheel-runs"
+          "$RUNNER_TEMP/town-wheel-env/bin/nandatown" run quote-crash-restart --out "$RUNNER_TEMP/town-wheel-runs"
+          "$RUNNER_TEMP/town-wheel-env/bin/nandatown" skills
