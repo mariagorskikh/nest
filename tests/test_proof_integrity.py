@@ -1,5 +1,6 @@
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -196,4 +197,60 @@ def test_malformed_existing_receipt_refuses_proof_without_crashing(tmp_path):
 
     assert not ok
     assert "receipt" in text
+    assert "TOWN-TESTED" not in text
+
+
+def test_make_receipt_does_not_write_through_dangling_symlink(tmp_path):
+    directory = complete_bundle(tmp_path)
+    outside = tmp_path / "outside-receipt.json"
+    (directory / "receipt.json").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="regular file"):
+        make_receipt(str(directory))
+
+    assert not outside.exists()
+
+
+def test_proof_rejects_dangling_receipt_symlink_without_creating_target(
+        tmp_path):
+    directory = complete_bundle(tmp_path)
+    outside = tmp_path / "outside-receipt.json"
+    (directory / "receipt.json").symlink_to(outside)
+
+    ok, text = render_proof(str(directory))
+
+    assert not ok
+    assert "not a regular file" in text
+    assert not outside.exists()
+
+
+@pytest.mark.parametrize(
+    ("evaluated_at", "reason"),
+    [(float("nan"), "finite"), (float("inf"), "finite"),
+     (float("-inf"), "finite"), (time.time() + 86400, "future")],
+    ids=["nan", "positive-infinity", "negative-infinity", "future"],
+)
+def test_proof_rejects_invalid_evidence_timestamp(
+        tmp_path, evaluated_at, reason):
+    directory = complete_bundle(tmp_path)
+    result_path = directory / "result.json"
+    result = json.loads(result_path.read_text())
+    result["evaluated_at"] = evaluated_at
+    result_path.write_text(json.dumps(result))
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["result.json"] = (
+        "sha256:" + hashlib.sha256(result_path.read_bytes()).hexdigest())
+    manifest["bundle_fingerprint"] = fingerprint(manifest["files"])
+    manifest_path.write_text(json.dumps(manifest))
+    attest_bundle(str(directory))
+    assert verify_bundle(str(directory)) == []
+
+    try:
+        ok, text = render_proof(str(directory))
+    except Exception as exc:  # pragma: no cover - public proof boundary
+        pytest.fail(f"invalid evidence timestamp raised {type(exc).__name__}: {exc}")
+
+    assert not ok
+    assert reason in text.lower()
     assert "TOWN-TESTED" not in text

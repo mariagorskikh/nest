@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import stat
 import time
 from typing import Any
 
@@ -30,6 +31,44 @@ DEFAULT_LIMITATIONS = [
     " safety",
     "a favorable result grants no permissions and endorses nothing",
 ]
+
+
+def _receipt_file_problem(path: str, *, missing_ok: bool = False) -> str | None:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return None if missing_ok else "receipt missing"
+    except OSError as exc:
+        return f"receipt unreadable: {exc}"
+    if not stat.S_ISREG(metadata.st_mode):
+        return "receipt is not a regular file"
+    return None
+
+
+def _load_receipt_document(path: str) -> tuple[Any | None, str | None]:
+    problem = _receipt_file_problem(path)
+    if problem:
+        return None, problem
+    try:
+        with open(path) as f:
+            return json.load(f), None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return None, f"receipt unreadable: {exc}"
+
+
+def _proof_window_problems(window: dict[str, Any], now: float) -> list[str]:
+    problems = []
+    for name in ("started", "evaluated"):
+        value = window.get(name)
+        if isinstance(value, bool) \
+                or not isinstance(value, (int, float)) \
+                or not math.isfinite(value):
+            problems.append(
+                f"the evidence window {name} timestamp must be finite")
+        elif value > now:
+            problems.append(
+                f"the evidence window {name} timestamp is in the future")
+    return problems
 
 
 def _bundle_receipt_fields(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -77,6 +116,11 @@ def make_receipt(bundle_dir: str, keystore=None,
         default_keystore_dir,
     )
 
+    path = os.path.join(bundle_dir, "receipt.json")
+    path_problem = _receipt_file_problem(path, missing_ok=True)
+    if path_problem:
+        raise ValueError(f"refusing to write receipt: {path_problem}")
+
     bundle = load_bundle(bundle_dir)
     fields = _bundle_receipt_fields(bundle)
 
@@ -95,7 +139,6 @@ def make_receipt(bundle_dir: str, keystore=None,
     receipt = {"payload": payload,
                "signature": keystore.sign(signer, payload),
                "controller_public": identity["controller_public"]}
-    path = os.path.join(bundle_dir, "receipt.json")
     with open(path, "w") as f:
         json.dump(receipt, f, indent=2)
     return path
@@ -108,11 +151,9 @@ def verify_receipt(receipt_path: str,
     from .identity_portable import verify_signature
 
     problems: list[str] = []
-    try:
-        with open(receipt_path) as f:
-            receipt = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        return [f"receipt unreadable: {exc}"]
+    receipt, read_problem = _load_receipt_document(receipt_path)
+    if read_problem:
+        return [read_problem]
     if not isinstance(receipt, dict):
         return ["receipt must be a JSON object"]
     payload = receipt.get("payload")
@@ -172,7 +213,7 @@ def render_proof(bundle_dir: str,
                  freshness_days: float = 30.0) -> tuple[bool, str]:
     """The TOWN-TESTED badge, rendered only when the evidence is
     conclusive, covered, fresh, and the bundle and receipt verify."""
-    from .bundle import verify_bundle
+    from .bundle import load_bundle, verify_bundle
 
     if isinstance(freshness_days, bool) \
             or not isinstance(freshness_days, (int, float)) \
@@ -186,16 +227,29 @@ def render_proof(bundle_dir: str,
         lines += [f"  {problem}" for problem in bundle_problems]
         return False, "\n".join(lines) + "\n"
 
+    bundle = load_bundle(bundle_dir)
+    window_problems = _proof_window_problems(
+        _bundle_receipt_fields(bundle)["window"], time.time())
+    if window_problems:
+        lines = ["No Town Proof. The evidence window is invalid:"]
+        lines += [f"  {problem}" for problem in window_problems]
+        return False, "\n".join(lines) + "\n"
+
     receipt_path = os.path.join(bundle_dir, "receipt.json")
-    if not os.path.exists(receipt_path):
+    if not os.path.lexists(receipt_path):
         make_receipt(bundle_dir)
     problems = verify_receipt(receipt_path, bundle_dir)
     if problems:
         lines = ["No Town Proof. Receipt verification failed:"]
         lines += [f"  {problem}" for problem in problems]
         return False, "\n".join(lines) + "\n"
-    with open(receipt_path) as f:
-        payload = json.load(f)["payload"]
+    receipt, read_problem = _load_receipt_document(receipt_path)
+    if read_problem:
+        return False, f"No Town Proof. {read_problem}.\n"
+    if not isinstance(receipt, dict) \
+            or not isinstance(receipt.get("payload"), dict):
+        return False, "No Town Proof. Receipt became malformed.\n"
+    payload = receipt["payload"]
 
     reasons: list[str] = list(problems)
     claim = payload["claim"]

@@ -133,3 +133,29 @@ def test_malformed_receipt_is_reported_not_raised(tmp_path, document):
 
     assert problems
     assert any("receipt" in problem for problem in problems)
+
+
+def test_symlinked_receipt_is_rejected_before_read(tmp_path):
+    target = tmp_path / "target.json"
+    target.write_text("{}")
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.symlink_to(target)
+
+    problems = verify_receipt(str(receipt_path))
+
+    assert any("not a regular file" in problem for problem in problems), problems
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO unavailable")
+def test_fifo_receipt_is_rejected_before_open(tmp_path, monkeypatch):
+    receipt_path = tmp_path / "receipt.json"
+    os.mkfifo(receipt_path)
+
+    def forbidden_open(*_args, **_kwargs):
+        pytest.fail("verify_receipt attempted to open a FIFO")
+
+    monkeypatch.setattr("builtins.open", forbidden_open)
+
+    problems = verify_receipt(str(receipt_path))
+
+    assert any("not a regular file" in problem for problem in problems), problems
