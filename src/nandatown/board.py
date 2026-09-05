@@ -30,13 +30,20 @@ def scan_bundles(directory: str) -> list[dict[str, Any]]:
         manifest_path = os.path.join(bundle_dir, "manifest.json")
         if not os.path.lexists(manifest_path):
             continue
-        problems = verify_bundle(bundle_dir)
+        try:
+            problems = verify_bundle(bundle_dir)
+            bundle = None if problems else load_bundle(bundle_dir)
+        except Exception as exc:
+            # A board entry is untrusted input. Older verifier versions may
+            # raise while parsing it; one bad entry must not hide good runs.
+            problems = [f"bundle unreadable: {type(exc).__name__}"]
+            bundle = None
         if problems:
             rows.append({"run_id": entry, "directory": entry, "verified": False,
                          "problems": problems, "profile": "unverified",
                          "mode": "unknown", "verdict": "unverified", "at": 0.0})
             continue
-        bundle = load_bundle(bundle_dir)
+        assert bundle is not None
         address = bundle["manifest"]["bundle_fingerprint"]
         if address in seen_fingerprints:
             continue
