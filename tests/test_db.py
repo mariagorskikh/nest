@@ -42,6 +42,40 @@ def stored_rows(db, table):
         return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
 
 
+@pytest.mark.parametrize("state", ["accepted", "claimed"])
+def test_reoffer_requires_completed_work(db, run, state):
+    accept(db, run)
+    if state == "claimed":
+        db.claim_next(run, "seller", 5.0, 101.0)
+    before = stored_rows(db, "claims")
+    assert db.reoffer(run, "q-1", "seller", 5.0, 102.0) is None
+    assert stored_rows(db, "claims") == before
+
+
+def test_concurrent_reoffers_issue_one_durable_duplicate(db, run):
+    accept(db, run)
+    first = db.claim_next(run, "seller", 5.0, 101.0)
+    db.ack(run, "seller", "q-1", first["fence"], "processed", {}, 102.0)
+    barrier = threading.Barrier(2)
+
+    def offer():
+        other = TownDB(db.path)
+        barrier.wait(timeout=5)
+        return other.reoffer(run, "q-1", "seller", 5.0, 103.0)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(offer) for _ in range(2)]
+        results = [future.result(timeout=10) for future in futures]
+    assert sum(result is not None for result in results) == 1
+    winner = next(result for result in results if result)
+    assert winner["attempt"] == 2
+    assert sum(row["active"] for row in stored_rows(db, "claims")) == 1
+    assert stored_rows(db, "messages")[0]["attempts"] == 2
+    assert sum(event["kind"] == "duplicate_offered" for event in db.events(run)) == 1
+    db.ack(run, "seller", "q-1", winner["fence"], "processed", {}, 104.0)
+    assert TownDB(db.path).reoffer(run, "q-1", "seller", 5.0, 105.0) is None
+
+
 IDENTITY_CHANGES = [
     {"sender": "other-buyer"},
     {"to": "other-seller"},
@@ -229,6 +263,73 @@ def test_accept_then_claim_returns_work_with_fence(db, run):
     assert claim["fence"]
 
 
+def test_concurrent_claim_issues_one_active_fence(db, run, monkeypatch):
+    """Two SQLite connections must not both claim the same accepted work."""
+    accept(db, run)
+    start = threading.Barrier(2, timeout=10)
+    unprotected_reads = threading.Barrier(2, timeout=10)
+
+    class ClaimCursor:
+        def __init__(self, cursor, conn):
+            self.cursor, self.conn = cursor, conn
+
+        def fetchone(self):
+            row = self.cursor.fetchone()
+            # On the broken implementation, both real connections finish the
+            # accepted-row lookup before either writes. An immediate write
+            # transaction deliberately makes this barrier unnecessary.
+            if not self.conn.in_transaction:
+                unprotected_reads.wait()
+            return row
+
+    class RacingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            cursor = self.conn.execute(sql, *args)
+            if sql.startswith("SELECT * FROM messages") \
+                    and "status='accepted'" in sql:
+                return ClaimCursor(cursor, self.conn)
+            return cursor
+
+    def synchronize(instance):
+        original = instance._conn
+        first = True
+
+        @contextmanager
+        def connection():
+            nonlocal first
+            with original() as conn:
+                if first:
+                    first = False
+                    start.wait()
+                yield RacingConnection(conn)
+
+        monkeypatch.setattr(instance, "_conn", connection)
+
+    contenders = [TownDB(db.path), TownDB(db.path)]
+    for contender in contenders:
+        synchronize(contender)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(contender.claim_next, run, "seller", 5.0, 101.0)
+            for contender in contenders
+        ]
+        outcomes = [future.result(timeout=20) for future in futures]
+
+    assert sum(outcome is not None for outcome in outcomes) == 1
+    message, = stored_rows(db, "messages")
+    assert message["status"] == "claimed"
+    assert message["attempts"] == 1
+    claims = stored_rows(db, "claims")
+    assert len(claims) == 1
+    assert claims[0]["active"] == 1
+    assert [event["kind"] for event in db.events(run)].count(
+        "message_claimed") == 1
+
+
 def test_idempotent_resend_and_identity_reuse(db, run):
     accept(db, run, now=100.0)
     accepted_at, replay = accept(db, run, now=200.0)
@@ -269,6 +370,93 @@ def test_lease_expiry_inside_ack_is_stale(db, run):
         db.ack(run, "seller", "q-1", first["fence"], "processed", {}, now=110.0)
     again = db.claim_next(run, "seller", lease_seconds=2.0, now=111.0)
     assert again["attempt"] == 2
+
+
+def test_ack_and_reclaim_have_only_serial_outcomes(db, run, monkeypatch):
+    """A fence cannot acknowledge after another connection reclaims it."""
+    accept(db, run)
+    first = db.claim_next(run, "seller", lease_seconds=2.0, now=101.0)
+    ack_db = TownDB(db.path)
+    reclaim_db = TownDB(db.path)
+    claim_selected = threading.Event()
+    reclaim_finished = threading.Event()
+
+    class AckCursor:
+        def __init__(self, cursor, conn):
+            self.cursor, self.conn = cursor, conn
+
+        def fetchone(self):
+            row = self.cursor.fetchone()
+            claim_selected.set()
+            # Reproduce the check/use gap only when the lookup is not already
+            # protected by a write transaction. With the repair, ack proceeds
+            # atomically and the competing reclaim observes completed work.
+            if not self.conn.in_transaction:
+                assert reclaim_finished.wait(timeout=10)
+            return row
+
+    class AckConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            cursor = self.conn.execute(sql, *args)
+            if sql.startswith("SELECT * FROM claims") and "fence=?" in sql:
+                return AckCursor(cursor, self.conn)
+            return cursor
+
+    original = ack_db._conn
+    first_connection = True
+
+    @contextmanager
+    def synchronized_ack_connection():
+        nonlocal first_connection
+        with original() as conn:
+            if first_connection:
+                first_connection = False
+                yield AckConnection(conn)
+            else:
+                yield conn
+
+    monkeypatch.setattr(ack_db, "_conn", synchronized_ack_connection)
+
+    def acknowledge():
+        try:
+            ack_db.ack(run, "seller", "q-1", first["fence"],
+                       "processed", {}, now=102.0)
+            return "acked"
+        except StaleFence:
+            return "stale"
+
+    def reclaim():
+        assert claim_selected.wait(timeout=10)
+        try:
+            return reclaim_db.claim_next(run, "seller", lease_seconds=2.0,
+                                         now=104.0)
+        finally:
+            reclaim_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ack_future = pool.submit(acknowledge)
+        reclaim_future = pool.submit(reclaim)
+        ack_outcome = ack_future.result(timeout=20)
+        reclaimed = reclaim_future.result(timeout=20)
+
+    if reclaimed is None:
+        assert ack_outcome == "acked"
+        message, = stored_rows(db, "messages")
+        assert message["status"] == "done"
+        assert not [claim for claim in stored_rows(db, "claims")
+                    if claim["active"]]
+    else:
+        assert ack_outcome == "stale"
+        message, = stored_rows(db, "messages")
+        assert message["status"] == "claimed"
+        active = [claim for claim in stored_rows(db, "claims")
+                  if claim["active"]]
+        assert len(active) == 1
+        assert active[0]["fence"] == reclaimed["fence"]
+        assert stored_rows(db, "acks") == []
 
 
 def test_ack_completes_message(db, run):

@@ -93,3 +93,56 @@ def test_kiosk_mode_disables_execution_surfaces(tmp_path):
             await pilot.pause()
 
     run_async(go())
+
+
+def test_kiosk_track_run_forces_mock_model(tmp_path, monkeypatch):
+    import nandatown.runner as runner_module
+
+    captured = {}
+
+    def fake_run_town(*args, **kwargs):
+        captured.update(kwargs)
+        return "unused-bundle", object()
+
+    monkeypatch.setenv("TOWN_MODEL", "hosted:paid")
+    monkeypatch.setenv("TOWN_MODEL_KEY", "paid-secret")
+    monkeypatch.delenv("NANDATOWN_KIOSK_ALLOW_HOSTED_MODEL", raising=False)
+    monkeypatch.setattr(runner_module, "run_town", fake_run_town)
+    monkeypatch.setattr(TownApp, "_show_result",
+                        lambda self, bundle, result, log: None)
+
+    async def go():
+        app = TownApp(out_dir=str(tmp_path), kiosk=True)
+        async with app.run_test() as pilot:
+            app._run_target("quote-clean", None)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+    run_async(go())
+    assert captured["model"] == "mock:v1"
+
+
+def test_kiosk_hosted_model_requires_operator_opt_in(tmp_path, monkeypatch):
+    import nandatown.runner as runner_module
+
+    captured = {}
+
+    def fake_run_town(*args, **kwargs):
+        captured.update(kwargs)
+        return "unused-bundle", object()
+
+    monkeypatch.setenv("TOWN_MODEL", "hosted:paid")
+    monkeypatch.setenv("NANDATOWN_KIOSK_ALLOW_HOSTED_MODEL", "1")
+    monkeypatch.setattr(runner_module, "run_town", fake_run_town)
+    monkeypatch.setattr(TownApp, "_show_result",
+                        lambda self, bundle, result, log: None)
+
+    async def go():
+        app = TownApp(out_dir=str(tmp_path), kiosk=True)
+        async with app.run_test() as pilot:
+            app._run_target("quote-clean", None)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+    run_async(go())
+    assert captured.get("model") is None

@@ -21,9 +21,10 @@ import uuid
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .db import IdentityReuse, StaleFence, TownDB
+from .db import IdentityReuse, RunFinished, StaleFence, TownDB
 from .records import TestProfile, fingerprint
 
 ACK_STATUSES = {"received", "processed", "rejected", "retryable", "failed"}
@@ -69,6 +70,14 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
     db = TownDB(db_path)
     # Fault bookkeeping per run: each fault fires at most once.
     faults: dict[str, dict[str, Any]] = {}
+
+    @app.exception_handler(RunFinished)
+    async def run_finished(_request, exc: RunFinished):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": {"error": "run_finished",
+                                "run_id": exc.run_id}},
+        )
 
     def deny(run_id: str, name: str, permission: str, now: float) -> None:
         """A refused action is evidence: record it, then refuse."""
@@ -277,10 +286,6 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
                                     lease_seconds=state["lease"], now=now)
                 if result is not None:
                     state["fired"] = True
-                    db.record_event(run_id, observer="town",
-                                    kind="duplicate_offered", subject=done,
-                                    at=now, detail={"fault":
-                                                    "duplicate_delivery"})
         if result is None:
             from fastapi import Response
             return Response(status_code=204)
@@ -336,9 +341,10 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
 
     @app.post("/runs/{run_id}/finish", dependencies=[Depends(require_admin)])
     def finish(run_id: str):
-        db.set_run_status(run_id, "finished")
-        db.record_event(run_id, observer="town", kind="run_finished",
-                        subject=run_id, at=time.time())
+        try:
+            db.finish_run(run_id, now=time.time())
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown run")
         return {"finished": True}
 
     return app
