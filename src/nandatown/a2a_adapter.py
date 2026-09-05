@@ -194,6 +194,30 @@ def artifact_text(task: dict[str, Any]) -> str:
     return ""
 
 
+def artifact_texts(task: dict[str, Any]) -> list[Any]:
+    """Return every text output without silently selecting the first one.
+
+    The strict Path profiles count each text part as a possible fulfillment.
+    Malformed artifact containers produce no text outputs; malformed text
+    values are retained so the caller can report them as unparseable rather
+    than mistaking them for an absent response.
+    """
+    artifacts = task.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        return []
+    texts: list[Any] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        parts = artifact.get("parts", [])
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if isinstance(part, dict) and part.get("kind") == "text":
+                texts.append(part.get("text", ""))
+    return texts
+
+
 def probe_endpoint(base_url: str,
                    http: httpx.Client | None = None) -> dict[str, Any]:
     """Card validation plus one message/send round trip."""

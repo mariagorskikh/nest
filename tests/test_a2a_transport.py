@@ -251,7 +251,7 @@ def test_real_cli_selects_shared_default_and_records_owned_policy(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     directory, = tmp_path.glob("path-*")
     bundle = load_bundle(str(directory))
-    assert bundle["run"].profile_name == "a2a-capability-fulfillment@0.2"
+    assert bundle["run"].profile_name == "a2a-capability-fulfillment@0.3"
     policy = bundle["run"].config["a2a_transport_policy"]
     assert policy["trust_env"] is False
     assert policy["transport_retries"] == 0
