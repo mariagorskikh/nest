@@ -8,15 +8,15 @@ export const dynamic = "force-static";
 export function GET() {
   const body = `# Nanda Town
 
-> Nanda Town is an open-source, local-first integration lab for exact agent, service, and protocol paths. Its Python CLI runs Lab, Track, and Path workflows and writes stage-separated evidence that another operator can verify, inspect, and rerun. The website is a manual, catalog, and evidence viewer; it does not run agents.
+> Nanda Town is an open-source, local-first lab for declared agent workflows and protocol simulations. Its Python CLI runs Lab, Track, and Path workflows and writes stage-separated evidence that another operator can verify and inspect. Live reruns also require the original agent setup and any separately supplied inputs named in rerun_required_inputs. The website is a manual, catalog, and evidence viewer; it does not run agents.
 
 Current facts:
 - Install from the checked-out repository with Python 3.11 or newer: create a virtual environment, then run \`python -m pip install -e .\`. The executable is \`nandatown\`, not the legacy \`nest\` command.
 - Lab runs deterministic scripted scenarios. Track coordinates subprocess or external participants over local HTTP. \`nandatown test-agent --url URL\` exercises an already-running A2A agent on an exact Path.
 - A bundle's canonical records are \`profile.json\`, \`run.json\`, \`intents.jsonl\`, \`events.jsonl\`, and \`result.json\`; \`manifest.json\` commits to them. Stage states are passed, failed, not_enough_evidence, not_tested, and error.
-- \`nandatown verify\` checks bundle integrity and reproduces the recorded evaluation. \`report\` and \`replay\` are read-only views; \`visualize\` writes an HTML view. Running the target again creates a new bundle instead of rewriting the original evidence.
+- \`nandatown verify\` checks bundle integrity and reproduces the recorded evaluation when the matching local evaluator is available; historical version mismatches are reported, not silently upgraded. \`report\` and \`replay\` are read-only views; \`visualize\` writes an HTML view. Running the target again creates a new bundle instead of rewriting the original evidence.
 - Partial coverage may produce a valid signed receipt. Town Proof requires a verified, fresh, passed result with every recorded stage covered. A signature is a key commitment, not proof of independent observation, safety, authorization, adoption, or endorsement.
-- HTTP is the canonical participant boundary. MCP and A2A support are thin adapters to that boundary.
+- HTTP is the canonical Track participant boundary. MCP can expose its tools; the separate MCP test only probes initialization and tool listing. Path directly exercises a selected A2A workflow, not full protocol conformance.
 - Town-authored fixtures, reference agents, local end-to-end runs, and CI are not evidence of external adoption. External acceptance still requires an independently developed agent and another human/operator reproducing a useful result.
 - The SkillMD registry only makes the catalog entry discoverable. It does not verify, install, authorize, endorse, or execute the submitted skill, agent, or service. For new URL and GitHub entries, the catalog stores the source link without fetching or hosting the linked content, agent, or service.
 

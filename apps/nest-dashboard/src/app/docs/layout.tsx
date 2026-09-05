@@ -14,9 +14,9 @@ const softwareJsonLd = {
   applicationCategory: "DeveloperApplication",
   operatingSystem: "macOS, Linux, Windows",
   description:
-    "Local-first integration lab for exact agent, service, and protocol paths with reproducible evidence.",
+    "Local-first lab for declared agent workflows and protocol simulations with stage-separated evidence.",
   url: "https://nandatown.projectnanda.org/docs",
-  installUrl: "https://github.com/projnanda/nandatown#quick-start",
+  installUrl: "https://github.com/projnanda/nandatown#install",
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   publisher: { "@type": "Organization", name: "Project NANDA" },
 };

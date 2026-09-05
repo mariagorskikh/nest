@@ -67,8 +67,9 @@ export default async function Home() {
           <div className="mt-10 grid gap-10 lg:grid-cols-[1.5fr_1fr] lg:items-start">
             <p className="animate-fade-in stagger-2 text-[1.12rem] leading-[1.65] text-ink-600">
               Run a named Lab, Track, or Path workflow, preserve stage-separated
-              evidence, and give another operator the files needed to verify and
-              rerun it. Nanda Town is an Apache 2.0 project by Project NANDA.
+              evidence, and give another operator the files needed to verify it.
+              Live reruns also need the original agent setup and separately supplied
+              inputs. Nanda Town is an Apache 2.0 project by Project NANDA.
             </p>
 
             <div className="animate-fade-in stagger-3 lg:pt-2">

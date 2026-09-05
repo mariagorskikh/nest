@@ -2,19 +2,19 @@
 
 A test track for the Internet of AI agents, running on your laptop.
 
-> **August 2026 rebuild.** The town was rebuilt around the team's converged design (the identity statement, Run Zero, and the path proposal). The previous codebase is preserved untouched on the [`archive/legacy`](https://github.com/projnanda/nandatown/tree/archive/legacy) branch and frozen at the tag `v1-final`. Open pull requests written against it now target `archive/legacy`, where their diffs still apply exactly as authored. To pull a legacy contribution into the new town and test it against the reference agents, use `nandatown import-pr <number>`. Nothing was deleted.
+> **Current code and history.** This README describes the rebuilt `main` branch. The previous codebase is preserved at [`archive/legacy`](https://github.com/projnanda/nandatown/tree/archive/legacy) and the frozen tag [`v1-final`](https://github.com/projnanda/nandatown/tree/v1-final). A legacy PR's merge status does not establish that its original code runs here. `nandatown import-pr <number>` imports a bounded, untrusted snapshot for review; executing it is a separate action.
 
 Bring an agent. Give it a task. Break something on purpose. Leave with evidence of what actually happened. Agent, task, failure, evidence.
 
-Most AI evaluation asks how capable one model is on one task. The harder question is what happens when populations of agents must discover one another, establish trust, exchange value, negotiate, and coordinate under imperfect conditions. That question is what this town measures. Every report answers it stage by stage: did agents discover the right collaborators, did the marketplace reach a valid outcome, did every vote get counted, did the trust mechanism withstand manipulation, and did the network keep functioning when conditions changed.
+Most AI evaluation asks how capable one model is on one task. Town also explores what happens when agents must discover one another, establish trust, exchange value, negotiate, and coordinate under imperfect conditions. Each report answers only the questions exercised by its selected scenario or profile: marketplace settlement, voting, trust, network faults, or a small single-agent exchange. A passing quote test is not evidence about all of those systems.
 
-This is a testing tool first and a simulator second: a local-first sandbox and test harness for NANDA protocols, services, and agent-to-agent workflows. Two ways to test, twelve replaceable protocol layers, deterministic replayable traces, an LLM-powered mode for emergent behavior, protocol comparison, campaigns for statistical evidence, portable identity, signed attestations, and evidence bundles anyone can verify. A full run takes seconds and costs nothing.
+Town is a local test harness with three modes: simulated populations in the Lab, HTTP mailbox participants on the Track, and an existing A2A endpoint on the Path. It produces stage results and portable evidence. Built-in scripted and mock-model runs take seconds and need no model account. External agents and explicitly configured model endpoints may have their own costs.
 
-The framing comes from Ramesh Raskar's NandaTown introduction and the paper "Towards Sandboxes for the Internet of Agents" (papers.ssrn.com/sol3/papers.cfm?abstract_id=5801322): agent evaluation must move from isolated task competence to system fitness. This build makes that loop executable end to end: define a population, select a scenario, swap a protocol component, inject a failure, run, inspect every interaction, and compare the outcome against properties that should remain true.
+The framing comes from Ramesh Raskar's NandaTown introduction and the paper "Towards Sandboxes for the Internet of Agents" (papers.ssrn.com/sol3/papers.cfm?abstract_id=5801322): agent evaluation must move from isolated task competence to system fitness. In the Lab, this build makes a bounded simulation of that loop executable: define a population, select a scenario, swap a protocol component, inject a failure, run, inspect the recorded interactions, and compare the outcome against properties that should remain true.
 
 ![Architecture of nandatown: a CLI, TUI, and browser front door; the Lab, a seeded simulation over twelve replaceable protocol layers; the Track, a FastAPI coordinator over SQLite with subprocess participants; and one evidence pipeline that both modes write to](images/Flow.png)
 
-*How the town is built: one front door, two ways to test, one evidence pipeline.*
+*Lab and Track overview. The Path mode also writes to the shared evidence pipeline; see the current [architecture map](docs/architecture.md).*
 
 ![Sequence diagram of the quote-crash-restart profile: the buyer posts a quote request, the seller claims it under fence 1 and crashes, the runner restarts it, the seller reclaims under fence 2, any ack with the stale fence is rejected, and the buyer verifies the 3990-cent total](images/Test_track.png)
 
@@ -36,6 +36,9 @@ Linux: Homebrew and distro Pythons are externally managed (PEP 668)
 and refuse bare pip installs. `pipx install .` works too if you prefer
 pipx-managed CLIs.
 
+Start with the [existing-agent testing guide](docs/testing-an-existing-agent.md)
+for A2A endpoints, OpenClaw or another runtime, and a reproducible handoff.
+
 ## The front door
 
 ```
@@ -52,6 +55,11 @@ OpenAPI document), and Evidence (browse, report, verify, visualize
 every bundle). Everything the GUI does is also a plain command, so
 anything you click is scriptable.
 
+For a browser kiosk, use `nandatown ui --web --kiosk`. It disables visitor commands
+and server-path reads and defaults model runs to the local mock. Hosted-model
+access requires an explicit operator opt-in; see [kiosk controls](docs/operators.md#browser-kiosk)
+before exposing it to visitors.
+
 ## One command
 
 ```
@@ -66,17 +74,20 @@ nandatown run marketplace
 
 That runs a Lab scenario instead: two sellers and a buyer discover each other through the town index, haggle to a price, settle through escrow, survive a duplicated delivery, build reputation from signed receipts, and reuse a remembered counterparty in round two. Deterministic, seeded, replayable.
 
-## The two ways to test
+## The three ways to test
 
-**The Lab** is repeatable: scripted, mechanical participants in a seeded discrete event simulation. Same scenario and seed, same trace, every time. Faults are declared in the scenario and injected by the transport layer. Fast enough for CI and for campaigns of many trials.
+**The Lab** uses scripted participants in a seeded discrete event simulation. The same inputs reproduce the logical interactions and evaluation. Run IDs, key material, and wall-clock metadata can differ, so bundles are not byte-identical. Faults are declared in the scenario and injected by the selected layers.
 
-**The Track** is realistic: isolated participant subprocesses talking to a durable coordinator over real HTTP, with leases, fencing tokens, at-least-once delivery, and real process crashes and restarts. It is where a bring-your-own agent plugs in.
+**The Track** runs separate participant processes against a SQLite-backed coordinator over real HTTP, with leases, fencing tokens, at-least-once delivery, and process crashes and restarts. Custom commands and plugins execute with the user's operating-system privileges: separate processes and state directories are not a sandbox for hostile code.
 
-Both produce the same evidence bundle, so report, verify, replay, visualize, and campaign work identically on either.
+**The Path** calls an already-running A2A endpoint, checks a versioned synthetic quote contract, and repeats the logical request to test its observed response. Town does not need the agent's model credentials. Direct URLs and a local JSON index fixture are supported; the fixture is not an integration with a deployed NANDA Index.
+
+All three produce bundles for `report`, `verify`, `replay`, and `visualize`.
+Campaigns currently target Lab scenarios and Track profiles.
 
 ## The twelve layers
 
-Everything in the town runs on twelve replaceable protocol layers. Each has a working default plugin, and a scenario can swap any of them.
+The Lab has twelve replaceable protocol layers. Track uses the mailbox contract and Path uses its A2A driver; neither automatically inherits Lab plugins.
 
 | Layer | Default | What it does |
 |---|---|---|
@@ -122,7 +133,7 @@ nandatown scenarios
 nandatown run auction --seed 7
 ```
 
-| Scenario | What it proves |
+| Scenario | What it checks |
 |---|---|
 | marketplace | discovery, negotiation, escrow settlement, duplicate recognition, reputation, memory reuse |
 | auction | sealed signed bids, highest bid wins, late bid rejected, exactly one payment |
@@ -166,14 +177,20 @@ nandatown replay runs/<id> --kind escrow_released
 nandatown visualize runs/<id>
 ```
 
-`verify` recomputes every hash and replays the pinned evaluator over the recorded events; edits to the result or the events are caught. `visualize` writes a single HTML file: agents on a town map, messages animating along the timeline, the event log, and the stage table.
+`verify` checks the five canonical records, their hashes and cross-record bindings,
+then replays evaluation over the recorded events with a matching local evaluator.
+This verifies integrity and reproducible judgment; it does not independently
+establish that an observer's account of the outside world was true. `report.md`,
+receipts, attestations, viewer HTML and `state/` are not members of the five-record
+root. Existing attestations receive their own signature and claim checks.
+`visualize` writes a self-contained HTML view of a Lab, Track or Path bundle.
 
 Path evaluators are versioned. Replay a `path-0.1` bundle with its matching
 `path-0.1` evaluator; a newer evaluator reports the version difference rather
 than treating the bundle as corrupt. The bundle's existing signature remains
 valid for its recorded bytes.
 
-Stages are separate claims with separate failure boundaries. An HTTP success is never proof an agent understood or completed a task. Missing evidence stays missing. Every event names its observer, and the town cannot synthesize a participant's assertions.
+Stages are separate claims with separate failure boundaries. An HTTP success is never proof an agent understood or completed a task. Missing evidence stays missing. Every event names its observer; attribution in a local trace is not independent authentication of every asserted fact.
 
 ## Tier two: real model participants
 
@@ -219,11 +236,22 @@ nandatown run quote-clean --agent buyer=external
 `scripted` is the stock reference agent, `llm` and `llm:MODEL` the
 model tool loop, `cmd:COMMAND` your own process in any language,
 `a2a:URL` bridges the role to an external Agent2Agent endpoint, and
-`external` hands out join credentials so an agent anywhere can connect.
+`external` hands out join credentials for an agent that can reach the coordinator.
+The automatic local runner binds to loopback; an agent on another machine needs
+a tunnel or a separately operated reachable coordinator. A remote A2A endpoint
+can be tested directly without moving the agent onto the Town machine.
+
+For command, externally joined, and A2A Track participants, the run records the
+connector kind and explicitly says an immutable external release was not recorded.
+It does not credit them to the bundled buyer or seller. Command text and A2A
+connector URLs are omitted from rerun metadata; supply those inputs again and
+record the agent/adapter versions separately. The printed recipe names missing
+inputs rather than silently substituting reference agents.
 
 ## The MCP and A2A edges
 
-HTTP is canonical; MCP and A2A are adapters, not competing protocols.
+HTTP is Track's canonical participant boundary. MCP adapts that surface;
+A2A is used by a Track bridge and directly by Path.
 
 ```
 nandatown mcp serve --url http://127.0.0.1:8477 --run <run> --name seller --token <t>
@@ -234,11 +262,12 @@ nandatown a2a test http://host:8940
 
 `mcp serve` is a real Model Context Protocol server over stdio whose
 tools are exactly the participant surface, so Claude or any MCP host
-literally plays a role in the town. `mcp test` runs the client side of
-the handshake against any external MCP server and reports conformance.
+can use those tools to play a role in the town. `mcp test` probes initialization
+and tool listing on an external MCP server; it does not run an upstream MCP
+conformance suite or exercise every tool.
 `a2a serve` exposes the reference seller as an Agent2Agent agent with
-an agent card and message/send; `a2a test` validates any A2A endpoint
-with a card check and a round trip.
+an agent card and message/send; `a2a test` probes selected card fields
+and one round trip. It is not a full A2A conformance test.
 
 ## Portable identity and signed attestations
 
@@ -262,10 +291,11 @@ to do. Identity resolvers are pluggable: the file registry is the
 town's testnet registry, and an eth_call resolver reads a chain
 registry whose contract and selector are configuration.
 
-Every bundle also carries an attestation: the operator's key signs the
+Normal run commands also write an attestation: the operator's key signs the
 bundle fingerprint and verdict, so each run is a signed, replayable
 attestation with provenance. `verify` checks the signature along with
-every hash and the evaluator replay.
+every hash and the evaluator replay. Unsigned bundles can still be verified;
+signatures establish a key's commitment, not independent observation.
 
 ## Walk-away recovery
 
@@ -274,9 +304,14 @@ nandatown mirror runs/<id> /backup/mirror-a
 nandatown recover sha256:<fingerprint> --mirror /backup/mirror-a --mirror /backup/mirror-b
 ```
 
-Bundles are content addressed by fingerprint. Lose the original, lose
-all but one mirror, and the run still restores and verifies byte for
-byte.
+Bundles are addressed by the fingerprint of their five records. Recovery checks
+the surviving copy before using it and refuses to overwrite an existing destination.
+Mirroring copies the five records, manifest, and any verified receipt or
+attestation; it regenerates `report.md` from verified records. Private `state/`
+and generated `town.html` are not copied. Other unexpected members are refused;
+keep unrelated attachments outside the bundle. Regenerate a viewer after recovery.
+These helpers require successful bundle verification. Historical bundles with an
+evaluator-version mismatch need the matching evaluator checkout first.
 
 ## Test protocols from the upstream repo
 
@@ -286,8 +321,11 @@ nandatown protocols
 nandatown run marketplace --plugin protocols/<dir>/plugin.py --layer trust=their.v2
 ```
 
-`import-pr` pulls a contribution from projnanda/nandatown (or any
-`--repo`): the changed files at the exact head commit, fingerprinted,
+`import-pr` reads a contribution from projnanda/nandatown (or another
+`--repo`): up to 50 changed files, each at the observed head commit and limited
+to 200,000 declared bytes. Deleted, oversized, non-text or unreadable files and
+files beyond the cap are disclosed as skipped; a partial snapshot's file check
+is inconclusive. The retained text is fingerprinted,
 classified (plugin with its detected layer, scenario, skill, test),
 checked (including the secret scan), and cataloged as
 imported-untrusted. Importing never runs the code. When you choose to,
@@ -298,8 +336,8 @@ and comes back with a stage report.
 ## Test the path, not just the protocol
 
 Every component can look healthy in isolation while the composition
-fails. The path test answers the question that matters: can this exact
-agent complete this exact NANDA journey, and if not, which boundary
+fails. The path test asks: can this selected endpoint complete this declared
+synthetic A2A journey, and if not, which boundary
 broke first?
 
 ```
@@ -309,7 +347,7 @@ nandatown test-agent --index my-index.json --agent-name maya-seller --pin-card-d
 
 Your agent is already running; you migrate nothing and supply no model
 key. Town acts as a deterministic counterpart and observer, walking an
-exact versioned profile (`a2a-capability-fulfillment@0.2`): resolve
+exact versioned profile (`a2a-capability-fulfillment@0.3`): resolve
 the subject, fetch and digest the agent card, check it against the
 pinned descriptor, make a native protocol exchange, check the semantic
 result (a two-widget order with a run nonce, exactly one terminal
@@ -355,11 +393,22 @@ policy remain follow-ups. This is not a public-hosted arbitrary-fetch policy,
 input URL sanitization, or business-output sanitization.
 
 The original `a2a-capability-fulfillment@0.1` profile and fingerprint remain
-unchanged. This transport-policy change does not change the evaluator version.
+unchanged. The response-budget addition in `@0.2` retained the old evaluator.
 Select the original profile explicitly with
 `--path-profile a2a-capability-fulfillment@0.1`; newly executed old-profile
 runs disclose the same 1 MiB implementation ceiling rather than claiming
 the old profile specified it. Existing stored evidence is not reinterpreted.
+
+The current `@0.3` profile uses evaluator contract `path-evaluator@0.2` and
+records result evaluator version `path-0.3`: the task must be
+`completed`, and each attempt must return exactly one text part across all
+artifacts containing one JSON quote object. Town counts every text part rather
+than accepting only the first one and ignoring later outputs. Nonterminal or
+failed tasks cannot pass semantics. This is the selected synthetic profile's
+output contract, not a claim that every A2A capability must use one text part.
+The old `@0.1`/`@0.2` profiles remain available under `path-0.2`, including their
+weaker first-text/nonempty-state checks. Use the new profile for new tests;
+verification does not silently strengthen old evidence.
 
 Requirements credit: [#145 by abhishekeb211](https://github.com/projnanda/nandatown/pull/145)
 (`ddc5f4c5ee67db7b9784b1198446eee596facf53`), and bounded-read technique
@@ -370,7 +419,7 @@ or loopback-only origin restrictions.
 
 #### Check the item, not only the price
 
-Select `--path-profile a2a-quote-intent@0.1` to test an explicit quote:
+Select `--path-profile a2a-quote-intent@0.2` to test an explicit quote:
 two blue widgets from `town-reference`, denominated in USD, with a maximum
 total of 3,990 cents. The response must contain the exact `sku`, `color`,
 `quantity`, `merchant_id`, `currency`, and current `request_id`.
@@ -382,7 +431,7 @@ In two terminals:
 
 ```bash
 nandatown a2a serve --defect wrong_item
-nandatown test-agent --url http://127.0.0.1:8940 --path-profile a2a-quote-intent@0.1
+nandatown test-agent --url http://127.0.0.1:8940 --path-profile a2a-quote-intent@0.2
 ```
 
 The reference seller deliberately offers a red item for 3,000 cents. The price
@@ -392,7 +441,7 @@ control. Other A2A agents can implement this same JSON contract; no specific
 agent runtime, model key or payment provider is required by Town.
 
 The bundle stores the selected profile, observed quote fields, request
-correlation, response digest and `path-quote-intent-0.1` evaluator version.
+correlation, response digest and `path-quote-intent-0.2` evaluator version.
 `nandatown verify BUNDLE_DIR` replays the judgment offline. The controlled
 duplicate checks whether the returned quote changes, not whether a merchant
 performed a second purchase. A matching merchant identifier is a returned
@@ -400,8 +449,10 @@ claim, not independent proof of merchant ownership. This is a synthetic quote
 conformance test, not purchase authorization, payment settlement, physical
 delivery verification or outside-user adoption evidence.
 
-The default remains `a2a-capability-fulfillment@0.2`; both earlier price-only
-profiles and their `path-0.2` evaluator remain unchanged. Non-object quote
+The default is `a2a-capability-fulfillment@0.3`. The earlier price-only profiles
+and `a2a-quote-intent@0.1` keep their original fingerprints and evaluator meanings.
+The new quote-intent revision also requires completed tasks and exactly one text
+part per response. Non-object quote
 artifacts are now recorded as unparseable subject output rather than a Town
 driver exception. Older recorded events retain their original interpretation.
 
@@ -419,15 +470,19 @@ nandatown verify-receipt runs/<id>/receipt.json --bundle runs/<id>
 nandatown proof runs/<id> --freshness-days 30
 ```
 
-Private artifacts stay in the bundle. A receipt is the sanitized
-signed derivative that can cross organizational boundaries: the exact
+Keep private artifacts in private storage. A receipt is a smaller signed
+derivative that includes the exact
 claim, digests, observer, time window, coverage, and limitations. The
 signature proves a named key committed to those bytes, not that the
 observation was true or the agent safe. `proof` renders the
-TOWN-TESTED badge sentence only from conclusive, covered, fresh,
-verified evidence, and otherwise says exactly why not: the badge is
+TOWN-TESTED badge sentence only from passed, fresh, verified evidence with
+an empty `coverage.not_tested` list. Partial or failed receipts remain valid
+signed evidence; they cannot earn this badge. Bundle-aware receipt verification
+also checks that claims, coverage and time window agree with the bundle.
+Review subject URLs, release labels and custom limitations before sharing:
+the receipt is not a universal secret scrubber. A refusal names its reason; the badge is
 narrow and expiring, a policy view over evidence, never the evidence
-itself. See docs/convergence.md for the full mapping to the path
+itself. See [convergence](docs/convergence.md) for the mapping to the path
 proposal.
 
 ## Test a town-joining agent
@@ -442,9 +497,9 @@ fault, the evaluator, and the report, ending with the line that
 matters: how many town stages your agent passed. `--cmd` starts your
 agent as a subprocess with TOWN_URL, RUN_ID, NAME, TOKEN in its
 environment; `--wait` prints those credentials and waits while you
-start it anywhere else. `examples/byoa_seller.py` is a complete
+start it wherever the coordinator is reachable. `examples/byoa_seller.py` is a complete
 reference agent in plain standard-library Python: no nandatown import,
-no dependency, just the HTTP contract. Under `--identity` a pinned role is
+no dependency, just the HTTP contract. For `nandatown run ... --identity`, a pinned role is
 handed `TOWN_GRANT` instead of `TOKEN` and must join with an Ed25519
 session proof (`TownClient.join_with_grant`); the runner stops early,
 with a `harness_refused_grant` event, if an agent tries the bare token
@@ -465,9 +520,11 @@ exact release fingerprint over the snapshot, and structural checks
 recorded as evidence (parsed, operations found, https-only servers,
 auth declared, embedded-secret scan). Nothing is fetched from the
 network and nothing in the document is ever executed. The candidate is
-published to a pinned catalog as community-generated, unclaimed, and
+written to a local pinned catalog as community-generated, unclaimed, and
 not provider-endorsed: the SKILL.md is a claim, not a fact, and town
-tests plus provider authorization stay separate evidence.
+tests plus provider authorization stay separate evidence. Re-importing identical
+bytes preserves the existing candidate. Changed bytes require a different
+`--name` or `--out`; the command refuses to overwrite the pinned snapshot.
 
 ## Watch services over time
 
@@ -484,7 +541,7 @@ operational-history evidence record.
 
 ## Campaigns
 
-One run resolving to one verdict certifies luck. A campaign precommits its plan before the first trial and reports the whole distribution:
+A campaign precommits its plan before the first trial and reports the whole distribution:
 
 ```
 nandatown campaign marketplace --trials 20
@@ -548,7 +605,15 @@ One run is one scoped observation. It does not prove general reliability, provid
 
 ## Where this is heading
 
-Built here: the Lab and the Track with scripted, model-driven, command, MCP, and A2A harnesses; two agent-native faults (context truncation and lost tool results) beside the transport faults; portable identity with run grants and pluggable resolvers; signed attestations with provenance on every bundle; upstream scenario compatibility; protocol comparison; walk-away mirroring; the On-Ramp, Town Pulse, campaigns with a model-drift canary, and operator mode (docs/operators.md, service units in deploy/). The wider research vision this feeds, per the sandboxes paper: a network of interoperable, domain-specialized sandboxes whose attestations make trust measurable rather than claimed. What a shared public deployment of this code needs next is operational, not technical: named owners, funding, and stewardship.
+The implemented foundation is local: Lab, Track and Path, replayable evaluation,
+optional model harnesses, portable identity, receipts, mirroring and onboarding
+checks. The next product validation is an independently developed agent, a useful
+failure its existing tests miss, and another operator reproducing the result.
+Neither reference-agent tests nor CI alone satisfy that milestone. A pinned
+deployed NANDA Index integration, upstream protocol-conformance selection,
+accepted-observer policy and public-service admission/resource controls remain
+technical work as well as ownership decisions. See the [proposal mapping](docs/convergence.md)
+and [operator guide](docs/operators.md).
 
 ## Development
 
@@ -557,4 +622,6 @@ pip install -e ".[dev]"
 pytest
 ```
 
-See `docs/architecture.md` for the module map. Apache 2.0. Part of the NANDA Town effort under Project NANDA.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, dashboard checks and schema
+generation, and [architecture](docs/architecture.md) for the module map.
+Apache 2.0. Part of the NANDA Town effort under Project NANDA.

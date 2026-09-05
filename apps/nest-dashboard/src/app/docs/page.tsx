@@ -78,7 +78,8 @@ export default function DocsPage() {
           <p className="mt-8 max-w-3xl text-[1.1rem] leading-[1.7] text-ink-500">
             Nanda Town is a local-first integration lab. It runs a named workflow,
             records what happened at each stage, and leaves a bundle another
-            operator can verify, inspect, and rerun. The website documents and
+            operator can verify and inspect. A live rerun also needs the original
+            agent setup and any inputs omitted from the bundle. The website documents and
             displays Town; the Python CLI performs the run.
           </p>
         </div>
@@ -108,10 +109,9 @@ export default function DocsPage() {
         <main className="min-w-0">
           <Section id="overview" eyebrow="Scope" title="A lab, not an adoption claim">
             <p>
-              Town exercises exact agent, service, and protocol paths under two
-              run modes. It separates setup, admission, interaction, outcome, and
-              teardown into explicit stage results instead of collapsing missing
-              evidence into success or failure.
+              Town exercises declared agent workflows and protocol simulations
+              under three run modes. Each scenario or profile defines its own
+              stages; missing evidence is not collapsed into success or failure.
             </p>
             <p>
               Town-authored fixtures, reference agents, local end-to-end runs, and
@@ -229,12 +229,14 @@ nandatown verify-receipt runs/<run-id>/receipt.json --bundle runs/<run-id>`}</Co
 
           <Section id="adapters" eyebrow="Integration boundary" title="Keep adapters thin">
             <p>
-              HTTP is the canonical local participant boundary. A2A and MCP support
-              adapt existing agent surfaces to that boundary; they are not parallel
-              evaluation systems. Pin the profile, endpoint or command, agent role,
-              and output directory so another operator can reproduce the same path.
+              HTTP is the canonical Track participant boundary. MCP can expose
+              that surface as tools; its separate test command only probes
+              initialization and tool listing. Path directly exercises a selected
+              A2A workflow, not full protocol conformance. Pin the profile and
+              agent role; preserve and resupply any command or endpoint omitted
+              from rerun metadata so another operator can reproduce the same path.
             </p>
-            <Command>{`nandatown test-agent --url https://agent.example/a2a --out runs`}</Command>
+            <Command>{`nandatown test-agent --url https://agent.example/a2a --path-profile a2a-capability-fulfillment@0.3 --out runs`}</Command>
             <p>
               Remote-agent support is intentional. Treat a local command as trusted
               user code: Town coordinates it, but does not claim to sandbox hostile

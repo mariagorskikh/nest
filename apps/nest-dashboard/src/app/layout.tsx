@@ -13,7 +13,7 @@ export const metadata: Metadata = {
     template: "%s — Nanda Town",
   },
   description:
-    "Nanda Town is a local-first integration lab for exact agent, service, and protocol paths with stage-separated, reproducible evidence. By Project NANDA.",
+    "Nanda Town is a local-first lab for declared agent workflows and protocol simulations with stage-separated evidence. By Project NANDA.",
   keywords: [
     "AI agents",
     "agent integration testing",
@@ -33,7 +33,7 @@ export const metadata: Metadata = {
     siteName: "Nanda Town",
     title: "Nanda Town — by Project NANDA",
     description:
-      "A local-first integration lab for exact agent, service, and protocol paths with reproducible evidence.",
+      "A local-first lab for declared agent workflows and protocol simulations with stage-separated evidence.",
     images: [
       {
         url: "/brand/nanda-logo-color.png",
@@ -86,7 +86,7 @@ const webSiteJsonLd = {
   name: "Nanda Town",
   url: SITE_URL,
   description:
-    "A local-first integration lab for exact agent, service, and protocol paths with reproducible evidence.",
+    "A local-first lab for declared agent workflows and protocol simulations with stage-separated evidence.",
   publisher: { "@type": "Organization", name: "Project NANDA" },
 };
 
