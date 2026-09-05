@@ -215,10 +215,29 @@ def onramp(spec_path: str, name: str | None = None,
     subject = f"{name}@{snapshot_fp}"
 
     candidate_dir = os.path.join(out_dir, name)
-    os.makedirs(candidate_dir, exist_ok=True)
     ext = "yaml" if spec_path.endswith((".yaml", ".yml")) else "json"
-    with open(os.path.join(candidate_dir, f"snapshot.{ext}"), "w") as f:
-        f.write(raw)
+    if os.path.lexists(candidate_dir):
+        try:
+            if os.path.islink(candidate_dir) or not os.path.isdir(candidate_dir):
+                raise ValueError("not a candidate directory")
+            release_path = os.path.join(candidate_dir, "release.json")
+            snapshot_path = os.path.join(candidate_dir, f"snapshot.{ext}")
+            if os.path.islink(release_path) or os.path.islink(snapshot_path):
+                raise ValueError("candidate contains a symbolic link")
+            with open(release_path) as f:
+                previous = ReleaseRef.model_validate_json(f.read())
+            if previous.content_fingerprint != snapshot_fp:
+                raise OnrampError(
+                    f"{name!r} already has a different pinned snapshot;"
+                    " choose a new --name or --out directory")
+            with open(snapshot_path) as f:
+                if f.read() != raw:
+                    raise ValueError("snapshot differs from its release")
+        except (OSError, ValueError) as exc:
+            raise OnrampError(
+                f"{candidate_dir} already exists and cannot be reused: {exc};"
+                " choose a new --name or --out directory") from exc
+        return candidate_dir
 
     skill_text = generate_skillmd(name, analysis)
     from .skills import validate_skill
@@ -226,6 +245,13 @@ def onramp(spec_path: str, name: str | None = None,
     if problems:
         raise OnrampError(f"generated SKILL.md failed validation:"
                           f" {problems}")
+    try:
+        os.makedirs(candidate_dir, exist_ok=False)
+    except FileExistsError as exc:
+        raise OnrampError(f"{candidate_dir} already exists; retry with a"
+                          " new --name or --out directory") from exc
+    with open(os.path.join(candidate_dir, f"snapshot.{ext}"), "w") as f:
+        f.write(raw)
     with open(os.path.join(candidate_dir, "SKILL.md"), "w") as f:
         f.write(skill_text)
 
