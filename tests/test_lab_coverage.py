@@ -185,14 +185,24 @@ def test_new_lab_bundles_replay_and_old_lab_versions_do_not(tmp_path, old_versio
     recorded["evaluator_version"] = old_version
     with open(result_path, "w") as handle:
         json.dump(recorded, handle)
+    run_path = os.path.join(bundle_dir, "run.json")
+    run = json.loads(open(run_path).read())
+    run["releases"]["evaluator"] = old_version
+    with open(run_path, "w") as handle:
+        json.dump(run, handle)
     manifest_path = os.path.join(bundle_dir, "manifest.json")
     manifest = json.loads(open(manifest_path).read())
+    manifest["evaluator_version"] = old_version
     manifest["files"]["result.json"] = "sha256:" + hashlib.sha256(
         open(result_path, "rb").read()
+    ).hexdigest()
+    manifest["files"]["run.json"] = "sha256:" + hashlib.sha256(
+        open(run_path, "rb").read()
     ).hexdigest()
     manifest["bundle_fingerprint"] = fingerprint(manifest["files"])
     with open(manifest_path, "w") as handle:
         json.dump(manifest, handle)
+    os.unlink(os.path.join(bundle_dir, "attestation.json"))
 
     assert verify_bundle(bundle_dir) == [
         f"evaluator version differs: bundle {old_version}, local "

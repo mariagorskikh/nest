@@ -15,7 +15,10 @@ from pydantic import BaseModel, ConfigDict
 
 from .records import fingerprint
 
+PATH_EVALUATOR = "path-evaluator@0.1"
+STRICT_PATH_EVALUATOR = "path-evaluator@0.2"
 QUOTE_INTENT_EVALUATOR = "quote-intent-evaluator@0.1"
+STRICT_QUOTE_INTENT_EVALUATOR = "quote-intent-evaluator@0.2"
 QUOTE_INTENT_FIELDS = ("sku", "color", "quantity", "merchant_id", "currency")
 
 
@@ -55,6 +58,24 @@ PATH_PROFILES: dict[str, PathProfile] = {
         limits={"timeout_seconds": 15.0, "max_response_bytes": 1_048_576},
         evaluator=QUOTE_INTENT_EVALUATOR,
     ),
+    "a2a-quote-intent@0.2": PathProfile(
+        profile_id="a2a-quote-intent",
+        version="0.2",
+        protocol="a2a",
+        capability="quote",
+        request={"sku": "widget", "quantity": 2, "unit_price_cents": 1995,
+                 "color": "blue", "merchant_id": "town-reference",
+                 "currency": "USD"},
+        expected={"max_total_cents": 3990, "terminal_fulfillments": 1,
+                  "quote": {"sku": "widget", "quantity": 2,
+                            "color": "blue",
+                            "merchant_id": "town-reference",
+                            "currency": "USD"}},
+        controlled_condition="duplicate_request",
+        limits={"timeout_seconds": 15.0,
+                "max_response_bytes": 1_048_576},
+        evaluator=STRICT_QUOTE_INTENT_EVALUATOR,
+    ),
     "a2a-capability-fulfillment@0.1": PathProfile(
         profile_id="a2a-capability-fulfillment",
         version="0.1",
@@ -65,7 +86,7 @@ PATH_PROFILES: dict[str, PathProfile] = {
         expected={"total_cents": 3990, "terminal_fulfillments": 1},
         controlled_condition="duplicate_request",
         limits={"timeout_seconds": 15.0},
-        evaluator="path-evaluator@0.1",
+        evaluator=PATH_EVALUATOR,
     ),
     "a2a-capability-fulfillment@0.2": PathProfile(
         profile_id="a2a-capability-fulfillment",
@@ -77,11 +98,24 @@ PATH_PROFILES: dict[str, PathProfile] = {
         expected={"total_cents": 3990, "terminal_fulfillments": 1},
         controlled_condition="duplicate_request",
         limits={"timeout_seconds": 15.0, "max_response_bytes": 1_048_576},
-        evaluator="path-evaluator@0.1",
+        evaluator=PATH_EVALUATOR,
+    ),
+    "a2a-capability-fulfillment@0.3": PathProfile(
+        profile_id="a2a-capability-fulfillment",
+        version="0.3",
+        protocol="a2a",
+        capability="quote",
+        request={"sku": "widget", "quantity": 2,
+                 "unit_price_cents": 1995},
+        expected={"total_cents": 3990, "terminal_fulfillments": 1},
+        controlled_condition="duplicate_request",
+        limits={"timeout_seconds": 15.0,
+                "max_response_bytes": 1_048_576},
+        evaluator=STRICT_PATH_EVALUATOR,
     ),
 }
 
-DEFAULT_PATH_PROFILE = "a2a-capability-fulfillment@0.2"
+DEFAULT_PATH_PROFILE = "a2a-capability-fulfillment@0.3"
 
 
 def get_path_profile(ref: str) -> PathProfile:

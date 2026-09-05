@@ -95,6 +95,10 @@ def cmd_test_agent(args: argparse.Namespace) -> int:
     if args.url or args.index:
         from .path_runner import run_path_test
 
+        if args.profile is not None:
+            print("--profile selects a Track profile; use --path-profile"
+                  " with --url or --index")
+            return 2
         print(f"nandatown {__version__}: path test of"
               f" {args.url or args.agent_name} under profile"
               f" {args.path_profile}")
@@ -103,10 +107,10 @@ def cmd_test_agent(args: argparse.Namespace) -> int:
             pin_card_digest=args.pin_card_digest,
             index_file=args.index, agent_name=args.agent_name)
         print(render_report(load_bundle(bundle_dir)))
-        applicable = [s for s in result.stages
-                      if s.status != "not_tested"]
-        passed = sum(1 for s in applicable if s.status == "passed")
-        print(f"{passed} of {len(applicable)} path stages passed.")
+        passed = sum(s.status == "passed" for s in result.stages)
+        untested = sum(s.status == "not_tested" for s in result.stages)
+        print(f"{passed} of {len(result.stages)} path stages passed;"
+              f" {untested} not tested.")
         print(f"Evidence bundle: {bundle_dir}")
         return 0 if result.verdict == "passed" else 1
     if not args.cmd and not args.wait:
@@ -127,16 +131,18 @@ def cmd_test_agent(args: argparse.Namespace) -> int:
             print("then join, claim, work, acknowledge. The town is"
                   " watching.")
 
+    profile = args.profile or "quote-clean"
     print(f"nandatown {__version__}: testing your {args.role} against"
-          f" profile {args.profile}")
-    bundle_dir, result = run_town(args.profile, args.out,
+          f" profile {profile}")
+    bundle_dir, result = run_town(profile, args.out,
                                   external=external,
                                   wait_timeout=args.timeout,
                                   on_credentials=creds_cb)
     print(render_report(load_bundle(bundle_dir)))
-    applicable = [s for s in result.stages if s.status != "not_tested"]
-    passed = sum(1 for s in applicable if s.status == "passed")
-    print(f"{passed} of {len(applicable)} town stages passed.")
+    passed = sum(s.status == "passed" for s in result.stages)
+    untested = sum(s.status == "not_tested" for s in result.stages)
+    print(f"{passed} of {len(result.stages)} town stages passed;"
+          f" {untested} not tested.")
     print(f"Evidence bundle: {bundle_dir}")
     return 0 if result.verdict == "passed" else 1
 
@@ -337,6 +343,9 @@ def cmd_pulse(args: argparse.Namespace) -> int:
         for record in export_records(args.db):
             print(record.model_dump_json())
         return 0
+    if args.count < 1:
+        print("--count must be at least 1")
+        return 2
     targets = {}
     for target in args.target:
         name, _, url = target.partition("=")
@@ -417,9 +426,13 @@ def cmd_proof(args: argparse.Namespace) -> int:
 
 
 def cmd_mirror(args: argparse.Namespace) -> int:
-    from .mirror import mirror_bundle
+    from .mirror import MirrorError, mirror_bundle
 
-    destination = mirror_bundle(args.bundle_dir, args.mirror_dir)
+    try:
+        destination = mirror_bundle(args.bundle_dir, args.mirror_dir)
+    except MirrorError as exc:
+        print(f"mirror failed: {exc}")
+        return 1
     print(f"mirrored to {destination}")
     print("the address is the bundle fingerprint; any mirror holding it"
           " can restore the run")
@@ -696,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
                        metavar="ROLE=HARNESS",
                        help="Track only: connect a harness per role:"
                             " scripted, llm, llm:MODEL, cmd:COMMAND,"
-                            " or external")
+                            " a2a:URL, or external")
     p_run.add_argument("--plugin", action="append", default=[],
                        metavar="FILE",
                        help="Lab only: load a plugin/validator file"
@@ -742,7 +755,8 @@ def main(argv: list[str] | None = None) -> int:
     p_test.add_argument("--agent-name", default=None)
     p_test.add_argument("--role", choices=["seller", "buyer"],
                         default="seller")
-    p_test.add_argument("--profile", default="quote-clean")
+    p_test.add_argument("--profile", default=None,
+                        help="Track profile for --cmd/--wait (default: quote-clean)")
     p_test.add_argument("--cmd", default=None,
                         help="command that starts your agent (it receives"
                              " TOWN_URL, RUN_ID, NAME, TOKEN, STATE_DIR"

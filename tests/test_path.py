@@ -280,7 +280,7 @@ def test_oversized_card_does_not_reach_path_invocation(tmp_path):
         "a2a_response_budget_exceeded: selected local byte budget exceeded for this run")
     assert stage(result, "semantic_result").status == "not_tested"
     bundle = load_bundle(bundle_dir)
-    assert bundle["run"].profile_name == "a2a-capability-fulfillment@0.2"
+    assert bundle["run"].profile_name == "a2a-capability-fulfillment@0.3"
     assert bundle["run"].config["a2a_transport_policy"] == {
         "policy_id": "a2a-bounded-json@0.1",
         "max_response_bytes": 1_048_576,
