@@ -64,6 +64,6 @@ def test_path_bundle_visualizes_with_its_actual_profile(tmp_path):
     data = json.loads(page.data)
 
     assert result.verdict == "passed"
-    assert f"Path profile {bundle['profile'].name}" in data["meta"]
+    assert f"Path profile {bundle['profile'].ref}" in data["meta"]
     assert "quote" in data["meta"]
     assert data["result"]["verdict"] == "passed"
