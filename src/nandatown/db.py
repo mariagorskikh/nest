@@ -26,6 +26,14 @@ class StaleFence(Exception):
     """An acknowledgement carried a fence that is no longer current."""
 
 
+class RunFinished(Exception):
+    """A mutation targeted a run whose terminal event already committed."""
+
+    def __init__(self, run_id: str):
+        super().__init__(run_id)
+        self.run_id = run_id
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -152,6 +160,14 @@ class TownDB:
 
     # -- runs and participants ------------------------------------------
 
+    @staticmethod
+    def _require_open(conn, run_id: str) -> None:
+        row = conn.execute(
+            "SELECT status FROM runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if row is not None and row["status"] == "finished":
+            raise RunFinished(run_id)
+
     def create_run(self, profile_json: str, now: float = 0.0) -> str:
         run_id = "run-" + uuid.uuid4().hex[:12]
         with self._conn() as conn:
@@ -168,9 +184,22 @@ class TownDB:
             ).fetchone()
         return json.loads(row["profile_json"]) if row else None
 
-    def set_run_status(self, run_id: str, status: str) -> None:
+    def finish_run(self, run_id: str, now: float) -> bool:
+        """Commit the finished state and sole terminal event together."""
         with self._conn() as conn:
-            conn.execute("UPDATE runs SET status=? WHERE run_id=?", (status, run_id))
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            if row["status"] == "finished":
+                return False
+            conn.execute(
+                "UPDATE runs SET status='finished' WHERE run_id=?", (run_id,)
+            )
+            self._event(conn, run_id, now, "town", "run_finished", run_id, {})
+            return True
 
     def add_participant(
         self, run_id: str, name: str, role: str,
@@ -197,6 +226,8 @@ class TownDB:
         permissions_json = (None if permissions is None
                             else json.dumps(sorted(permissions)))
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             row = conn.execute(
                 "SELECT join_token, session, grant_issued_at"
                 " FROM participants WHERE run_id=? AND name=?",
@@ -304,6 +335,7 @@ class TownDB:
         """
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             row = conn.execute(
                 "SELECT accepted_at, sender, recipient, kind,"
                 " content_fingerprint FROM messages"
@@ -357,6 +389,8 @@ class TownDB:
     def pop_notify(self, run_id: str, recipient: str) -> bool:
         """Consume one pending wake-up hint, if any."""
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             row = conn.execute(
                 "SELECT rowid FROM notifications WHERE run_id=? AND recipient=?"
                 " AND status='pending' LIMIT 1",
@@ -393,6 +427,7 @@ class TownDB:
         """Claim one bounded piece of work for a limited time."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             self._expire_stale_claims(conn, run_id, now)
             row = conn.execute(
                 "SELECT * FROM messages WHERE run_id=? AND recipient=?"
@@ -436,6 +471,8 @@ class TownDB:
                 lease_seconds: float, now: float) -> dict[str, Any] | None:
         """Offer already-completed work one more time (duplicate delivery)."""
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             row = conn.execute(
                 "SELECT * FROM messages WHERE run_id=? AND message_id=?"
                 " AND recipient=?",
@@ -471,6 +508,7 @@ class TownDB:
         """Acknowledge claimed work. A stale or expired fence is rejected."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             claim = conn.execute(
                 "SELECT * FROM claims WHERE run_id=? AND message_id=?"
                 " AND fence=? AND claimant=?",
@@ -548,6 +586,8 @@ class TownDB:
     def record_event(self, run_id: str, observer: str, kind: str, subject: str,
                      at: float, detail: dict | None = None) -> str:
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             return self._event(conn, run_id, at, observer, kind, subject,
                                detail or {})
 
@@ -566,6 +606,8 @@ class TownDB:
     def record_intent(self, run_id: str, actor: str, action: str,
                       payload: dict, at: float) -> str:
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_open(conn, run_id)
             cur = conn.execute(
                 "INSERT INTO intents (run_id, at, actor, action, payload_json)"
                 " VALUES (?,?,?,?,?)",

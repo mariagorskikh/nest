@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -256,3 +258,129 @@ def test_finish_and_runner_event(client):
     assert f.status_code == 200
     kinds = event_kinds(client, run_id)
     assert "participant_crashed" in kinds and "run_finished" in kinds
+
+
+def test_finish_is_idempotent_and_records_one_terminal_event(client):
+    run_id, _, _ = make_run(client)
+
+    first = client.post(f"/runs/{run_id}/finish", headers=ADMIN)
+    second = client.post(f"/runs/{run_id}/finish", headers=ADMIN)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    kinds = event_kinds(client, run_id)
+    assert kinds.count("run_finished") == 1
+    assert kinds[-1] == "run_finished"
+
+
+def test_finish_rolls_back_status_when_terminal_event_fails(tmp_path):
+    db_path = tmp_path / "town.db"
+    app = build_app(str(db_path), admin_token="secret")
+    with TestClient(app) as client:
+        run_id, _, _ = make_run(client)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TRIGGER fail_run_finished BEFORE INSERT ON events "
+                "WHEN NEW.kind='run_finished' BEGIN "
+                "SELECT RAISE(ABORT, 'injected finish failure'); END"
+            )
+
+        with pytest.raises(sqlite3.IntegrityError,
+                           match="injected finish failure"):
+            client.post(f"/runs/{run_id}/finish", headers=ADMIN)
+
+        with sqlite3.connect(db_path) as conn:
+            status, = conn.execute(
+                "SELECT status FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        assert status == "created"
+
+
+@pytest.mark.parametrize(
+    "operation", ["send", "notify", "claim", "ack", "join", "admin_event"]
+)
+def test_finished_run_rejects_further_mutations(client, operation):
+    run_id, sessions, data = make_run(client)
+    claim = None
+    if operation in {"notify", "claim", "ack"}:
+        assert send_q1(client, run_id, sessions).status_code == 202
+    if operation == "ack":
+        claimed = client.post(
+            f"/runs/{run_id}/inbox/claim", headers=sessions["seller"]
+        )
+        assert claimed.status_code == 200
+        claim = claimed.json()
+
+    finished = client.post(f"/runs/{run_id}/finish", headers=ADMIN)
+    assert finished.status_code == 200
+    events_before = client.get(
+        f"/runs/{run_id}/events", headers=ADMIN
+    ).json()["events"]
+    intents_before = client.get(
+        f"/runs/{run_id}/intents", headers=ADMIN
+    ).json()["intents"]
+
+    if operation == "send":
+        response = client.post(
+            f"/runs/{run_id}/messages",
+            json={"message_id": "after-finish", "to": "seller",
+                  "kind": "quote_request", "body": BODY},
+            headers=sessions["buyer"],
+        )
+    elif operation == "notify":
+        response = client.get(
+            f"/runs/{run_id}/inbox/notify", params={"wait": 0},
+            headers=sessions["seller"],
+        )
+    elif operation == "claim":
+        response = client.post(
+            f"/runs/{run_id}/inbox/claim", headers=sessions["seller"]
+        )
+    elif operation == "ack":
+        response = client.post(
+            f"/runs/{run_id}/inbox/ack",
+            json={"message_id": "q-1", "fence": claim["fence"],
+                  "status": "processed", "note": {}},
+            headers=sessions["seller"],
+        )
+    elif operation == "join":
+        response = client.post(
+            f"/runs/{run_id}/join",
+            json={"name": "buyer", "token": data["join_tokens"]["buyer"]},
+        )
+    else:
+        response = client.post(
+            f"/runs/{run_id}/events",
+            json={"observer": "runner", "kind": "late_event",
+                  "subject": run_id, "detail": {}},
+            headers=ADMIN,
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "error": "run_finished", "run_id": run_id
+    }
+    events_after = client.get(
+        f"/runs/{run_id}/events", headers=ADMIN
+    ).json()["events"]
+    intents_after = client.get(
+        f"/runs/{run_id}/intents", headers=ADMIN
+    ).json()["intents"]
+    assert events_after == events_before
+    assert intents_after == intents_before
+    assert events_after[-1]["kind"] == "run_finished"
+
+
+def test_finished_run_keeps_read_routes_available(client):
+    run_id, sessions, _ = make_run(client)
+    assert client.post(f"/runs/{run_id}/finish", headers=ADMIN).status_code == 200
+
+    directory = client.get(
+        f"/runs/{run_id}/participants", headers=sessions["buyer"]
+    )
+    events = client.get(f"/runs/{run_id}/events", headers=ADMIN)
+    intents = client.get(f"/runs/{run_id}/intents", headers=ADMIN)
+
+    assert directory.status_code == 200
+    assert events.status_code == 200
+    assert intents.status_code == 200
