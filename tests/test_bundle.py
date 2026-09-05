@@ -1,8 +1,11 @@
 import hashlib
 import json
 import shutil
+from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+from nandatown.a2a_adapter import build_a2a_app
 from nandatown.bundle import (
     attest_bundle,
     load_bundle,
@@ -10,6 +13,7 @@ from nandatown.bundle import (
     write_bundle,
 )
 from nandatown.identity_portable import Keystore
+from nandatown.path_runner import run_path_test
 from nandatown.report import render_report
 from nandatown.evaluator import evaluate
 from nandatown.records import RunRecord, fingerprint
@@ -259,6 +263,21 @@ def test_manifest_rejects_unknown_bundle_mode(tmp_path):
     assert any("unknown bundle mode" in problem for problem in problems), problems
 
 
+def test_manifest_rejects_unhashable_bundle_mode_without_raising(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["mode"] = []
+    manifest_path.write_text(json.dumps(manifest))
+
+    try:
+        problems = verify_bundle(path)
+    except Exception as exc:  # pragma: no cover - public API must not raise
+        pytest.fail(f"malformed mode raised {type(exc).__name__}: {exc}")
+
+    assert any("unknown bundle mode" in problem for problem in problems), problems
+
+
 def test_bundle_rejects_symlinked_canonical_record(tmp_path):
     path, _ = make_bundle(tmp_path)
     bundle_path = tmp_path / "bundle"
@@ -354,6 +373,28 @@ def test_evaluator_replay_compares_complete_deterministic_result(tmp_path, chang
     expected = ("duplicate stage names" if change == "duplicate"
                 else "evaluator replay mismatch")
     assert any(expected in problem for problem in problems), problems
+
+
+def test_evaluator_replay_error_is_reported_not_raised(tmp_path):
+    url = "http://testserver"
+    with TestClient(build_a2a_app(url)) as client:
+        directory, _ = run_path_test(url, str(tmp_path), http=client)
+    bundle_path = Path(directory)
+    events_path = bundle_path / "events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    card = next(event for event in events if event["kind"] == "card_retrieved")
+    card["detail"] = {}
+    events_path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    refresh_file_hash(manifest, "events.jsonl", events_path)
+    write_manifest(bundle_path, manifest)
+
+    try:
+        problems = verify_bundle(directory)
+    except Exception as exc:  # pragma: no cover - verifier boundary
+        pytest.fail(f"evaluator replay raised {type(exc).__name__}: {exc}")
+
+    assert any("evaluator replay failed" in problem for problem in problems), problems
 
 
 @pytest.mark.parametrize(

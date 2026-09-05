@@ -172,7 +172,7 @@ def verify_bundle(directory: str) -> list[str]:
         return ["manifest.json must contain a JSON object"]
 
     mode = manifest.get("mode", "track")
-    if mode not in BUNDLE_MODES:
+    if not isinstance(mode, str) or mode not in BUNDLE_MODES:
         problems.append(f"unknown bundle mode {mode!r}")
     files = manifest.get("files")
     if not isinstance(files, dict):
@@ -268,7 +268,14 @@ def verify_bundle(directory: str) -> list[str]:
                               if stage_names.count(name) > 1})
     if duplicate_names:
         problems.append(f"result has duplicate stage names: {duplicate_names}")
-    replay = replay_fn(bundle["profile"], recorded.run_id, bundle["events"])
+    try:
+        replay = replay_fn(
+            bundle["profile"], recorded.run_id, bundle["events"])
+    except Exception as exc:
+        problems.append(
+            "evaluator replay failed on the recorded evidence:"
+            f" {type(exc).__name__}: {exc}")
+        return problems
     recorded_result = recorded.model_dump(exclude={"evaluated_at"})
     replay_result = replay.model_dump(exclude={"evaluated_at"})
     if recorded_result != replay_result:
