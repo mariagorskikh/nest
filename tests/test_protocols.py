@@ -130,7 +130,7 @@ def test_path_traversal_is_blocked(tmp_path, monkeypatch):
         "repo": "projnanda/nandatown", "number": 321, "title": "evil",
         "author": "attacker", "state": "open",
         "head_sha": "abc123def4567890", "head_repo": "a/n",
-        "files": [{"path": "../../escape.py", "content": "print('out')"},
+        "files": [{"path": "../../escape.py", "content": PLUGIN_SOURCE},
                   {"path": "ok.py", "content": "x = 1"}],
         "skipped": [],
     }
@@ -142,8 +142,127 @@ def test_path_traversal_is_blocked(tmp_path, monkeypatch):
     with open(os.path.join(protocol_dir, "metadata.json")) as f:
         metadata = json.load(f)
     assert any("escapes the snapshot" in s for s in metadata["skipped"])
+    assert metadata["classification"]["plugins"] == []
+    assert metadata["usage"] == []
+    with open(os.path.join(protocol_dir, "checks.jsonl")) as f:
+        checks = [json.loads(line) for line in f]
+    assert next(check for check in checks if check["test"] == "files-fetched")["result"] == "not_enough_evidence"
+    assert protocol_entries(str(tmp_path / "protocols"))[0]["checks"]["unknown"] > 0
+
+
+def test_import_usage_quotes_literal_file_paths(tmp_path):
+    import shlex
+    name = "plugins/odd name;echo nope.py"
+    directory = import_pr(321, out_dir=str(tmp_path), http=fake_github({name: PLUGIN_SOURCE}))
+    with open(os.path.join(directory, "metadata.json")) as f:
+        metadata = json.load(f)
+
+    command = shlex.split(metadata["usage"][0])
+    assert command == ["nandatown", "run", "marketplace", "--plugin",
+                       os.path.join(directory, name), "--layer", "trust=webweight.v2"]
+
+
+def test_import_does_not_follow_existing_snapshot_symlinks(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    output = tmp_path / "protocols"
+    snapshot = output / "321-add-webweight-trust"
+    snapshot.mkdir(parents=True)
+    (snapshot / "plugins").symlink_to(outside, target_is_directory=True)
+
+    directory = import_pr(321, out_dir=str(output), http=fake_github(FILES))
+
+    assert list(outside.iterdir()) == []
+    with open(os.path.join(directory, "metadata.json")) as f:
+        metadata = json.load(f)
+    assert metadata["classification"]["plugins"] == []
+    assert any("symbolic link" in reason for reason in metadata["skipped"])
+
+
+@pytest.mark.parametrize("path", ["metadata.json", "checks.jsonl", "metadata.json/evil.py"])
+def test_import_reserves_its_metadata_paths(tmp_path, path):
+    directory = import_pr(321, out_dir=str(tmp_path),
+                          http=fake_github({path: PLUGIN_SOURCE, "ok.py": "x=1"}))
+    with open(os.path.join(directory, "metadata.json")) as f:
+        metadata = json.load(f)
+    assert metadata["classification"]["plugins"] == []
+    assert any("reserved snapshot metadata" in reason for reason in metadata["skipped"])
+
+
+@pytest.mark.parametrize("path", ["metadata.json", "checks.jsonl", "../catalog.json"])
+def test_import_does_not_write_through_metadata_symlinks(tmp_path, path):
+    outside = tmp_path / "outside"
+    outside.write_text("preserve")
+    output = tmp_path / "protocols"
+    snapshot = output / "321-add-webweight-trust"
+    snapshot.mkdir(parents=True)
+    (snapshot / path).symlink_to(outside)
+    with pytest.raises(ProtocolImportError, match="symbolic link"):
+        import_pr(321, out_dir=str(output), http=fake_github(FILES))
+    assert outside.read_text() == "preserve"
 
 
 def test_missing_pr_fails_cleanly():
     with pytest.raises(ProtocolImportError):
         fetch_pr("projnanda/nandatown", 404, http=fake_github(FILES))
+
+
+def test_fetch_discloses_files_beyond_github_page_limit():
+    contents_requested = []
+
+    def responder(request):
+        path = request.url.path
+        if path.endswith("/pulls/321"):
+            return httpx.Response(200, json={
+                "title": "Large contribution", "state": "open", "changed_files": 100,
+                "user": {"login": "contributor"},
+                "head": {"sha": "abc123", "repo": {"full_name": "contributor/nandatown"}},
+            })
+        if path.endswith("/files"):
+            page_size = int(request.url.params["per_page"])
+            return httpx.Response(200, json=[
+                {"filename": f"file-{n}.py", "status": "added"}
+                for n in range(page_size)])
+        contents_requested.append(path)
+        return httpx.Response(200, json={"size": 3, "content": "eD0x"})
+
+    with httpx.Client(transport=httpx.MockTransport(responder),
+                      base_url="https://api.github.com") as client:
+        pr = fetch_pr("projnanda/nandatown", 321, http=client)
+
+    assert len(pr["files"]) == 50
+    assert len(contents_requested) == 50
+    assert any("50" in reason and "beyond" in reason for reason in pr["skipped"])
+
+
+def test_import_check_does_not_call_partial_snapshot_complete():
+    from nandatown.protocols import structural_checks
+
+    pr = {"repo": "projnanda/nandatown", "number": 321, "head_sha": "abc123",
+          "files": [{"path": "ok.py", "content": "x=1"}],
+          "skipped": ["unreadable.py (unreadable at the head commit)"]}
+    checks = structural_checks(pr, classify(pr["files"]))
+
+    fetched = next(check for check in checks if check.test == "files-fetched")
+    assert fetched.result == "not_enough_evidence"
+    assert "unreadable.py" in str(fetched.evidence)
+
+
+@pytest.mark.parametrize("number", [321, 404])
+def test_fetch_closes_only_the_http_client_it_owns(monkeypatch, number):
+    owned = fake_github(FILES)
+    monkeypatch.setattr("nandatown.protocols._client", lambda supplied: owned)
+    try:
+        fetch_pr("projnanda/nandatown", number)
+    except ProtocolImportError:
+        assert number == 404
+    assert owned.is_closed
+
+    borrowed = fake_github(FILES)
+    monkeypatch.setattr("nandatown.protocols._client", lambda supplied: supplied)
+    with borrowed:
+        try:
+            fetch_pr("projnanda/nandatown", number, http=borrowed)
+        except ProtocolImportError:
+            assert number == 404
+        assert not borrowed.is_closed

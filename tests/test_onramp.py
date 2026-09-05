@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -59,6 +60,88 @@ def test_fingerprint_stability_and_catalog(tmp_path):
     assert len(entries) == 1
     assert entries[0]["fingerprint"] == first
     assert entries[0]["status"] == "candidate-unclaimed"
+
+
+def test_onramp_refuses_to_replace_a_different_pinned_snapshot(tmp_path):
+    output = tmp_path / "services"
+    candidate = Path(onramp(FIXTURE, out_dir=str(output)))
+    before = {path.relative_to(output): path.read_bytes()
+              for path in output.rglob("*") if path.is_file()}
+    changed = json.loads(Path(FIXTURE).read_text())
+    changed["info"]["version"] = "2.0"
+    source = tmp_path / "changed.json"
+    source.write_text(json.dumps(changed))
+
+    with pytest.raises(OnrampError, match="different.*snapshot"):
+        onramp(str(source), name="paylite", out_dir=str(output))
+
+    assert candidate.is_dir()
+    assert before == {path.relative_to(output): path.read_bytes()
+                      for path in output.rglob("*") if path.is_file()}
+
+
+def test_identical_onramp_is_read_only(tmp_path):
+    output = tmp_path / "services"
+    candidate = onramp(FIXTURE, out_dir=str(output))
+    before = {path.relative_to(output): path.read_bytes()
+              for path in output.rglob("*") if path.is_file()}
+
+    assert onramp(FIXTURE, out_dir=str(output)) == candidate
+
+    assert before == {path.relative_to(output): path.read_bytes()
+                      for path in output.rglob("*") if path.is_file()}
+
+
+def test_onramp_refuses_an_existing_unrecognized_directory(tmp_path):
+    candidate = tmp_path / "paylite"
+    candidate.mkdir()
+    (candidate / "SKILL.md").write_text("user work")
+
+    with pytest.raises(OnrampError, match="already exists"):
+        onramp(FIXTURE, out_dir=str(tmp_path))
+
+    assert (candidate / "SKILL.md").read_text() == "user work"
+
+
+def test_onramp_refuses_a_changed_snapshot_even_with_matching_release(tmp_path):
+    candidate = Path(onramp(FIXTURE, out_dir=str(tmp_path)))
+    (candidate / "snapshot.json").write_text("changed after import")
+
+    with pytest.raises(OnrampError, match="snapshot differs"):
+        onramp(FIXTURE, out_dir=str(tmp_path))
+
+    assert (candidate / "snapshot.json").read_text() == "changed after import"
+
+
+def test_onramp_does_not_write_through_a_candidate_symlink(tmp_path):
+    other = tmp_path / "user-files"
+    other.mkdir()
+    output = tmp_path / "services"
+    output.mkdir()
+    (output / "paylite").symlink_to(other, target_is_directory=True)
+
+    with pytest.raises(OnrampError, match="already exists"):
+        onramp(FIXTURE, out_dir=str(output))
+
+    assert list(other.iterdir()) == []
+
+
+@pytest.mark.parametrize("field,value", [("kind", "profile"), ("name", "other"),
+                                         ("version", "999")])
+def test_onramp_reuse_binds_the_complete_release(tmp_path, field, value):
+    candidate = Path(onramp(FIXTURE, out_dir=str(tmp_path)))
+    path = candidate / "release.json"
+    release = json.loads(path.read_text())
+    release[field] = value
+    path.write_text(json.dumps(release))
+    before = {file.relative_to(tmp_path): file.read_bytes()
+              for file in tmp_path.rglob("*") if file.is_file()}
+
+    with pytest.raises(OnrampError, match="release"):
+        onramp(FIXTURE, out_dir=str(tmp_path))
+
+    assert before == {file.relative_to(tmp_path): file.read_bytes()
+                      for file in tmp_path.rglob("*") if file.is_file()}
 
 
 def test_embedded_secret_is_caught(tmp_path):

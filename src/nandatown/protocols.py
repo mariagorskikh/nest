@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import time
 from typing import Any
 
@@ -52,6 +53,14 @@ def _client(http: httpx.Client | None) -> httpx.Client:
 def fetch_pr(repo: str, number: int,
              http: httpx.Client | None = None) -> dict[str, Any]:
     client = _client(http)
+    try:
+        return _fetch_pr(repo, number, client)
+    finally:
+        if http is None:
+            client.close()
+
+
+def _fetch_pr(repo: str, number: int, client: httpx.Client) -> dict[str, Any]:
     r = client.get(f"/repos/{repo}/pulls/{number}")
     if r.status_code == 404:
         raise ProtocolImportError(f"no PR #{number} in {repo}")
@@ -61,7 +70,7 @@ def fetch_pr(repo: str, number: int,
     head_repo = (pr["head"].get("repo") or {}).get("full_name", repo)
 
     files_response = client.get(f"/repos/{repo}/pulls/{number}/files",
-                                params={"per_page": MAX_FILES})
+                                params={"per_page": MAX_FILES + 1})
     files_response.raise_for_status()
     listed = files_response.json()
     skipped = []
@@ -88,9 +97,13 @@ def fetch_pr(repo: str, number: int,
             skipped.append(f"{path} (not text)")
             continue
         files.append({"path": path, "content": content})
-    if len(listed) > MAX_FILES:
-        skipped.append(f"{len(listed) - MAX_FILES} further files beyond"
-                       f" the {MAX_FILES} file cap")
+    total = pr.get("changed_files")
+    if isinstance(total, int) and not isinstance(total, bool) and total > MAX_FILES:
+        skipped.append(f"{total - MAX_FILES} further files beyond"
+                       f" the {MAX_FILES} file cap; snapshot is partial")
+    elif len(listed) > MAX_FILES:
+        skipped.append(f"additional files beyond the {MAX_FILES} file cap;"
+                       " snapshot is partial")
     return {
         "repo": repo,
         "number": number,
@@ -143,7 +156,8 @@ def structural_checks(pr: dict[str, Any],
             at=time.time(), evidence=evidence[:8]))
 
     add("files-fetched",
-        "passed" if pr["files"] else "failed",
+        ("failed" if not pr["files"] else
+         "not_enough_evidence" if pr["skipped"] else "passed"),
         [f"{len(pr['files'])} files at {pr['head_sha'][:12]}"]
         + pr["skipped"])
 
@@ -176,17 +190,18 @@ def usage_recipe(protocol_dir: str,
                  classification: dict[str, list[dict]]) -> list[str]:
     lines = []
     for plugin in classification["plugins"]:
-        flags = f"--plugin {os.path.join(protocol_dir, plugin['path'])}"
+        argv = ["nandatown", "run", "marketplace", "--plugin",
+                os.path.join(protocol_dir, plugin["path"])]
         for reg in plugin["registrations"]:
-            flags += f" --layer {reg['layer']}={reg['plugin_id']}"
-        lines.append(f"nandatown run marketplace {flags}")
+            argv.extend(["--layer", f"{reg['layer']}={reg['plugin_id']}"])
+        lines.append(shlex.join(argv))
     for scenario in classification["scenarios"]:
-        lines.append(
-            f"nandatown run {os.path.join(protocol_dir, scenario['path'])}")
+        lines.append(shlex.join([
+            "nandatown", "run", os.path.join(protocol_dir, scenario["path"])]))
     for skill in classification["skills"]:
-        lines.append(
-            "nandatown skills --validate"
-            f" {os.path.join(protocol_dir, skill['path'])}")
+        lines.append(shlex.join([
+            "nandatown", "skills", "--validate",
+            os.path.join(protocol_dir, skill["path"])]))
     return lines
 
 
@@ -194,25 +209,42 @@ def import_pr(number: int, repo: str = DEFAULT_REPO,
               out_dir: str = "protocols",
               http: httpx.Client | None = None) -> str:
     pr = fetch_pr(repo, number, http=http)
-    classification = classify(pr["files"])
-    checks = structural_checks(pr, classification)
     name = f"{number}-{slugify(pr['title'])[:40]}"
     protocol_dir = os.path.join(out_dir, name)
+    if os.path.islink(protocol_dir):
+        raise ProtocolImportError("snapshot directory is a symbolic link")
+    for metadata_name in ("metadata.json", "checks.jsonl"):
+        if os.path.islink(os.path.join(protocol_dir, metadata_name)):
+            raise ProtocolImportError("snapshot metadata is a symbolic link")
+    if os.path.islink(os.path.join(out_dir, "catalog.json")):
+        raise ProtocolImportError("catalog is a symbolic link")
     os.makedirs(protocol_dir, exist_ok=True)
 
     root = os.path.abspath(protocol_dir)
     safe_files = []
     for f in pr["files"]:
         dest = os.path.abspath(os.path.join(root, f["path"]))
-        if os.path.commonpath([root, dest]) != root:
+        if (os.path.isabs(f["path"]) or dest == root
+                or os.path.commonpath([root, dest]) != root):
             pr["skipped"].append(f"{f['path']} (path escapes the"
                                  " snapshot directory)")
+            continue
+        relative = os.path.relpath(dest, root)
+        parts = relative.split(os.sep)
+        if parts[0] in {"metadata.json", "checks.jsonl"}:
+            pr["skipped"].append(f"{f['path']} (reserved snapshot metadata)")
+            continue
+        if any(os.path.islink(os.path.join(root, *parts[:n]))
+               for n in range(1, len(parts) + 1)):
+            pr["skipped"].append(f"{f['path']} (symbolic link in snapshot path)")
             continue
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "w") as fh:
             fh.write(f["content"])
         safe_files.append(f)
     pr["files"] = safe_files
+    classification = classify(pr["files"])
+    checks = structural_checks(pr, classification)
 
     content_fp = fingerprint([{f["path"]: f["content"]}
                               for f in pr["files"]])
