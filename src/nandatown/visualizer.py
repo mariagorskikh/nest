@@ -8,6 +8,7 @@ view. No network, no external assets: the whole run travels in the file.
 from __future__ import annotations
 
 import json
+from html import escape
 from typing import Any
 
 TEMPLATE = """<!DOCTYPE html>
@@ -54,6 +55,7 @@ TEMPLATE = """<!DOCTYPE html>
   .failed { color: var(--bad); }
   .not_enough_evidence { color: var(--warn); }
   .not_tested { color: var(--dim); }
+  .error { color: var(--bad); }
   .verdict { font-size: 15px; font-weight: bold; margin: 6px 0; }
   .scope { color: var(--dim); font-size: 11px; margin-top: 10px; }
 </style>
@@ -94,15 +96,21 @@ v.textContent = 'Verdict: ' + data.result.verdict.toUpperCase();
 v.className = 'verdict ' +
   (data.result.verdict === 'passed' ? 'passed' : 'failed');
 const stages = document.getElementById('stages');
+const statuses = new Set(['passed', 'failed', 'not_enough_evidence',
+                          'not_tested', 'error']);
 for (const s of data.result.stages) {
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td>' + s.name + '</td><td class="' + s.status + '">' +
-    s.status.replaceAll('_', ' ') + '</td>';
+  const name = document.createElement('td');
+  name.textContent = s.name;
+  const status = document.createElement('td');
+  status.textContent = s.status.replaceAll('_', ' ');
+  if (statuses.has(s.status)) status.className = s.status;
+  tr.append(name, status);
   stages.appendChild(tr);
 }
 const svg = document.getElementById('map');
 const cx = 320, cy = 200, R = 150;
-const pos = {};
+const pos = Object.create(null);
 agents.forEach((a, i) => {
   const ang = (2 * Math.PI * i) / agents.length - Math.PI / 2;
   pos[a.name] = [cx + R * Math.cos(ang), cy + R * Math.sin(ang)];
@@ -126,15 +134,22 @@ for (const a of agents) {
 const log = document.getElementById('log');
 events.forEach((e, i) => {
   const d = document.createElement('div');
-  d.innerHTML = 't=' + e.at.toFixed(2) + ' <span class="o">[' +
-    e.observer + ']</span> <span class="k">' + e.kind + '</span> ' +
-    e.subject + ' ' +
-    (Object.keys(e.detail).length ? JSON.stringify(e.detail) : '');
+  const observer = document.createElement('span');
+  observer.className = 'o';
+  observer.textContent = '[' + e.observer + ']';
+  const kind = document.createElement('span');
+  kind.className = 'k';
+  kind.textContent = e.kind;
+  d.append('t=' + e.at.toFixed(2) + ' ', observer, ' ', kind, ' ',
+           e.subject, ' ',
+           Object.keys(e.detail).length ? JSON.stringify(e.detail) : '');
   d.id = 'ev' + i;
   log.appendChild(d);
 });
 const scrub = document.getElementById('scrub');
-scrub.max = events.length - 1;
+scrub.max = Math.max(0, events.length - 1);
+scrub.disabled = events.length === 0;
+document.getElementById('play').disabled = events.length === 0;
 let playing = null;
 function pulse(from, to, dropped) {
   if (!pos[from] || !pos[to]) return;
@@ -181,7 +196,7 @@ document.getElementById('play').addEventListener('click', function () {
     show(+scrub.value, true);
   }, 350);
 });
-show(0, false);
+if (events.length) show(0, false);
 </script>
 </body>
 </html>
@@ -196,6 +211,9 @@ def render_visualizer(bundle: dict[str, Any]) -> str:
         meta = (f"Lab scenario {profile.name}, seed"
                 f" {run.config.get('seed')}, deterministic replay of"
                 f" {len(bundle['events'])} events")
+    elif bundle.get("mode") == "path":
+        meta = (f"Path profile {profile.ref}, capability {profile.capability},"
+                f" {len(bundle['events'])} events")
     else:
         meta = (f"Track profile {profile.name}, fault {profile.fault},"
                 f" {len(bundle['events'])} events")
@@ -207,9 +225,10 @@ def render_visualizer(bundle: dict[str, Any]) -> str:
         "events": [e.model_dump() for e in bundle["events"]],
         "result": result.model_dump(),
     }
-    payload = json.dumps(data).replace("</", "<\\/")
+    payload = (json.dumps(data).replace("<", "\\u003c")
+               .replace(">", "\\u003e").replace("&", "\\u0026"))
     return (TEMPLATE
-            .replace("__RUN_ID__", run.run_id)
+            .replace("__RUN_ID__", escape(run.run_id))
             .replace("__DATA__", payload))
 
 

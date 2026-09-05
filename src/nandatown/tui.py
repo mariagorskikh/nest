@@ -255,13 +255,15 @@ class TownApp(App):
             f" Evidence here: {len(rows)} bundles, {passed} passed.")
 
     def _refresh_bundles(self) -> None:
-        from .board import scan_bundles
+        from .board import display_text, scan_bundles
+        from rich.text import Text
 
         table = self.query_one("#bundle-table", DataTable)
         table.clear()
         for row in reversed(scan_bundles(self.out_dir)):
-            table.add_row(row["run_id"], row["profile"], row["mode"],
-                          row["verdict"], key=row["run_id"])
+            table.add_row(*(Text(display_text(row[field])) for field in
+                            ("run_id", "profile", "mode", "verdict")),
+                          key=row["directory"])
 
     def _refresh_protocols(self) -> None:
         from .protocols import protocol_entries
@@ -484,8 +486,8 @@ class TownApp(App):
         table = self.query_one("#bundle-table", DataTable)
         if table.row_count == 0:
             return None
-        row = table.get_row_at(table.cursor_row)
-        return os.path.join(self.out_dir, str(row[0]))
+        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        return os.path.join(self.out_dir, key.value)
 
     @on(Button.Pressed, "#ev-refresh")
     def _on_ev_refresh(self) -> None:
