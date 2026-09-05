@@ -231,7 +231,8 @@ def test_mirror_cli_reports_invalid_source_without_traceback(tmp_path, capsys):
     assert "mirror failed:" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("extra", ["unsigned.txt", "state/secret.txt"])
+@pytest.mark.parametrize(
+    "extra", ["unsigned.txt", "state/secret.txt", "town.html"])
 def test_recovery_rejects_unsigned_mirror_payload(tmp_path, extra):
     bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
     manifest = json.loads(Path(bundle_dir, "manifest.json").read_text())
@@ -246,6 +247,30 @@ def test_recovery_rejects_unsigned_mirror_payload(tmp_path, extra):
         recover_bundle(fingerprint, [mirror], str(tmp_path / "fresh"))
 
     assert not (tmp_path / "fresh").exists()
+
+
+def test_visualized_source_mirrors_without_copying_generated_html(
+        tmp_path, capsys):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    source = Path(bundle_dir)
+    source_report = source.joinpath("report.md").read_text()
+    assert main(["visualize", bundle_dir]) == 0
+    assert source.joinpath("town.html").is_file()
+    capsys.readouterr()
+    manifest = json.loads(source.joinpath("manifest.json").read_text())
+
+    mirror = str(tmp_path / "mirror")
+    stored = Path(mirror_bundle(bundle_dir, mirror))
+
+    assert not stored.joinpath("town.html").exists()
+    assert stored.joinpath("report.md").read_text() == source_report
+    stored.joinpath("report.md").write_text("UNSIGNED MIRROR CLAIM")
+
+    restored = Path(recover_bundle(
+        manifest["bundle_fingerprint"], [mirror], str(tmp_path / "fresh")))
+
+    assert not restored.joinpath("town.html").exists()
+    assert restored.joinpath("report.md").read_text() == source_report
 
 
 def test_recovery_regenerates_unsigned_report(tmp_path):

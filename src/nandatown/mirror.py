@@ -21,6 +21,7 @@ from .bundle import DIGEST_RE, RECORD_FILES, load_bundle, verify_bundle
 MIRROR_COPY_FILES = frozenset(
     [*RECORD_FILES, "manifest.json", "attestation.json", "receipt.json"])
 MIRROR_ALLOWED_FILES = MIRROR_COPY_FILES | {"report.md"}
+SOURCE_ONLY_MEMBERS = {"state", "town.html"}
 
 
 class MirrorError(Exception):
@@ -46,7 +47,7 @@ def _fingerprint_of(bundle_dir: str) -> str:
     return fingerprint
 
 
-def _tree_problem(bundle_dir: str, *, ignore_state: bool = False) -> str | None:
+def _tree_problem(bundle_dir: str, *, source_only: bool = False) -> str | None:
     """Reject links, special files, and unsupported top-level payloads."""
     try:
         root_metadata = os.lstat(bundle_dir)
@@ -58,7 +59,7 @@ def _tree_problem(bundle_dir: str, *, ignore_state: bool = False) -> str | None:
     try:
         with os.scandir(bundle_dir) as entries:
             for entry in entries:
-                if ignore_state and entry.name == "state":
+                if source_only and entry.name in SOURCE_ONLY_MEMBERS:
                     continue
                 if entry.name not in MIRROR_ALLOWED_FILES:
                     return f"{entry.name} is an unsupported bundle member"
@@ -75,8 +76,8 @@ def _tree_problem(bundle_dir: str, *, ignore_state: bool = False) -> str | None:
 
 def _validate_bundle(bundle_dir: str, label: str, *,
                      expected_fingerprint: str | None = None,
-                     ignore_state: bool = False) -> str:
-    tree_problem = _tree_problem(bundle_dir, ignore_state=ignore_state)
+                     source_only: bool = False) -> str:
+    tree_problem = _tree_problem(bundle_dir, source_only=source_only)
     if tree_problem:
         raise MirrorError(f"{label} has an unsafe tree: {tree_problem}")
     problems = verify_bundle(bundle_dir)
@@ -132,7 +133,7 @@ def _copy_bundle(bundle_dir: str, destination: str, fingerprint: str) -> None:
 
 def mirror_bundle(bundle_dir: str, mirror_dir: str) -> str:
     fingerprint = _validate_bundle(
-        bundle_dir, "source", ignore_state=True)
+        bundle_dir, "source", source_only=True)
     slug = fingerprint.removeprefix("sha256:")
     destination = os.path.join(mirror_dir, slug)
     if os.path.lexists(destination):
