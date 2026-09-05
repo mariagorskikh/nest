@@ -438,9 +438,14 @@ def test_historical_evaluator_mismatch_remains_explicit(tmp_path):
     result = json.loads(result_path.read_text())
     result["evaluator_version"] = "historical-evaluator"
     result_path.write_text(json.dumps(result))
+    run_path = bundle_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["releases"]["evaluator"] = "historical-evaluator"
+    run_path.write_text(json.dumps(run))
     manifest = json.loads((bundle_path / "manifest.json").read_text())
     manifest["evaluator_version"] = "historical-evaluator"
     refresh_file_hash(manifest, "result.json", result_path)
+    refresh_file_hash(manifest, "run.json", run_path)
     write_manifest(bundle_path, manifest)
 
     problems = verify_bundle(path)
@@ -449,6 +454,124 @@ def test_historical_evaluator_mismatch_remains_explicit(tmp_path):
         "evaluator version differs: bundle historical-evaluator, local 0.2.0;"
         " reproducibility not checked"
     ]
+
+
+def test_manifest_version_must_match_run_release(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    manifest_path = tmp_path / "bundle" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["nandatown_version"] = "forged-version"
+    manifest_path.write_text(json.dumps(manifest))
+
+    problems = verify_bundle(path)
+
+    assert "manifest nandatown version does not match run release" in problems
+
+
+def test_run_evaluator_release_must_match_result(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    bundle_path = tmp_path / "bundle"
+    run_path = bundle_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["releases"]["evaluator"] = "contradicts-result"
+    run_path.write_text(json.dumps(run))
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    refresh_file_hash(manifest, "run.json", run_path)
+    write_manifest(bundle_path, manifest)
+
+    problems = verify_bundle(path)
+
+    assert "run evaluator release does not match result" in problems
+
+
+@pytest.mark.parametrize(
+    ("record_name", "identifier", "problem"),
+    [("intents.jsonl", "intent_id", "duplicate intent ids"),
+     ("events.jsonl", "event_id", "duplicate event ids")],
+)
+def test_duplicate_record_id_is_rejected(
+        tmp_path, record_name, identifier, problem):
+    path, _ = make_bundle(tmp_path)
+    bundle_path = tmp_path / "bundle"
+    records_path = bundle_path / record_name
+    first = records_path.read_text().splitlines()[0]
+    assert json.loads(first)[identifier]
+    with open(records_path, "a") as stream:
+        stream.write(first + "\n")
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    refresh_file_hash(manifest, record_name, records_path)
+    write_manifest(bundle_path, manifest)
+
+    problems = verify_bundle(path)
+
+    assert any(problem in item for item in problems), problems
+
+
+def test_path_run_mode_must_match_manifest_mode(tmp_path):
+    url = "http://testserver"
+    with TestClient(build_a2a_app(url)) as client:
+        path, _ = run_path_test(url, str(tmp_path), http=client)
+    bundle_path = Path(path)
+    run_path = bundle_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["config"]["mode"] = "lab"
+    run_path.write_text(json.dumps(run))
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    refresh_file_hash(manifest, "run.json", run_path)
+    write_manifest(bundle_path, manifest)
+    (bundle_path / "attestation.json").unlink()
+
+    problems = verify_bundle(path)
+
+    assert "run mode does not match manifest mode" in problems
+
+
+def test_malformed_participant_fails_before_receipt_derivation(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    bundle_path = tmp_path / "bundle"
+    run_path = bundle_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["participants"] = [{}]
+    run_path.write_text(json.dumps(run))
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    refresh_file_hash(manifest, "run.json", run_path)
+    write_manifest(bundle_path, manifest)
+
+    problems = verify_bundle(path)
+
+    assert any("participant" in problem for problem in problems), problems
+    from nandatown.receipt import make_receipt
+    with pytest.raises(ValueError, match="participant"):
+        make_receipt(path)
+
+
+def test_historical_evaluator_mismatch_still_checks_attestation(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    bundle_path = tmp_path / "bundle"
+    keys = Keystore(str(tmp_path / "keys"))
+    attest_bundle(path, keystore=keys, signer="reviewer")
+    result_path = bundle_path / "result.json"
+    result = json.loads(result_path.read_text())
+    result["evaluator_version"] = "historical-evaluator"
+    result_path.write_text(json.dumps(result))
+    run_path = bundle_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["releases"]["evaluator"] = "historical-evaluator"
+    run_path.write_text(json.dumps(run))
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    manifest["evaluator_version"] = "historical-evaluator"
+    refresh_file_hash(manifest, "result.json", result_path)
+    refresh_file_hash(manifest, "run.json", run_path)
+    write_manifest(bundle_path, manifest)
+    attestation_path = bundle_path / "attestation.json"
+    attestation = json.loads(attestation_path.read_text())
+    attestation["signature"] = "00"
+    attestation_path.write_text(json.dumps(attestation))
+
+    problems = verify_bundle(path)
+
+    assert any("evaluator version differs" in problem for problem in problems)
+    assert "attestation signature does not verify" in problems
 
 
 def test_report_contains_scope_and_stages(tmp_path):

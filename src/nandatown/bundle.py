@@ -55,6 +55,17 @@ def _regular_file_problem(path: str, name: str) -> str | None:
     return None
 
 
+def _duplicates(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    repeated: set[str] = set()
+    for value in values:
+        if value in seen:
+            repeated.add(value)
+        else:
+            seen.add(value)
+    return sorted(repeated)
+
+
 def write_bundle(directory: str, profile, run: RunRecord,
                  intents: list[dict[str, Any]], events: list[TownEvent],
                  result: EvidenceResult, mode: str = "track") -> dict[str, Any]:
@@ -241,47 +252,76 @@ def verify_bundle(directory: str) -> list[str]:
         problems.append("intent names a different run id")
     if any(event.run_id != run.run_id for event in bundle["events"]):
         problems.append("event names a different run id")
+    participant_problems = []
+    if not run.participants:
+        participant_problems.append("run has no participants")
+    for index, participant in enumerate(run.participants):
+        for field in ("name", "role"):
+            value = participant.get(field)
+            if not isinstance(value, str) or not value.strip():
+                participant_problems.append(
+                    f"run participant {index} has no valid {field}")
+    problems.extend(participant_problems)
+    if manifest.get("nandatown_version") != run.releases.get("nandatown"):
+        problems.append("manifest nandatown version does not match run release")
+    if run.releases.get("evaluator") != recorded.evaluator_version:
+        problems.append("run evaluator release does not match result")
+    if manifest.get("evaluator_version") != recorded.evaluator_version:
+        problems.append("manifest evaluator version does not match result")
+    if bundle["mode"] in {"lab", "path"} \
+            and run.config.get("mode") != bundle["mode"]:
+        problems.append("run mode does not match manifest mode")
+    intent_ids = [intent.intent_id for intent in bundle["intents"]]
+    duplicate_intent_ids = _duplicates(intent_ids)
+    if duplicate_intent_ids:
+        problems.append(f"duplicate intent ids: {duplicate_intent_ids}")
+    event_ids = [event.event_id for event in bundle["events"]]
+    duplicate_event_ids = _duplicates(event_ids)
+    if duplicate_event_ids:
+        problems.append(f"duplicate event ids: {duplicate_event_ids}")
+    stage_names = [stage.name for stage in recorded.stages]
+    duplicate_names = _duplicates(stage_names)
+    if duplicate_names:
+        problems.append(f"result has duplicate stage names: {duplicate_names}")
     if problems:
         return problems
 
-    if bundle["mode"] == "lab":
-        from .sim.validators import LAB_EVALUATOR_VERSION, evaluate_scenario
-        expected_version = LAB_EVALUATOR_VERSION
-        replay_fn = evaluate_scenario
-    elif bundle["mode"] == "path":
-        from .path_runner import evaluate_path, path_evaluator_version
-        expected_version = path_evaluator_version(bundle["profile"])
-        replay_fn = evaluate_path
-    else:
-        expected_version = EVALUATOR_VERSION
-        replay_fn = evaluate
-    if recorded.evaluator_version != expected_version:
+    try:
+        if bundle["mode"] == "lab":
+            from .sim.validators import LAB_EVALUATOR_VERSION, evaluate_scenario
+            expected_version = LAB_EVALUATOR_VERSION
+            replay_fn = evaluate_scenario
+        elif bundle["mode"] == "path":
+            from .path_runner import evaluate_path, path_evaluator_version
+            expected_version = path_evaluator_version(bundle["profile"])
+            replay_fn = evaluate_path
+        else:
+            expected_version = EVALUATOR_VERSION
+            replay_fn = evaluate
+    except (KeyError, ValueError) as exc:
+        expected_version = None
+        replay_fn = None
+        problems.append(str(exc))
+    if expected_version is not None \
+            and recorded.evaluator_version != expected_version:
         problems.append(
             f"evaluator version differs: bundle {recorded.evaluator_version},"
             f" local {expected_version}; reproducibility not checked")
-        return problems
-    if manifest.get("evaluator_version") != recorded.evaluator_version:
-        problems.append("manifest evaluator version does not match result")
-        return problems
-    stage_names = [stage.name for stage in recorded.stages]
-    duplicate_names = sorted({name for name in stage_names
-                              if stage_names.count(name) > 1})
-    if duplicate_names:
-        problems.append(f"result has duplicate stage names: {duplicate_names}")
-    try:
-        replay = replay_fn(
-            bundle["profile"], recorded.run_id, bundle["events"])
-    except Exception as exc:
-        problems.append(
-            "evaluator replay failed on the recorded evidence:"
-            f" {type(exc).__name__}: {exc}")
-        return problems
-    recorded_result = recorded.model_dump(exclude={"evaluated_at"})
-    replay_result = replay.model_dump(exclude={"evaluated_at"})
-    if recorded_result != replay_result:
-        problems.append(
-            "evaluator replay mismatch: result.json does not match a fresh"
-            " deterministic evaluation")
+    elif replay_fn is not None:
+        try:
+            replay = replay_fn(
+                bundle["profile"], recorded.run_id, bundle["events"])
+        except Exception as exc:
+            problems.append(
+                "evaluator replay failed on the recorded evidence:"
+                f" {type(exc).__name__}: {exc}")
+        else:
+            recorded_result = recorded.model_dump(exclude={"evaluated_at"})
+            replay_result = replay.model_dump(exclude={"evaluated_at"})
+            if recorded_result != replay_result:
+                problems.append(
+                    "evaluator replay mismatch: result.json does not match a"
+                    " fresh deterministic evaluation")
 
     attestation_path = os.path.join(directory, "attestation.json")
     if os.path.lexists(attestation_path):
