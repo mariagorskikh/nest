@@ -59,10 +59,11 @@ def test_path_bundle_visualizes_with_its_actual_profile(tmp_path):
         directory, result = run_path_test(
             "http://testserver", str(tmp_path), http=client)
 
-    page = Page(render_visualizer(load_bundle(directory)))
+    bundle = load_bundle(directory)
+    page = Page(render_visualizer(bundle))
     data = json.loads(page.data)
 
     assert result.verdict == "passed"
-    assert "Path profile a2a-capability-fulfillment@0.2" in data["meta"]
+    assert f"Path profile {bundle['profile'].name}" in data["meta"]
     assert "quote" in data["meta"]
     assert data["result"]["verdict"] == "passed"
