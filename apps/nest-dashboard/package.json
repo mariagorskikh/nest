@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit --incremental false"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.12.0"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

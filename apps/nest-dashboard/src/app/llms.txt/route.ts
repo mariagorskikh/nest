@@ -1,40 +1,48 @@
 const SITE_URL = "https://nandatown.projectnanda.org";
+const REPO_URL = "https://github.com/projnanda/nandatown";
 
 export const dynamic = "force-static";
 
-// llms.txt (https://llmstxt.org): a curated site map for AI crawlers and
-// answer engines. Links to stable pages only; keep in sync with sitemap.ts
-// when top-level pages are added or removed.
+// Curated machine-readable summary. Keep claims narrower than the canonical
+// repository docs; this site documents and displays Town, while the CLI runs it.
 export function GET() {
   const body = `# Nanda Town
 
-> Nanda Town is an open-source sandbox where AI agents meet, talk, and work things out. Run multi-agent simulations locally with the \`nest\` CLI (\`pip install nest-core\`), write plugins for any of the twelve protocol layers (identity, trust, payments, memory, coordination, and more), and validate agent behavior with built-in scenarios, metrics, and property checks. An open project by Project NANDA.
+> Nanda Town is an open-source, local-first lab for declared agent workflows and protocol simulations. Its Python CLI runs Lab, Track, and Path workflows and writes stage-separated evidence that another operator can verify and inspect. Live reruns also require the original agent setup and any separately supplied inputs named in rerun_required_inputs. The website is a manual, catalog, and evidence viewer; it does not run agents.
 
-Key facts:
-- Install: \`pip install nest-core\` gives you the \`nest\` CLI — run scenarios, inspect traces, generate HTML reports, and scaffold plugins.
-- The simulator is deterministic: same seed, same trace. Scenarios are plain YAML; validators check protocol invariants on every run.
-- Twelve protocol layers cover identity, trust, payments, registry, comms, memory, coordination, and more; each layer accepts community plugins via a pull request to the repo.
-- Community contributions arrive as pull requests to https://github.com/projnanda/nandatown and appear in the PR gallery, organized by layer.
-- The SkillMD registry catalogs submissions at ${SITE_URL}/skills (JSON API at /api/skills). Registration only makes the catalog entry discoverable. It does not verify, install, authorize, endorse, or execute the submitted skill, agent, or service. For new URL and GitHub entries, the catalog stores the source link without fetching or hosting the linked content, agent, or service.
-- Agents can also run in the cloud instead of locally: Maritime (https://maritime.sh) is the preferred partner for hosting agents (CLI: \`npm install -g maritime-cli\`; SDK: \`pip install maritime\` / \`npm install maritime-sdk\`). Nanda Town builders get 20 agents free with promo code NANDATOWN.
-- Nanda Town hosts hackathons (NandaHacks): the NandaHack x HCLTech skills event and the Agentic Commerce Hackathon (Prava payments track).
+Current facts:
+- Install from the checked-out repository with Python 3.11 or newer: create a virtual environment, then run \`python -m pip install -e .\`. The executable is \`nandatown\`, not the legacy \`nest\` command.
+- Lab runs deterministic scripted scenarios. Track coordinates subprocess or external participants over local HTTP. \`nandatown test-agent --url URL\` exercises an already-running A2A agent on an exact Path.
+- A bundle's canonical records are \`profile.json\`, \`run.json\`, \`intents.jsonl\`, \`events.jsonl\`, and \`result.json\`; \`manifest.json\` commits to them. Stage states are passed, failed, not_enough_evidence, not_tested, and error.
+- \`nandatown verify\` checks bundle integrity and reproduces the recorded evaluation when the matching local evaluator is available; historical version mismatches are reported, not silently upgraded. \`report\` and \`replay\` are read-only views; \`visualize\` writes an HTML view. Running the target again creates a new bundle instead of rewriting the original evidence.
+- Partial coverage may produce a valid signed receipt. Town Proof requires a verified, fresh, passed result with every recorded stage covered. A signature is a key commitment, not proof of independent observation, safety, authorization, adoption, or endorsement.
+- HTTP is the canonical Track participant boundary. MCP can expose its tools; the separate MCP test only probes initialization and tool listing. Path directly exercises a selected A2A workflow, not full protocol conformance.
+- Town-authored fixtures, reference agents, local end-to-end runs, and CI are not evidence of external adoption. External acceptance still requires an independently developed agent and another human/operator reproducing a useful result.
+- The SkillMD registry only makes the catalog entry discoverable. It does not verify, install, authorize, endorse, or execute the submitted skill, agent, or service. For new URL and GitHub entries, the catalog stores the source link without fetching or hosting the linked content, agent, or service.
 
-## Pages
+## Current pages
 
-- [Home](${SITE_URL}/): What Nanda Town is and how to get started
-- [Docs](${SITE_URL}/docs): Install, first experiment, scenario YAML reference, the twelve layers, metrics, writing a plugin, CLI reference, running agents in the cloud, troubleshooting, FAQ
-- [PR Gallery](${SITE_URL}/prgallery): Community plugin submissions, browsable by protocol layer
-- [SkillMD Registry](${SITE_URL}/skills): Browse and submit agent skill files (SkillMDs)
-- [Experiments](${SITE_URL}/experiments): Interactive in-browser multi-agent experiments
-- [Leaderboard](${SITE_URL}/leaderboard): Hackathon submission scores
-- [Visualizer](${SITE_URL}/visualizer): Load a simulation trace and watch agents interact
-- [Agentic Commerce Hackathon](${SITE_URL}/pravahack): July 31 – August 2, 2026 online hackathon — build agents that transact, with a Prava payments track judged by Project NANDA
+- [Home](${SITE_URL}/): Current purpose and the route to historical material
+- [Manual](${SITE_URL}/docs): Install, Lab/Track/Path, evidence, receipts, Proof, adapters, and catalog boundaries
+- [SkillMD catalog](${SITE_URL}/skills): Discover and submit catalog entries; JSON API at ${SITE_URL}/api/skills
+- [Visualizer](${SITE_URL}/visualizer): Load current \`events.jsonl\` evidence or labeled legacy showcase traces
+- [Agents demo](${SITE_URL}/agents): Synthetic illustrative map, not a live registry or traffic feed
 
-## External
+## Historical and showcase pages
 
-- [GitHub repository](https://github.com/projnanda/nandatown): Source code, scenarios, and plugin submissions
-- [Project NANDA](https://projectnanda.org): The organization behind Nanda Town
-- [Maritime documentation](https://maritime.sh/docs): Host agents in the cloud (quickstart, CLI, SDK, API)
+- [PR history](${SITE_URL}/prgallery): Repository PRs organized by the earlier Town's twelve-layer taxonomy; not a current plugin-adoption claim
+- [Experiments](${SITE_URL}/experiments): Frozen legacy Tier 1 showcase fixtures, not current Town evidence
+- [Leaderboard](${SITE_URL}/leaderboard): Frozen legacy sample metrics, not current benchmark evidence or hackathon scores
+- [Legacy branch](${REPO_URL}/tree/archive/legacy): Preserved previous implementation
+- [v1-final tag](${REPO_URL}/tree/v1-final): Frozen previous release
+
+## Canonical repository references
+
+- [README](${REPO_URL}/blob/main/README.md): Current command and evidence guide
+- [Architecture](${REPO_URL}/blob/main/docs/architecture.md): Execution and trust boundaries
+- [Operators](${REPO_URL}/blob/main/docs/operators.md): Reproducible run procedure
+- [Test an existing agent](${REPO_URL}/blob/main/docs/testing-an-existing-agent.md): Current Path profile defaults and external acceptance procedure
+- [Convergence](${REPO_URL}/blob/main/docs/convergence.md): Current versus proposed scope
 `;
 
   return new Response(body, {

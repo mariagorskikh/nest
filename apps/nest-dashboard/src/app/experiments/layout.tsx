@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Experiments",
   description:
-    "Interactive in-browser multi-agent experiments — watch AI agents negotiate, coordinate, and trade in live Nanda Town scenarios.",
+    "Frozen legacy showcase scenarios and sample metrics from the earlier Nanda Town simulator.",
   alternates: { canonical: "/experiments" },
 };
 

@@ -43,7 +43,7 @@ export function Footer() {
           </div>
 
           <FooterColumn title="Platform">
-            <FooterLink href="/prgallery">Protocols + Plugins (PRs)</FooterLink>
+            <FooterLink href="/prgallery">PR history (legacy layers)</FooterLink>
             <FooterLink href="/experiments">Experiments</FooterLink>
             <FooterLink href="/leaderboard">Leaderboard</FooterLink>
             <FooterLink href="/visualizer">Visualizer</FooterLink>
@@ -68,9 +68,6 @@ export function Footer() {
             </FooterLink>
             <FooterLink href="https://projectnanda.org" external>
               Project NANDA
-            </FooterLink>
-            <FooterLink href="https://maritime.sh" external>
-              Maritime &middot; agent hosting
             </FooterLink>
           </FooterColumn>
 

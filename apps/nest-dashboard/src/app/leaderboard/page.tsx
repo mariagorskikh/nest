@@ -86,15 +86,14 @@ export default function LeaderboardPage() {
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-16">
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.6rem,6vw,5rem)] leading-[1.02] tracking-tight text-ink-900">
-              Reference<br />
-              <span className="italic text-ink-700">benchmark runs</span> by<br />
+              Legacy<br />
+              <span className="italic text-ink-700">sample runs</span> by<br />
               scenario.
             </h1>
             <p className="animate-fade-in stagger-2 text-[1.1rem] leading-[1.6] text-ink-500 max-w-md">
-              Side-by-side metrics from the core team&rsquo;s reference runs, listed
-              newest first. Compare entries within the same scenario. Runs are
-              deterministic, so a scenario re-run with its recorded seed produces
-              the same result under Tier 1 conditions.
+              Frozen Tier 1 fixture data from the earlier dashboard, shown for UI
+              comparison. These values are not current evidence, externally
+              reproduced benchmarks, or hackathon scores.
             </p>
           </div>
         </div>

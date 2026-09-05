@@ -1,6 +1,10 @@
 # The town can now say no — and prove it said no
 
-*A plain-language explainer for the `fix/enforce-grant-permissions` branch.*
+*Historical implementation explainer for `fix/enforce-grant-permissions`,
+checkpoint `9ff27d7` on 2026-08-29.
+Its test totals and review narrative describe that change, not current main.
+Use the [README](../README.md), [architecture](architecture.md) and current CLI
+help for operational instructions.*
 
 ## The one-sentence version
 
@@ -22,7 +26,7 @@ the **coordinator** and exchange work through a mailbox with four verbs:
 
 Every run ends in an **evidence bundle**: the list of things agents *tried*
 (`intents.jsonl`), the list of things that *happened* (`events.jsonl`), and a
-verdict computed from those events alone.
+verdict computed from the frozen profile and those recorded events.
 
 ## The badge
 
@@ -296,7 +300,7 @@ def test_restrictions_and_pins_survive_a_coordinator_restart(tmp_path):
         assert _send(restarted, run_id, buyer, message_id="q-2").status_code == 403
 ```
 
-Full suite: **181 passed**.
+At that implementation checkpoint, the full suite had **181 passing tests**.
 
 **Real runs** — the shipped participants always carry the full grant, so
 nothing legitimate should change. These all still pass, including the one
@@ -308,7 +312,7 @@ nandatown run quote-crash-restart --identity
 nandatown run quote-llm --identity
 ```
 
-**Reviews** — three independent review passes. Each found something real
+**Reviews at that checkpoint** — three independent review passes. Each found something real
 (the restart problem, the `null` bypass, the token side door), and each
 finding was fixed before moving on.
 
@@ -349,13 +353,15 @@ print(r.status_code, r.json())
 # 403 {'detail': {'error': 'grant_permission_denied', 'permission': 'send'}}
 ```
 
-## What is still open
+## Limitations and later changes
 
 - No `--permissions` flag on `nandatown identity grant` or the runner — today
   every shipped grant is the full set.
-- Grants expire but cannot be revoked early.
-- Spawned participants still receive a `TOKEN` even when pinned (harmless — the
-  town refuses it — but a dead credential).
+- Grant time validity is checked at join; session-wide expiry and early
+  revocation are not implemented. Do not assume a joined session is rechecked
+  against the grant's expiry on each request.
+- The rebuilt runner hands identity-pinned roles `TOWN_GRANT`, not a usable
+  token fallback. The current coordinator refuses token joins for those roles.
 
 ## If you remember one thing
 
@@ -479,12 +485,12 @@ the report ends with `Refused by grant permissions: 1`.
 
 That pair is the paper's sentence made concrete:
 
-| the evidence | what it proves |
+| the evidence | what it records |
 |---|---|
-| the `send` intent | the agent did something it was told not to |
-| the `grant_permission_denied` event | the town refused it |
-| no `message_accepted` afterwards | the refusal held |
+| the `send` intent | an attempted action attributed to the participant |
+| the `grant_permission_denied` event | the coordinator's recorded refusal |
+| no matching `message_accepted` afterwards | no acceptance in the captured trace |
 
-A scenario validator can now assert "every executed action was authorized",
-which was impossible before, because there was no such thing as a denied
-action to look for.
+A scenario validator can check these authorization observations against its
+declared profile. The trace does not establish everything the agent did outside
+Town or independently prove the truth of an observer's claims.

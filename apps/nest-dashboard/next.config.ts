@@ -11,6 +11,11 @@ const staticPages = [
 ];
 
 const nextConfig: NextConfig = {
+  // This repository is not an npm workspace. Pin Turbopack to the dashboard
+  // instead of allowing an unrelated lockfile above the checkout to win.
+  turbopack: {
+    root: __dirname,
+  },
   async rewrites() {
     return staticPages.map((p) => ({
       source: `/${p}`,

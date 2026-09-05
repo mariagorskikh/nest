@@ -1,9 +1,9 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { submitSkill } from "./actions";
-import { initialSubmitState } from "./form-state";
+import { initialSubmitState, type SubmitState } from "./form-state";
 
 type SourceType = "url" | "github" | "content";
 
@@ -27,10 +27,6 @@ const CHECKLIST = [
 ];
 
 export function SubmitForm() {
-  const [state, formAction, pending] = useActionState(
-    submitSkill,
-    initialSubmitState,
-  );
   const [sourceType, setSourceType] = useState<SourceType>("url");
   const [checked, setChecked] = useState<boolean[]>(() =>
     CHECKLIST.map(() => false),
@@ -39,19 +35,26 @@ export function SubmitForm() {
   // Block repeat submit events synchronously, before the pending render can
   // disable the button. This is a UI guard, not server-side idempotency.
   const submittingRef = useRef(false);
+  const submitAndReset = useCallback(
+    async (previous: SubmitState, formData: FormData) => {
+      const next = await submitSkill(previous, formData);
+      if (next.ok) {
+        formRef.current?.reset();
+        setSourceType("url");
+        setChecked(CHECKLIST.map(() => false));
+      }
+      return next;
+    },
+    [],
+  );
+  const [state, formAction, pending] = useActionState(
+    submitAndReset,
+    initialSubmitState,
+  );
 
   useEffect(() => {
     if (!pending) submittingRef.current = false;
   }, [pending]);
-
-  // Clear the fields after a successful save.
-  useEffect(() => {
-    if (state.ok) {
-      formRef.current?.reset();
-      setSourceType("url");
-      setChecked(CHECKLIST.map(() => false));
-    }
-  }, [state.ok]);
 
   return (
     <form
