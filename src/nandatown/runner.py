@@ -1,17 +1,21 @@
 """Full-run orchestration: one command, one run, one evidence bundle.
 
 The runner starts a coordinator subprocess, spawns the buyer and seller
-as isolated subprocesses with their own state directories, restarts the
-seller once if it crashes, finishes the run, evaluates the event log,
-and writes the portable bundle. Runner observations (crash, restart,
-exit) are posted as attributed events; the runner never synthesizes
-participant assertions.
+as separate subprocesses with their own state directories, restarts the
+seller once if it crashes, finishes the run, evaluates the event log, and
+writes the portable bundle. Bundled harnesses receive a narrow environment;
+an operator-supplied ``cmd:`` harness is trusted code and retains the
+operator's ambient environment. This is process lifecycle containment, not a
+filesystem or network sandbox. Runner observations (crash, restart, exit) are
+posted as attributed events; the runner never synthesizes participant
+assertions.
 """
 
 from __future__ import annotations
 
 import os
 import secrets
+import signal
 import shutil
 import socket
 import subprocess
@@ -28,6 +32,14 @@ from .records import RunRecord, TestProfile, TownEvent, fingerprint
 from .profiles import PROFILES
 
 SELLER_CRASH_EXIT = 3
+
+_BUILTIN_ENV_KEYS = (
+    "PATH", "PYTHONPATH", "PYTHONHOME",
+    "LANG", "LC_ALL", "LC_CTYPE",
+    "TMPDIR", "TMP", "TEMP",
+    "SYSTEMROOT", "WINDIR",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+)
 
 
 class RunnerError(Exception):
@@ -59,17 +71,68 @@ def _wait_health(http: httpx.Client, timeout: float = 10.0) -> None:
 def _spawn_participant(command: list[str], url: str, run_id: str, name: str,
                        token: str, state_dir: str, fault: str,
                        deadline: str,
-                       extra_env: dict[str, str] | None = None
+                       extra_env: dict[str, str] | None = None,
+                       inherit_env: bool = False,
                        ) -> subprocess.Popen:
     os.makedirs(state_dir, exist_ok=True)
-    env = dict(os.environ)
+    env = (dict(os.environ) if inherit_env else
+           {key: os.environ[key] for key in _BUILTIN_ENV_KEYS
+            if key in os.environ})
     env.update({"TOWN_URL": url, "RUN_ID": run_id, "NAME": name,
                 "TOKEN": token, "STATE_DIR": state_dir, "FAULT": fault,
                 "DEADLINE": deadline})
     env.update(extra_env or {})
     return subprocess.Popen(command, env=env,
                             stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=(os.name == "posix"))
+
+
+def _stop_process(process: subprocess.Popen, grace: float = 0.5) -> int | None:
+    """Settle a child and, on POSIX, every descendant in its process group.
+
+    Other platforms use a direct-child fallback; Python has no portable
+    descendant-process primitive.
+    """
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif process.poll() is None:
+        process.kill()
+    try:
+        return process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        return process.poll()
+
+
+def _participant_extra_env(kind: str, explicit: dict[str, str],
+                           model: str) -> dict[str, str]:
+    """Select model configuration for one harness without broad inheritance."""
+    env: dict[str, str] = {}
+    if kind in ("llm", "cmd"):
+        effective_model = explicit.get("TOWN_MODEL", model)
+        env["TOWN_MODEL"] = effective_model
+        # A mock harness has no reason to receive paid credentials. Trusted
+        # commands inherit ambient variables in _spawn_participant regardless.
+        if kind == "cmd" or not effective_model.startswith("mock:"):
+            for key in ("TOWN_MODEL_URL", "TOWN_MODEL_KEY"):
+                if key in os.environ:
+                    env[key] = os.environ[key]
+    env.update(explicit)
+    return env
 
 
 def parse_harness(spec: str) -> dict[str, Any]:
@@ -109,9 +172,8 @@ def parse_harness(spec: str) -> dict[str, Any]:
 def _participant_command(profile: TestProfile, role: str,
                          external: dict[str, list[str] | None] | None,
                          harnesses: dict[str, str] | None = None
-                         ) -> tuple[list[str] | None, dict[str, str]]:
-    """The command and extra env for one role, or (None, {}) when an
-    outside agent will join with handed-out credentials."""
+                         ) -> tuple[list[str] | None, dict[str, str], str]:
+    """Return the command, explicit environment, and harness kind."""
     if harnesses and role in harnesses:
         harness = parse_harness(harnesses[role])
     elif external and role in external:
@@ -124,19 +186,21 @@ def _participant_command(profile: TestProfile, role: str,
                    "model": None}
     kind = harness["kind"]
     if kind == "external":
-        return None, {}
+        return None, {}, kind
     if kind == "cmd":
-        return harness["command"], {}
+        return harness["command"], {}, kind
     if kind == "llm":
         env = {"ROLE": role}
         if harness.get("model"):
             env["TOWN_MODEL"] = harness["model"]
-        return [sys.executable, "-m", "nandatown.participants.llm"], env
+        return ([sys.executable, "-m", "nandatown.participants.llm"],
+                env, kind)
     if kind == "a2a":
         return ([sys.executable, "-m",
                  "nandatown.participants.a2a_bridge"],
-                {"A2A_URL": harness["url"]})
-    return [sys.executable, "-m", f"nandatown.participants.{role}"], {}
+                {"A2A_URL": harness["url"]}, kind)
+    return ([sys.executable, "-m", f"nandatown.participants.{role}"],
+            {}, kind)
 
 
 def _validate_role_overrides(
@@ -189,7 +253,8 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
     overrides the profile's runtimes. external is the lower-level form:
     a role mapped to a replacement command, or to None to spawn nothing
     and hand join credentials to on_credentials(role, env) so an
-    outside agent can join.
+    outside agent can join. Command harnesses are trusted operator code and
+    inherit the operator environment; bundled harnesses do not.
     """
     if profile_name not in PROFILES:
         raise RunnerError(f"unknown profile {profile_name!r};"
@@ -206,12 +271,14 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
     os.makedirs(scratch, exist_ok=True)
     db_path = os.path.join(scratch, "town.db")
 
-    env = dict(os.environ)
+    env = {key: os.environ[key] for key in _BUILTIN_ENV_KEYS
+           if key in os.environ}
     env["TOWN_ADMIN_TOKEN"] = admin_token
     coordinator = subprocess.Popen(
         [sys.executable, "-m", "nandatown.coordinator", "--db", db_path,
          "--port", str(port)],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=(os.name == "posix"),
     )
     procs: list[subprocess.Popen] = [coordinator]
     admin = httpx.Client(base_url=url, timeout=10.0,
@@ -253,17 +320,14 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
 
         seller_state = os.path.join(scratch, "seller")
         buyer_state = os.path.join(scratch, "buyer")
-        seller_cmd, seller_env = _participant_command(profile, "seller",
-                                                      external, harnesses)
-        buyer_cmd, buyer_env = _participant_command(profile, "buyer",
-                                                    external, harnesses)
-        model_env = {"TOWN_MODEL": model}
-        for key in ("TOWN_MODEL_URL", "TOWN_MODEL_KEY"):
-            if key in os.environ:
-                model_env[key] = os.environ[key]
+        seller_cmd, seller_env, seller_kind = _participant_command(
+            profile, "seller", external, harnesses)
+        buyer_cmd, buyer_env, buyer_kind = _participant_command(
+            profile, "buyer", external, harnesses)
+
         # A per-role harness model outranks the run-level model.
-        seller_env = {**model_env, **seller_env}
-        buyer_env = {**model_env, **buyer_env}
+        seller_env = _participant_extra_env(seller_kind, seller_env, model)
+        buyer_env = _participant_extra_env(buyer_kind, buyer_env, model)
         if "seller" in grants:
             seller_env["TOWN_GRANT"] = grants["seller"]
         if "buyer" in grants:
@@ -293,7 +357,8 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
             p = _spawn_participant(seller_cmd, url, run_id, "seller",
                                    tokens["seller"], seller_state,
                                    profile.fault, seller_deadline,
-                                   extra_env=seller_env)
+                                   extra_env=seller_env,
+                                   inherit_env=(seller_kind == "cmd"))
             procs.append(p)
             return p
 
@@ -305,7 +370,8 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
             buyer = _spawn_participant(buyer_cmd, url, run_id, "buyer",
                                        tokens["buyer"], buyer_state,
                                        profile.fault, buyer_deadline,
-                                       extra_env=buyer_env)
+                                       extra_env=buyer_env,
+                                       inherit_env=(buyer_kind == "cmd"))
             procs.append(buyer)
 
         restarted = False
@@ -329,6 +395,7 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
             if seller is not None:
                 rc = seller.poll()
                 if rc is not None:
+                    _stop_process(seller)
                     if rc == SELLER_CRASH_EXIT and not restarted:
                         post_event("runner", "participant_crashed",
                                    "seller", {"exit_code": rc})
@@ -342,10 +409,9 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
                         break
             time.sleep(0.1)
         if buyer is not None:
-            if buyer.poll() is None:
-                buyer.terminate()
+            buyer_exit = _stop_process(buyer)
             post_event("runner", "participant_exited", "buyer",
-                       {"exit_code": buyer.poll()})
+                       {"exit_code": buyer_exit})
 
         quiet_deadline = time.time() + (0.0 if refused_role else 8.0)
         while time.time() < quiet_deadline:
@@ -353,9 +419,10 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
                 break
             time.sleep(0.2)
 
-        if seller is not None and seller.poll() is None:
-            seller.terminate()
-        admin.post(f"/runs/{run_id}/finish")
+        if seller is not None:
+            _stop_process(seller)
+        finished = admin.post(f"/runs/{run_id}/finish")
+        finished.raise_for_status()
 
         raw_events = get_events()
         events = [TownEvent.model_validate(e) for e in raw_events]
@@ -425,13 +492,7 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
         return bundle_dir, result
     finally:
         for p in procs:
-            if p.poll() is None:
-                p.terminate()
-        for p in procs:
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
+            _stop_process(p)
         admin.close()
         # Keep the operational state (town.db, journals) inspectable
         # inside the bundle once the processes that owned it are gone.

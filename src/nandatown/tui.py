@@ -43,6 +43,15 @@ HARNESS_OPTIONS = [
     ("my own command", "cmd"),
 ]
 
+KIOSK_HOSTED_MODEL_OPT_IN = "NANDATOWN_KIOSK_ALLOW_HOSTED_MODEL"
+
+
+def _track_model(kiosk: bool) -> str | None:
+    """Keep a public kiosk off operator-funded models unless opted in."""
+    if kiosk and os.environ.get(KIOSK_HOSTED_MODEL_OPT_IN) != "1":
+        return "mock:v1"
+    return None
+
 
 def _targets() -> list[tuple[str, str]]:
     from .profiles import PROFILES
@@ -304,7 +313,8 @@ class TownApp(App):
                           + (f" with harnesses {harnesses}"
                              if harnesses else ""))
                 bundle_dir, result = run_town(target, self.out_dir,
-                                              harnesses=harnesses)
+                                              harnesses=harnesses,
+                                              model=_track_model(self.kiosk))
             else:
                 from .sim.runner import run_lab
                 self._log("run-log", f"lab run of {target}")
@@ -355,7 +365,8 @@ class TownApp(App):
         try:
             if target in PROFILES:
                 from .runner import run_town
-                bundle_dir, result = run_town(target, self.out_dir)
+                bundle_dir, result = run_town(
+                    target, self.out_dir, model=_track_model(self.kiosk))
             else:
                 from .sim.runner import run_lab
                 bundle_dir, result = run_lab(target, self.out_dir)

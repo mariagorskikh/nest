@@ -1,9 +1,12 @@
 import json
 import os
 import sys
+import time
 
 import httpx
+import pytest
 
+import nandatown.runner as runner_module
 from nandatown.bundle import load_bundle, verify_bundle
 from nandatown.participants.llm import (
     MESSAGE_BUDGET,
@@ -11,7 +14,11 @@ from nandatown.participants.llm import (
     LLMParticipant,
     ModelClient,
 )
-from nandatown.runner import run_town
+from nandatown.runner import (
+    _participant_extra_env,
+    _spawn_participant,
+    run_town,
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -85,3 +92,101 @@ def test_byoa_external_seller_end_to_end(tmp_path):
     seller_acks = [e for e in bundle["events"]
                    if e.kind == "ack_recorded" and e.observer == "seller"]
     assert seller_acks[0].detail["note"].get("runtime") == "byoa-stdlib"
+
+
+def _spawn_environment_probe(tmp_path, inherit_env=False):
+    output = tmp_path / ("inherited.json" if inherit_env else "builtin.json")
+    script = (
+        "import json,os,pathlib,sys;"
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps(dict(os.environ)))"
+    )
+    process = _spawn_participant(
+        [sys.executable, "-c", script, str(output)],
+        "http://town.invalid", "run-1", "seller", "join-token",
+        str(tmp_path / "state"), "none", "1",
+        extra_env={"ROLE": "seller", "TOWN_MODEL_KEY": "explicit-key"},
+        inherit_env=inherit_env)
+    assert process.wait(timeout=5) == 0
+    return json.loads(output.read_text())
+
+
+def test_builtin_participant_gets_only_required_environment(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("NANDATOWN_TEST_AMBIENT_SECRET", "do-not-copy")
+
+    child_env = _spawn_environment_probe(tmp_path)
+
+    assert "NANDATOWN_TEST_AMBIENT_SECRET" not in child_env
+    assert child_env["TOWN_URL"] == "http://town.invalid"
+    assert child_env["TOKEN"] == "join-token"
+    assert child_env["ROLE"] == "seller"
+    assert child_env["TOWN_MODEL_KEY"] == "explicit-key"
+
+
+def test_trusted_command_can_inherit_operator_environment(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("NANDATOWN_TEST_AMBIENT_SECRET", "operator-opt-in")
+
+    child_env = _spawn_environment_probe(tmp_path, inherit_env=True)
+
+    assert child_env["NANDATOWN_TEST_AMBIENT_SECRET"] == "operator-opt-in"
+
+
+def test_model_credentials_only_reach_relevant_harnesses(monkeypatch):
+    monkeypatch.setenv("TOWN_MODEL_URL", "https://model.invalid")
+    monkeypatch.setenv("TOWN_MODEL_KEY", "paid-secret")
+
+    scripted = _participant_extra_env("scripted", {}, "hosted:model")
+    mock_llm = _participant_extra_env("llm", {"ROLE": "seller"},
+                                      "mock:v1")
+    hosted_llm = _participant_extra_env("llm", {"ROLE": "seller"},
+                                        "hosted:model")
+
+    assert "TOWN_MODEL_KEY" not in scripted
+    assert "TOWN_MODEL_KEY" not in mock_llm
+    assert hosted_llm["TOWN_MODEL_URL"] == "https://model.invalid"
+    assert hosted_llm["TOWN_MODEL_KEY"] == "paid-secret"
+
+
+@pytest.mark.skipif(os.name != "posix",
+                    reason="descendant cleanup uses POSIX process groups")
+def test_runner_stops_command_descendants_before_bundle_export(
+        tmp_path, monkeypatch):
+    ready = tmp_path / "descendant-ready"
+    export_started = tmp_path / "export-started"
+    late_write = tmp_path / "descendant-wrote-during-export"
+    child = tmp_path / "late_writer.py"
+    child.write_text(
+        "import os, pathlib, sys, time\n"
+        "ready, export_started, late_write = map(pathlib.Path, sys.argv[1:])\n"
+        "ready.write_text(str(os.getpid()))\n"
+        "deadline = time.monotonic() + 20\n"
+        "while not export_started.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.005)\n"
+        "if export_started.exists():\n"
+        "    late_write.write_text('survived')\n"
+    )
+    wrapper = tmp_path / "seller_with_descendant.py"
+    wrapper.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, *sys.argv[1:]])\n"
+        "from nandatown.participants.seller import main\n"
+        "main()\n"
+    )
+    original_write_bundle = runner_module.write_bundle
+
+    def observed_write_bundle(*args, **kwargs):
+        export_started.write_text("started")
+        time.sleep(0.2)
+        return original_write_bundle(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "write_bundle", observed_write_bundle)
+    command = [sys.executable, str(wrapper), str(child), str(ready),
+               str(export_started), str(late_write)]
+
+    _, result = run_town("quote-clean", str(tmp_path / "runs"),
+                         external={"seller": command})
+
+    assert result.verdict == "passed"
+    assert ready.exists(), "the real descendant never started"
+    assert not late_write.exists()
