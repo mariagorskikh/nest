@@ -23,7 +23,7 @@ def check(directory: Path) -> None:
     }
     test_data = {
         str(path.relative_to(root))
-        for pattern in ("tests/fixtures/**/*", "schemas/*.json")
+        for pattern in ("tests/fixtures/**/*", "schemas/*.json", "examples/*.py")
         for path in root.glob(pattern) if path.is_file()
     }
     with zipfile.ZipFile(wheels[0]) as wheel:
