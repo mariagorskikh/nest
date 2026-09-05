@@ -193,6 +193,7 @@ const overlongFields = [
   ["name", "n".repeat(201)],
   ["author", "a".repeat(201)],
   ["email", `${"e".repeat(243)}@example.test`],
+  ["github_username", "g".repeat(40)],
   ["description", "d".repeat(2_001)],
   ["source_url", `https://example.test/${"u".repeat(2_029)}`],
   ["content", "c".repeat(200_001)],
