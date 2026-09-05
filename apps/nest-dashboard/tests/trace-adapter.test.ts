@@ -22,7 +22,7 @@ test("adapts current TownEvent delivery facts without changing their attribution
       kind: "send",
       to: "seller-a",
       msg: "quote_request",
-      corr: "m-1",
+      corr: '["sim-example","m-1"]',
     },
     {
       ts: 0.6,
@@ -30,7 +30,7 @@ test("adapts current TownEvent delivery facts without changing their attribution
       kind: "receive",
       from: "buyer-1",
       msg: "quote_request",
-      corr: "m-1",
+      corr: '["sim-example","m-1"]',
     },
   ]);
 });
@@ -47,10 +47,10 @@ test("adapts current Track accepted, claimed, and dropped message facts", () => 
 
   expect(parsed.format).toBe("town-event");
   expect(parsed.events).toEqual([
-    { ts: 10, agent: "buyer", kind: "send", to: "seller", msg: "quote_request", corr: "work-1" },
-    { ts: 11, agent: "seller", kind: "receive", from: "buyer", msg: "quote_request", corr: "work-1" },
-    { ts: 12, agent: "seller", kind: "send", to: "buyer", msg: "quote_response", corr: "work-2" },
-    { ts: 13, agent: "seller", kind: "dropped", from: "seller", to: "buyer", msg: "quote_response", corr: "work-2" },
+    { ts: 10, agent: "buyer", kind: "send", to: "seller", msg: "quote_request", corr: '["track-example","work-1"]' },
+    { ts: 11, agent: "seller", kind: "receive", from: "buyer", msg: "quote_request", corr: '["track-example","work-1"]' },
+    { ts: 12, agent: "seller", kind: "send", to: "buyer", msg: "quote_response", corr: '["track-example","work-2"]' },
+    { ts: 13, agent: "seller", kind: "dropped", from: "seller", to: "buyer", msg: "quote_response", corr: '["track-example","work-2"]' },
   ]);
 });
 
@@ -65,6 +65,19 @@ test("keeps the bundled legacy trace format supported", () => {
     { agent: "buyer-0", kind: "send", ts: 1, to: "seller-0", msg: "quote", corr: "m-1" },
     { agent: "seller-0", kind: "receive", ts: 2, from: "buyer-0", msg: "quote", corr: "m-1" },
   ]);
+});
+
+test("never correlates reused message IDs across different Town runs", () => {
+  const parsed = parseTrace([
+    { event_id: "ev-1", run_id: "first", at: 1, observer: "alice", kind: "message_sent", subject: "m-1", detail: { to: "bob", kind: "quote" } },
+    { event_id: "ev-1", run_id: "second", at: 2, observer: "eve", kind: "message_sent", subject: "m-1", detail: { to: "frank", kind: "other" } },
+    { event_id: "ev-2", run_id: "first", at: 3, observer: "town", kind: "message_delivered", subject: "m-1", detail: { to: "bob", kind: "quote" } },
+    { event_id: "ev-2", run_id: "second", at: 4, observer: "town", kind: "message_delivered", subject: "m-1", detail: { to: "frank", kind: "other" } },
+  ].map((event) => JSON.stringify(event)).join("\n"));
+
+  const receives = parsed.events.filter((event) => event.kind === "receive");
+  expect(receives.map((event) => event.from)).toEqual(["alice", "eve"]);
+  expect(new Set(receives.map((event) => event.corr)).size).toBe(2);
 });
 
 test("rejects malformed records instead of inventing missing event attribution", () => {

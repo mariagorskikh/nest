@@ -114,6 +114,8 @@ function adaptTownEvents(events: TownEvent[]): TraceEvent[] {
   >();
 
   for (const event of events) {
+    // Message IDs are scoped to a run; concatenated traces can reuse them.
+    const correlation = JSON.stringify([event.run_id, event.subject]);
     if (event.kind === "participant_joined") {
       adapted.push({ ts: event.at, agent: event.subject, kind: "start" });
       continue;
@@ -127,20 +129,20 @@ function adaptTownEvents(events: TownEvent[]): TraceEvent[] {
       const to = detailString(event, "to");
       if (!from || !to) continue;
       const msg = detailString(event, "kind") ?? event.kind;
-      pending.set(event.subject, { from, to, msg });
+      pending.set(correlation, { from, to, msg });
       adapted.push({
         ts: event.at,
         agent: from,
         kind: "send",
         to,
         msg,
-        corr: event.subject,
+        corr: correlation,
       });
       continue;
     }
 
     if (event.kind === "message_delivered" || event.kind === "message_claimed") {
-      const original = pending.get(event.subject);
+      const original = pending.get(correlation);
       const to =
         event.kind === "message_delivered"
           ? detailString(event, "to")
@@ -152,13 +154,13 @@ function adaptTownEvents(events: TownEvent[]): TraceEvent[] {
         kind: "receive",
         from: original.from,
         msg: detailString(event, "kind") ?? original.msg,
-        corr: event.subject,
+        corr: correlation,
       });
       continue;
     }
 
     if (event.kind === "message_dropped") {
-      const original = pending.get(event.subject);
+      const original = pending.get(correlation);
       const to = detailString(event, "to") ?? original?.to;
       if (!original || !to) continue;
       adapted.push({
@@ -168,7 +170,7 @@ function adaptTownEvents(events: TownEvent[]): TraceEvent[] {
         from: original.from,
         to,
         msg: detailString(event, "kind") ?? original.msg,
-        corr: event.subject,
+        corr: correlation,
       });
     }
   }
