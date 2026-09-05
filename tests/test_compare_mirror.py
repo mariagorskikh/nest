@@ -70,6 +70,136 @@ def test_tampered_mirror_is_rejected(tmp_path):
         recover_bundle(fingerprint, [mirror], str(tmp_path / "fresh"))
 
 
+@pytest.mark.parametrize(
+    "fingerprint",
+    ["sha256:../escape", "sha256:/absolute", "sha256:" + "a" * 63,
+     "a" * 64],
+    ids=["traversal", "absolute", "short", "missing-prefix"],
+)
+def test_recovery_rejects_invalid_fingerprint_addresses(tmp_path, fingerprint):
+    with pytest.raises(MirrorError, match="invalid bundle fingerprint"):
+        recover_bundle(fingerprint, [str(tmp_path / "mirror")],
+                       str(tmp_path / "fresh"))
+
+    assert not (tmp_path / "fresh").exists()
+
+
+def test_mirror_validates_source_before_copying(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    manifest_path = os.path.join(bundle_dir, "manifest.json")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    manifest["bundle_fingerprint"] = "sha256:not-a-digest"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f)
+
+    mirror = tmp_path / "mirror"
+    with pytest.raises(MirrorError, match="source bundle fails verification"):
+        mirror_bundle(bundle_dir, str(mirror))
+
+    assert not mirror.exists()
+
+
+def test_existing_corrupt_mirror_is_not_silently_accepted(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    mirror = str(tmp_path / "mirror")
+    stored = mirror_bundle(bundle_dir, mirror)
+    with open(os.path.join(stored, "events.jsonl"), "a") as f:
+        f.write('{"forged": true}\n')
+
+    with pytest.raises(MirrorError, match="existing mirror"):
+        mirror_bundle(bundle_dir, mirror)
+
+
+def test_corrupt_first_mirror_does_not_hide_valid_later_mirror(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    with open(os.path.join(bundle_dir, "manifest.json")) as f:
+        fingerprint = json.load(f)["bundle_fingerprint"]
+    mirror_a = str(tmp_path / "mirror-a")
+    mirror_b = str(tmp_path / "mirror-b")
+    stored_a = mirror_bundle(bundle_dir, mirror_a)
+    mirror_bundle(bundle_dir, mirror_b)
+    with open(os.path.join(stored_a, "events.jsonl"), "a") as f:
+        f.write('{"forged": true}\n')
+
+    restored = recover_bundle(fingerprint, [mirror_a, mirror_b],
+                              str(tmp_path / "fresh"))
+
+    assert os.path.exists(os.path.join(restored, "events.jsonl"))
+
+
+def test_recovery_rejects_unsafe_tree_before_copy_and_tries_next(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    with open(os.path.join(bundle_dir, "manifest.json")) as f:
+        fingerprint = json.load(f)["bundle_fingerprint"]
+    mirror_a = str(tmp_path / "mirror-a")
+    mirror_b = str(tmp_path / "mirror-b")
+    stored_a = mirror_bundle(bundle_dir, mirror_a)
+    mirror_bundle(bundle_dir, mirror_b)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not be copied")
+    os.symlink(outside, os.path.join(stored_a, "unsafe-link"))
+
+    restored = recover_bundle(fingerprint, [mirror_a, mirror_b],
+                              str(tmp_path / "fresh"))
+
+    assert not os.path.lexists(os.path.join(restored, "unsafe-link"))
+
+
+def test_failed_recovery_does_not_leave_a_copied_destination(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    with open(os.path.join(bundle_dir, "manifest.json")) as f:
+        fingerprint = json.load(f)["bundle_fingerprint"]
+    mirror = str(tmp_path / "mirror")
+    stored = mirror_bundle(bundle_dir, mirror)
+    with open(os.path.join(stored, "events.jsonl"), "a") as f:
+        f.write('{"forged": true}\n')
+    destination = (tmp_path / "fresh" /
+                   f"recovered-{fingerprint.removeprefix('sha256:')[:12]}")
+
+    with pytest.raises(MirrorError):
+        recover_bundle(fingerprint, [mirror], str(tmp_path / "fresh"))
+
+    assert not destination.exists()
+
+
+def test_recovery_preserves_preexisting_destination(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs"))
+    with open(os.path.join(bundle_dir, "manifest.json")) as f:
+        fingerprint = json.load(f)["bundle_fingerprint"]
+    mirror = str(tmp_path / "mirror")
+    mirror_bundle(bundle_dir, mirror)
+    destination = (tmp_path / "fresh" /
+                   f"recovered-{fingerprint.removeprefix('sha256:')[:12]}")
+    destination.mkdir(parents=True)
+    marker = destination / "user-data.txt"
+    marker.write_text("keep me")
+
+    with pytest.raises(MirrorError, match="already exists"):
+        recover_bundle(fingerprint, [mirror], str(tmp_path / "fresh"))
+
+    assert marker.read_text() == "keep me"
+
+
+def test_address_mismatch_does_not_hide_valid_later_mirror(tmp_path):
+    bundle_dir, _ = run_lab("voting", str(tmp_path / "runs-a"))
+    other_bundle, _ = run_lab("marketplace", str(tmp_path / "runs-b"))
+    with open(os.path.join(bundle_dir, "manifest.json")) as f:
+        fingerprint = json.load(f)["bundle_fingerprint"]
+    slug = fingerprint.removeprefix("sha256:")
+    bad_mirror = tmp_path / "bad-mirror"
+    bad_mirror.mkdir()
+    shutil.copytree(other_bundle, bad_mirror / slug)
+    good_mirror = str(tmp_path / "good-mirror")
+    mirror_bundle(bundle_dir, good_mirror)
+
+    restored = recover_bundle(
+        fingerprint, [str(bad_mirror), good_mirror], str(tmp_path / "fresh"))
+
+    with open(os.path.join(restored, "manifest.json")) as f:
+        assert json.load(f)["bundle_fingerprint"] == fingerprint
+
+
 def test_cli_compare_and_mirror(tmp_path, capsys):
     out = str(tmp_path)
     assert main(["compare", "voting", "--swap", "trust=reputation.v1",
