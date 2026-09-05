@@ -52,6 +52,14 @@ def _client(http: httpx.Client | None) -> httpx.Client:
 def fetch_pr(repo: str, number: int,
              http: httpx.Client | None = None) -> dict[str, Any]:
     client = _client(http)
+    try:
+        return _fetch_pr(repo, number, client)
+    finally:
+        if http is None:
+            client.close()
+
+
+def _fetch_pr(repo: str, number: int, client: httpx.Client) -> dict[str, Any]:
     r = client.get(f"/repos/{repo}/pulls/{number}")
     if r.status_code == 404:
         raise ProtocolImportError(f"no PR #{number} in {repo}")
@@ -61,7 +69,7 @@ def fetch_pr(repo: str, number: int,
     head_repo = (pr["head"].get("repo") or {}).get("full_name", repo)
 
     files_response = client.get(f"/repos/{repo}/pulls/{number}/files",
-                                params={"per_page": MAX_FILES})
+                                params={"per_page": MAX_FILES + 1})
     files_response.raise_for_status()
     listed = files_response.json()
     skipped = []
@@ -88,9 +96,13 @@ def fetch_pr(repo: str, number: int,
             skipped.append(f"{path} (not text)")
             continue
         files.append({"path": path, "content": content})
-    if len(listed) > MAX_FILES:
-        skipped.append(f"{len(listed) - MAX_FILES} further files beyond"
-                       f" the {MAX_FILES} file cap")
+    total = pr.get("changed_files")
+    if isinstance(total, int) and not isinstance(total, bool) and total > MAX_FILES:
+        skipped.append(f"{total - MAX_FILES} further files beyond"
+                       f" the {MAX_FILES} file cap; snapshot is partial")
+    elif len(listed) > MAX_FILES:
+        skipped.append(f"additional files beyond the {MAX_FILES} file cap;"
+                       " snapshot is partial")
     return {
         "repo": repo,
         "number": number,
@@ -143,7 +155,8 @@ def structural_checks(pr: dict[str, Any],
             at=time.time(), evidence=evidence[:8]))
 
     add("files-fetched",
-        "passed" if pr["files"] else "failed",
+        ("failed" if not pr["files"] else
+         "not_enough_evidence" if pr["skipped"] else "passed"),
         [f"{len(pr['files'])} files at {pr['head_sha'][:12]}"]
         + pr["skipped"])
 

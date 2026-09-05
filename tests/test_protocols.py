@@ -147,3 +147,64 @@ def test_path_traversal_is_blocked(tmp_path, monkeypatch):
 def test_missing_pr_fails_cleanly():
     with pytest.raises(ProtocolImportError):
         fetch_pr("projnanda/nandatown", 404, http=fake_github(FILES))
+
+
+def test_fetch_discloses_files_beyond_github_page_limit():
+    contents_requested = []
+
+    def responder(request):
+        path = request.url.path
+        if path.endswith("/pulls/321"):
+            return httpx.Response(200, json={
+                "title": "Large contribution", "state": "open", "changed_files": 100,
+                "user": {"login": "contributor"},
+                "head": {"sha": "abc123", "repo": {"full_name": "contributor/nandatown"}},
+            })
+        if path.endswith("/files"):
+            page_size = int(request.url.params["per_page"])
+            return httpx.Response(200, json=[
+                {"filename": f"file-{n}.py", "status": "added"}
+                for n in range(page_size)])
+        contents_requested.append(path)
+        return httpx.Response(200, json={"size": 3, "content": "eD0x"})
+
+    with httpx.Client(transport=httpx.MockTransport(responder),
+                      base_url="https://api.github.com") as client:
+        pr = fetch_pr("projnanda/nandatown", 321, http=client)
+
+    assert len(pr["files"]) == 50
+    assert len(contents_requested) == 50
+    assert any("50" in reason and "beyond" in reason for reason in pr["skipped"])
+
+
+def test_import_check_does_not_call_partial_snapshot_complete():
+    from nandatown.protocols import structural_checks
+
+    pr = {"repo": "projnanda/nandatown", "number": 321, "head_sha": "abc123",
+          "files": [{"path": "ok.py", "content": "x=1"}],
+          "skipped": ["unreadable.py (unreadable at the head commit)"]}
+    checks = structural_checks(pr, classify(pr["files"]))
+
+    fetched = next(check for check in checks if check.test == "files-fetched")
+    assert fetched.result == "not_enough_evidence"
+    assert "unreadable.py" in str(fetched.evidence)
+
+
+@pytest.mark.parametrize("number", [321, 404])
+def test_fetch_closes_only_the_http_client_it_owns(monkeypatch, number):
+    owned = fake_github(FILES)
+    monkeypatch.setattr("nandatown.protocols._client", lambda supplied: owned)
+    try:
+        fetch_pr("projnanda/nandatown", number)
+    except ProtocolImportError:
+        assert number == 404
+    assert owned.is_closed
+
+    borrowed = fake_github(FILES)
+    monkeypatch.setattr("nandatown.protocols._client", lambda supplied: supplied)
+    with borrowed:
+        try:
+            fetch_pr("projnanda/nandatown", number, http=borrowed)
+        except ProtocolImportError:
+            assert number == 404
+        assert not borrowed.is_closed
