@@ -60,10 +60,12 @@
   --color-crimson-light: var(--color-rust-light);
   --color-crimson-dark:  #9A4329;
 
-  --font-sans:   var(--font-geist-sans);
-  --font-mono:   var(--font-geist-mono);
-  --font-serif:  var(--font-instrument), "Source Serif 4", Georgia, "Times New Roman", serif;
-  --font-display: var(--font-instrument), "Source Serif 4", Georgia, serif;
+  /* Keep production builds hermetic: these local system stacks do not fetch
+     font assets during `next build`. */
+  --font-sans:   "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  --font-mono:   "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-serif:  "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-display: "Source Serif 4", Georgia, "Times New Roman", serif;
 }
 
 html {

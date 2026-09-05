@@ -1,11 +1,10 @@
-import Image from "next/image";
 import Link from "next/link";
 import { ImagePlaceholder } from "@/components/image-placeholder";
 import { agenticCommerceEvent as event } from "@/lib/agentic-commerce-event";
 
 export const metadata = {
-  title: "Agentic Commerce Hackathon",
-  description: `${event.tagline} ${event.dates}, online — with a $1,000 Project NANDA track for the best Prava payments adapter.`,
+  title: "Agentic Commerce Hackathon (concluded)",
+  description: `Archive of the concluded ${event.dates} online event and its Project NANDA Prava-adapter track.`,
   alternates: { canonical: "/pravahack" },
   openGraph: {
     title: "Agentic Commerce Hackathon",
@@ -29,7 +28,7 @@ const eventJsonLd = {
   startDate: "2026-07-31",
   endDate: "2026-08-02",
   eventAttendanceMode: "https://schema.org/OnlineEventAttendanceMode",
-  eventStatus: "https://schema.org/EventScheduled",
+  eventStatus: "https://schema.org/EventCompleted",
   location: {
     "@type": "VirtualLocation",
     url: event.applyUrl,
@@ -68,14 +67,14 @@ export default function AgenticCommercePage() {
           </a>
           <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
             <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-400">
-              {event.dates} &middot; {event.format}
+              Concluded &middot; {event.dates} &middot; {event.format}
             </p>
             <div className="flex flex-wrap gap-3">
               <a href={event.applyUrl} target="_blank" rel="noreferrer" className="btn-primary">
-                Apply on Devfolio &rarr;
+                View event archive &rarr;
               </a>
               <a href="#submit" className="btn-secondary">
-                How to submit &rarr;
+                How submissions worked &rarr;
               </a>
             </div>
           </div>
@@ -147,11 +146,11 @@ export default function AgenticCommercePage() {
 
           <div id="submit" className="mt-12 scroll-mt-24 rounded-2xl border border-rust/40 bg-rust/[0.06] p-7 sm:p-10">
             <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-rust">
-              How to submit
+              Historical submission process
             </p>
             <p className="mt-3 max-w-2xl text-[1.02rem] leading-[1.65] text-ink-700">
-              Both parts are required for this track: the pull request and the
-              Devfolio submission.
+              During the event, both the pull request and the Devfolio submission
+              were required. These instructions are retained for provenance.
             </p>
             <ol className="mt-6 ml-5 max-w-3xl list-decimal space-y-4 text-[1.02rem] leading-[1.7] text-ink-600 marker:font-mono marker:text-rust">
               <li>
@@ -159,9 +158,10 @@ export default function AgenticCommercePage() {
                 The payments layer covers quote, pay, verify, and refund. Follow
                 the{" "}
                 <Link href="/docs" className="text-rust underline decoration-rust/40 underline-offset-4 hover:decoration-rust">
-                  Writing a plugin guide
+                  current Town manual
                 </Link>{" "}
-                in the docs.
+                for the rebuilt CLI and evidence boundaries. The event instructions
+                below are preserved as historical material.
               </li>
               <li>
                 <span className="font-semibold text-ink-900">Connect it to Prava&rsquo;s Agentic Payments Sandbox.</span>{" "}
@@ -192,23 +192,6 @@ export default function AgenticCommercePage() {
                 can find the code.
               </li>
             </ol>
-            <p className="mt-8 flex items-center gap-2 border-t border-rust/20 pt-5 text-[0.88rem] leading-[1.6] text-ink-400">
-              <Image
-                src="/brand/maritime.png"
-                alt=""
-                width={11}
-                height={14}
-                className="h-3.5 w-auto object-contain opacity-60"
-              />
-              <span>
-                Want to test beyond the sandbox? Spin up hosted agents with our
-                partner{" "}
-                <a href="https://maritime.sh" target="_blank" rel="noreferrer" className="text-ink-500 underline decoration-ink-300 underline-offset-4 hover:text-rust hover:decoration-rust">
-                  Maritime
-                </a>{" "}
-                &mdash; 20 agents free with code NANDATOWN.
-              </span>
-            </p>
           </div>
         </div>
       </section>
@@ -233,12 +216,12 @@ export default function AgenticCommercePage() {
         </div>
       </section>
 
-      {/* ELIGIBILITY + HOW TO PARTICIPATE */}
+      {/* HISTORICAL ELIGIBILITY + PARTICIPATION */}
       <section className="border-t border-cream-400/70 bg-cream-50">
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-20 md:py-24">
           <div className="grid gap-12 lg:grid-cols-[1fr_1.2fr] lg:items-start">
             <div>
-              <p className="eyebrow">Eligibility</p>
+              <p className="eyebrow">Historical eligibility</p>
               <p className="mt-6 max-w-md text-[1.05rem] leading-[1.7] text-ink-500">
                 {event.eligibility}
               </p>
@@ -291,7 +274,7 @@ export default function AgenticCommercePage() {
             rel="noreferrer"
             className="inline-flex items-center rounded-md bg-cream-50 px-5 py-2.5 text-[0.9rem] font-medium text-ink-900 transition-colors hover:bg-cream-200"
           >
-            Apply on Devfolio &rarr;
+            View event archive &rarr;
           </a>
         </div>
       </section>

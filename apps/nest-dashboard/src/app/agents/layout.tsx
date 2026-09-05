@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Agents",
   description:
-    "A live demo of the Nanda Town agent network — explore the agents that populate the sandbox and how they connect.",
+    "An illustrative, synthetic preview of an agent network; not a live Nanda Town registry or traffic feed.",
   alternates: { canonical: "/agents" },
 };
 

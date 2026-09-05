@@ -1,5 +1,5 @@
 /**
- * Sample numbers from Tier 1 state-machine runs.
+ * Frozen sample numbers from the legacy Tier 1 state-machine showcase.
  *
  * These are NOT benchmark results.  Tier 1 runs use virtual tick-based
  * time with no network jitter or message drops.  The numbers below are
@@ -10,8 +10,8 @@
  *   - Latency is in tick units, not wall-clock milliseconds.
  *   - Throughput is messages per tick.
  *
- * To reproduce: run `nest run <scenario>.yaml --seed <seed>` with the
- * same seed shown in each entry.
+ * These records are preserved for the historical dashboard. They do not use
+ * the current evidence schema and are not claims about a current Town run.
  */
 
 export interface LeaderboardEntry {

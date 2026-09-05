@@ -1,5 +1,5 @@
 /**
- * /prgallery — the PR Gallery.
+ * /prgallery — the historical twelve-layer PR Gallery.
  *
  * A live view of every pull request on projnanda/nandatown,
  * synced straight from GitHub: the twelve protocol layers plus Other,
@@ -18,9 +18,9 @@ import { EmptyState, SubmissionCard } from "@/components/hackathon-card";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Protocols + Plugins (PRs)",
+  title: "PR history (legacy layers)",
   description:
-    "Every open and merged pull request on projnanda/nandatown, live from GitHub: the twelve protocol layers plus Other, with merged PRs landing in their layer the moment they merge.",
+    "Repository pull-request history displayed through the earlier Town's twelve-layer taxonomy; not a current plugin-adoption claim.",
   alternates: { canonical: "/prgallery" },
 };
 
@@ -46,14 +46,15 @@ export default async function PRGalleryPage() {
 
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.4rem,5.4vw,4.2rem)] leading-[1.04] tracking-tight text-ink-900">
-              Protocols +
+              Historical PR
               <br />
-              <span className="italic text-ink-700">plugins</span>.
+              <span className="italic text-ink-700">gallery</span>.
             </h1>
             <p className="animate-fade-in stagger-2 text-[1.05rem] leading-[1.6] text-ink-500 max-w-md">
-              Every open and merged pull request on projnanda/nandatown, synced
-              straight from GitHub. Twelve protocol layers plus Other &mdash;
-              merged PRs land in their layer the moment they merge.
+              Repository pull requests displayed through the earlier Town&rsquo;s
+              twelve protocol layers. This preserves contribution provenance; it
+              does not mean a contribution is installed, executed, or adopted by
+              the current Town.
             </p>
           </div>
 

@@ -8,7 +8,6 @@ import {
   useState,
 } from 'react';
 import * as d3 from 'd3';
-import { MaritimeCallout } from '@/components/maritime-callout';
 import {
   parseTrace,
   type TraceEvent,
@@ -1927,10 +1926,6 @@ export default function VisualizerPage() {
               </div>
             </div>
 
-            <MaritimeCallout
-              className="mt-6"
-              title="Want to run this with agents in the cloud?"
-            />
           </div>
         )}
       </div>

@@ -58,18 +58,17 @@ export default async function Home() {
       <section className="relative paper-texture">
         <div className="relative mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-20 md:pt-24 md:pb-24">
           <h1 className="font-display animate-fade-in max-w-[22ch] text-[clamp(2.2rem,5vw,4.2rem)] leading-[1.06] tracking-[-0.016em] text-ink-900">
-            An open-source sandbox for{' '}
+            A local-first integration lab for{' '}
             <span className="italic text-ink-700">
-              building and testing protocols
-            </span>{' '}
-            for AI agents.
+              exact agent paths
+            </span>.
           </h1>
 
           <div className="mt-10 grid gap-10 lg:grid-cols-[1.5fr_1fr] lg:items-start">
             <p className="animate-fade-in stagger-2 text-[1.12rem] leading-[1.65] text-ink-600">
-              Nanda Town is an open project by Project NANDA. The protocol
-              layers, reference plugins, scenarios, and tests all live in one
-              public repository under the Apache 2.0 license.
+              Run a named Lab, Track, or Path workflow, preserve stage-separated
+              evidence, and give another operator the files needed to verify and
+              rerun it. Nanda Town is an Apache 2.0 project by Project NANDA.
             </p>
 
             <div className="animate-fade-in stagger-3 lg:pt-2">
@@ -86,12 +85,12 @@ export default async function Home() {
               </div>
               <div className="mt-10 grid grid-cols-2 gap-6 border-t border-cream-400/70 pt-6">
                 {prTotal !== null && (
-                  <Stat label="Pull requests" value={String(prTotal)} href="/prgallery" />
+                  <Stat label="PR history" value={String(prTotal)} href="/prgallery" />
                 )}
                 {prMerged !== null && (
-                  <Stat label="Merged" value={String(prMerged)} href="/prgallery" />
+                  <Stat label="Merged archive" value={String(prMerged)} href="/prgallery" />
                 )}
-                <Stat label="Protocol layers" value="12" />
+                <Stat label="Legacy layers" value="12" />
                 <Stat label="License" value="Apache 2.0" />
               </div>
             </div>
@@ -106,15 +105,15 @@ export default async function Home() {
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-20 md:py-24">
           <div className="grid gap-12 lg:grid-cols-[1fr_1.2fr] lg:items-start">
             <div>
-              <p className="eyebrow">The twelve protocol layers</p>
+              <p className="eyebrow">Historical contribution archive</p>
               <p className="mt-6 text-[1.05rem] leading-[1.7] text-ink-500 max-w-md">
-                Agent-to-agent interaction is split into twelve protocol
-                layers. Every contribution lands in one of them, or in Other
-                if it fits none.
+                The earlier Town organized contributions into twelve protocol
+                layers. That taxonomy and its pull requests remain browsable as
+                provenance; they are not the current CLI or evidence schema.
               </p>
               <div className="mt-7">
                 <Link href="/prgallery/layers" className="btn-secondary">
-                  Browse by layer &rarr;
+                  Browse historical layers &rarr;
                 </Link>
               </div>
             </div>
@@ -142,34 +141,32 @@ export default async function Home() {
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 py-20 md:py-24">
           <div className="grid gap-12 lg:grid-cols-[1fr_1.2fr] lg:items-start">
             <div>
-              <p className="eyebrow">How to contribute</p>
+              <p className="eyebrow">Project history</p>
               <h2 className="font-display mt-5 text-[clamp(1.9rem,3.6vw,3rem)] leading-[1.08] tracking-[-0.015em] text-ink-900">
-                Open a <span className="italic text-ink-700">pull request</span>.
+                Nothing was <span className="italic text-ink-700">deleted</span>.
               </h2>
             </div>
             <div className="lg:pt-2">
               <p className="text-[1.05rem] leading-[1.7] text-ink-500">
-                Contributions are ordinary pull requests to the repository. A
-                pull request usually carries a protocol, which is the set of
-                rules for one kind of interaction between agents, a plugin,
-                which is the code that runs those rules inside one of the
-                twelve layers, and a test that proves it holds up. Browse the
-                merged pull requests to see the shape of a good one.
+                The previous implementation is frozen at the v1-final tag and on
+                the archive/legacy branch. The PR gallery preserves its twelve-layer
+                contribution history. For current work, start with the repository
+                README and open an issue or an ordinary pull request against main.
               </p>
               <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-[0.9rem] font-medium">
                 <Link href="/prgallery" className="text-ink-700 hover:text-ink-900 transition-colors">
-                  Browse merged PRs &rarr;
+                  Browse historical PRs &rarr;
                 </Link>
                 <Link href="/docs" className="text-ink-700 hover:text-ink-900 transition-colors">
-                  Writing a plugin &rarr;
+                  Current manual &rarr;
                 </Link>
                 <a
-                  href={`${REPO_URL}/blob/main/CONTRIBUTING.md`}
+                  href={`${REPO_URL}/blob/main/README.md`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-ink-700 hover:text-ink-900 transition-colors"
                 >
-                  CONTRIBUTING.md &rarr;
+                  Current README &rarr;
                 </a>
               </div>
             </div>

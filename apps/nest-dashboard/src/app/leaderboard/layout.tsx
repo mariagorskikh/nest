@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Leaderboard",
   description:
-    "Scores for NandaHack hackathon submissions — community plugins for the twelve Nanda Town protocol layers, ranked by the judge panel.",
+    "Frozen legacy Tier 1 sample metrics for comparing the dashboard display; not current benchmark evidence or hackathon scores.",
   alternates: { canonical: "/leaderboard" },
 };
 

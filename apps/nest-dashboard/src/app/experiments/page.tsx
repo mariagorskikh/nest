@@ -4,7 +4,6 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { experiments, scenarioColors } from '@/lib/demo-data';
 import { ImagePlaceholder } from '@/components/image-placeholder';
-import { MaritimeCallout } from '@/components/maritime-callout';
 
 const scenarioFilters = [
   'All',
@@ -166,14 +165,14 @@ export default function ExperimentsPage() {
         <div className="mx-auto max-w-[1240px] px-6 sm:px-10 pt-20 pb-16">
           <div className="grid gap-12 lg:grid-cols-[1.4fr_1fr] lg:items-end">
             <h1 className="font-display animate-fade-in stagger-1 text-[clamp(2.6rem,6vw,5rem)] leading-[1.02] tracking-tight text-ink-900">
-              Pre-built<br />
-              <span className="italic text-ink-700">scenarios</span> to<br />
-              probe behaviour.
+              Frozen<br />
+              <span className="italic text-ink-700">showcase</span><br />
+              scenarios.
             </h1>
             <p className="animate-fade-in stagger-2 text-[1.1rem] leading-[1.6] text-ink-500 max-w-md">
-              Explore a selection of the scenarios that ship with Nanda Town. Each one ran with
-              the reference plugins &mdash; every metric here is reproducible
-              from the seed in the YAML.
+              These cards preserve sample data and YAML-shaped examples from the
+              earlier Tier 1 simulator. They are historical UI fixtures, not current
+              Town evidence or independently reproduced benchmark results.
             </p>
           </div>
         </div>
@@ -386,27 +385,26 @@ export default function ExperimentsPage() {
               caption="Image — run your own"
             />
             <div>
-              <p className="eyebrow">Bring your own scenario</p>
+              <p className="eyebrow">Run the current lab</p>
               <h2 className="font-display mt-5 text-[clamp(2rem,4vw,3.2rem)] leading-tight text-ink-900">
                 Run Nanda Town<br />
                 <span className="italic text-ink-700">on your laptop.</span>
               </h2>
               <p className="mt-6 text-[1.05rem] leading-[1.6] text-ink-500 max-w-lg">
-                Install the CLI and run any scenario with a single command.
-                Define your own agents, protocols, and metrics in YAML &mdash;
-                use the reference plugins or write your own.
+                Install the repository package, list the scenarios in your exact
+                checkout, and create a stage-separated evidence bundle. The current
+                CLI and evidence format are documented in the manual.
               </p>
 
               <pre className="mt-8 overflow-x-auto rounded-lg bg-ink-900 text-cream-100 px-5 py-4 text-[0.88rem] leading-relaxed font-mono">
-                <code>$ pip install &quot;nest-core[plugins]&quot;
-$ nest run marketplace</code>
+                <code>$ python -m pip install -e .
+$ nandatown scenarios
+$ nandatown run marketplace</code>
               </pre>
-
-              <MaritimeCallout className="mt-5" />
 
               <div className="mt-8">
                 <Link href="/docs" className="btn-secondary">
-                  Read the full guide &rarr;
+                  Read the current manual &rarr;
                 </Link>
               </div>
             </div>
