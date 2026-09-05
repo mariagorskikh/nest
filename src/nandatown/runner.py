@@ -94,6 +94,9 @@ def _stop_process(process: subprocess.Popen, grace: float = 0.5) -> int | None:
     Other platforms use a direct-child fallback; Python has no portable
     descendant-process primitive.
     """
+    # Reap an already-exited group leader first. Darwin reports EPERM when
+    # killpg targets a group containing only an unreaped (defunct) leader.
+    process.poll()
     if os.name == "posix":
         try:
             os.killpg(process.pid, signal.SIGTERM)

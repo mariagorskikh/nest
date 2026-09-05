@@ -186,6 +186,8 @@ def _stop_probe_process(process: subprocess.Popen) -> None:
     Non-POSIX platforms fall back to stopping the direct child because
     Python does not expose one portable descendant-process primitive.
     """
+    # Reap an already-exited group leader before addressing its process group.
+    process.poll()
     if os.name == "posix":
         try:
             os.killpg(process.pid, signal.SIGTERM)
