@@ -475,10 +475,20 @@ class TownDB:
             self._require_open(conn, run_id)
             row = conn.execute(
                 "SELECT * FROM messages WHERE run_id=? AND message_id=?"
-                " AND recipient=?",
+                " AND recipient=? AND status='done'",
                 (run_id, message_id, claimant),
             ).fetchone()
             if row is None:
+                return None
+            active = conn.execute(
+                "SELECT 1 FROM claims WHERE run_id=? AND message_id=?"
+                " AND active=1 LIMIT 1", (run_id, message_id),
+            ).fetchone()
+            offered = conn.execute(
+                "SELECT 1 FROM events WHERE run_id=? AND subject=?"
+                " AND kind='duplicate_offered' LIMIT 1", (run_id, message_id),
+            ).fetchone()
+            if active or offered:
                 return None
             attempt = row["attempts"] + 1
             fence = "fence-" + uuid.uuid4().hex
@@ -492,6 +502,10 @@ class TownDB:
                 (run_id, message_id, claimant, fence, now + lease_seconds,
                  attempt),
             )
+            # The event is also the durable one-shot marker. It must commit
+            # with the fence, not through the coordinator's in-memory flag.
+            self._event(conn, run_id, now, "town", "duplicate_offered",
+                        message_id, {"fault": "duplicate_delivery"})
             return {
                 "message_id": row["message_id"],
                 "kind": row["kind"],

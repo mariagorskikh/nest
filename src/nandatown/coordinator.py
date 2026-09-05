@@ -286,10 +286,6 @@ def build_app(db_path: str, admin_token: str) -> FastAPI:
                                     lease_seconds=state["lease"], now=now)
                 if result is not None:
                     state["fired"] = True
-                    db.record_event(run_id, observer="town",
-                                    kind="duplicate_offered", subject=done,
-                                    at=now, detail={"fault":
-                                                    "duplicate_delivery"})
         if result is None:
             from fastapi import Response
             return Response(status_code=204)

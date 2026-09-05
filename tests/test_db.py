@@ -42,6 +42,40 @@ def stored_rows(db, table):
         return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
 
 
+@pytest.mark.parametrize("state", ["accepted", "claimed"])
+def test_reoffer_requires_completed_work(db, run, state):
+    accept(db, run)
+    if state == "claimed":
+        db.claim_next(run, "seller", 5.0, 101.0)
+    before = stored_rows(db, "claims")
+    assert db.reoffer(run, "q-1", "seller", 5.0, 102.0) is None
+    assert stored_rows(db, "claims") == before
+
+
+def test_concurrent_reoffers_issue_one_durable_duplicate(db, run):
+    accept(db, run)
+    first = db.claim_next(run, "seller", 5.0, 101.0)
+    db.ack(run, "seller", "q-1", first["fence"], "processed", {}, 102.0)
+    barrier = threading.Barrier(2)
+
+    def offer():
+        other = TownDB(db.path)
+        barrier.wait(timeout=5)
+        return other.reoffer(run, "q-1", "seller", 5.0, 103.0)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(offer) for _ in range(2)]
+        results = [future.result(timeout=10) for future in futures]
+    assert sum(result is not None for result in results) == 1
+    winner = next(result for result in results if result)
+    assert winner["attempt"] == 2
+    assert sum(row["active"] for row in stored_rows(db, "claims")) == 1
+    assert stored_rows(db, "messages")[0]["attempts"] == 2
+    assert sum(event["kind"] == "duplicate_offered" for event in db.events(run)) == 1
+    db.ack(run, "seller", "q-1", winner["fence"], "processed", {}, 104.0)
+    assert TownDB(db.path).reoffer(run, "q-1", "seller", 5.0, 105.0) is None
+
+
 IDENTITY_CHANGES = [
     {"sender": "other-buyer"},
     {"to": "other-seller"},

@@ -229,6 +229,35 @@ def test_duplicate_delivery_fault(client):
     assert "duplicate_offered" in event_kinds(client, run_id)
 
 
+def test_concurrent_duplicate_claims_have_one_winner(client, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from nandatown.db import TownDB
+
+    run_id, sessions, _ = make_run(client, fault="duplicate_delivery")
+    send_q1(client, run_id, sessions)
+    claim_url = f"/runs/{run_id}/inbox/claim"
+    first = client.post(claim_url, headers=sessions["seller"]).json()
+    assert client.post(
+        f"/runs/{run_id}/inbox/ack", headers=sessions["seller"],
+        json={"message_id": "q-1", "fence": first["fence"],
+              "status": "processed", "note": {}}).status_code == 200
+    original = TownDB.reoffer
+    barrier = threading.Barrier(2)
+
+    def synchronized(self, *args, **kwargs):
+        barrier.wait(timeout=5)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(TownDB, "reoffer", synchronized)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(client.post, claim_url, headers=sessions["seller"])
+                   for _ in range(2)]
+        replies = [future.result(timeout=10) for future in futures]
+    assert sorted(reply.status_code for reply in replies) == [200, 204]
+    assert event_kinds(client, run_id).count("duplicate_offered") == 1
+
+
 def test_lost_ack_fault(client):
     run_id, sessions, _ = make_run(client, fault="lost_ack")
     send_q1(client, run_id, sessions)
