@@ -4,3 +4,10 @@ runs
 __pycache__
 *.egg-info
 .pytest_cache
+build
+dist
+**/node_modules
+**/.next
+**/.env
+**/.env.local
+**/.env.*.local

@@ -1,0 +1,3 @@
+recursive-include tests/fixtures *.json *.yaml
+recursive-include schemas *.json
+include scripts/check_distributions.py
