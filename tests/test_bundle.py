@@ -574,6 +574,28 @@ def test_historical_evaluator_mismatch_still_checks_attestation(tmp_path):
     assert "attestation signature does not verify" in problems
 
 
+def test_record_mismatch_still_checks_attestation(tmp_path):
+    path, _ = make_bundle(tmp_path)
+    bundle_path = tmp_path / "bundle"
+    attest_bundle(path, keystore=Keystore(str(tmp_path / "keys")))
+    run_path = bundle_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["releases"]["evaluator"] = "contradicts-result"
+    run_path.write_text(json.dumps(run))
+    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    refresh_file_hash(manifest, "run.json", run_path)
+    write_manifest(bundle_path, manifest)
+    attestation_path = bundle_path / "attestation.json"
+    attestation = json.loads(attestation_path.read_text())
+    attestation["signature"] = "00"
+    attestation_path.write_text(json.dumps(attestation))
+
+    problems = verify_bundle(path)
+
+    assert "run evaluator release does not match result" in problems
+    assert "attestation signature does not verify" in problems
+
+
 def test_report_contains_scope_and_stages(tmp_path):
     path, _ = make_bundle(tmp_path)
     bundle = load_bundle(path)

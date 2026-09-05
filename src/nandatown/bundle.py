@@ -283,8 +283,7 @@ def verify_bundle(directory: str) -> list[str]:
     duplicate_names = _duplicates(stage_names)
     if duplicate_names:
         problems.append(f"result has duplicate stage names: {duplicate_names}")
-    if problems:
-        return problems
+    records_coherent = not problems
 
     try:
         if bundle["mode"] == "lab":
@@ -307,7 +306,7 @@ def verify_bundle(directory: str) -> list[str]:
         problems.append(
             f"evaluator version differs: bundle {recorded.evaluator_version},"
             f" local {expected_version}; reproducibility not checked")
-    elif replay_fn is not None:
+    elif replay_fn is not None and records_coherent:
         try:
             replay = replay_fn(
                 bundle["profile"], recorded.run_id, bundle["events"])
