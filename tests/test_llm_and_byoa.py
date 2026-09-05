@@ -83,15 +83,24 @@ def test_llm_truncation_profile_end_to_end(tmp_path):
 
 def test_byoa_external_seller_end_to_end(tmp_path):
     example = os.path.join(REPO_ROOT, "examples", "byoa_seller.py")
+    secret = "external-command-secret-must-not-enter-evidence"
     bundle_dir, result = run_town(
         "quote-clean", str(tmp_path),
-        external={"seller": [sys.executable, example]})
+        external={"seller": [sys.executable, example, secret]})
     detail = [(s.name, s.status, s.note) for s in result.stages]
     assert result.verdict == "passed", detail
     bundle = load_bundle(bundle_dir)
     seller_acks = [e for e in bundle["events"]
                    if e.kind == "ack_recorded" and e.observer == "seller"]
     assert seller_acks[0].detail["note"].get("runtime") == "byoa-stdlib"
+    run = bundle["run"]
+    assert run.config["rerun_command"] == (
+        "nandatown test-agent --profile quote-clean --role seller"
+        " --cmd '<operator-supplied-command>'")
+    serialized_run = json.dumps(run.model_dump())
+    assert secret not in serialized_run
+    assert example not in serialized_run
+    assert verify_bundle(bundle_dir) == []
 
 
 def _spawn_environment_probe(tmp_path, inherit_env=False):

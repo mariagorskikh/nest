@@ -1,9 +1,12 @@
+import json
 import os
 import shlex
+import subprocess
 import sys
 
 import pytest
 
+from nandatown import __version__
 import nandatown.runner as runner_module
 from nandatown.bundle import load_bundle
 from nandatown.cli import main
@@ -74,14 +77,81 @@ def test_cli_reports_unknown_harness_role_as_usage_error(
 
 
 def test_cmd_harness_runs_external_agent(tmp_path):
+    secret = "command-secret-must-not-enter-evidence"
     spec = "cmd:" + " ".join(shlex.quote(p)
-                             for p in [sys.executable, EXAMPLE])
+                             for p in [sys.executable, EXAMPLE, secret])
     bundle_dir, result = run_town("quote-clean", str(tmp_path),
                                   harnesses={"seller": spec})
     detail = [(s.name, s.status, s.note) for s in result.stages]
     assert result.verdict == "passed", detail
     bundle = load_bundle(bundle_dir)
-    assert bundle["run"].config["harnesses"] == {"seller": spec}
+    run = bundle["run"]
+    seller = next(p for p in run.participants if p["name"] == "seller")
+    buyer = next(p for p in run.participants if p["name"] == "buyer")
+    assert buyer["runtime"] == "scripted"
+    assert buyer["release"] == (
+        f"nandatown.participants.buyer {__version__}")
+    assert seller["runtime"] == "cmd"
+    assert seller["release"] == (
+        "external command; immutable release not recorded")
+    assert run.config["runtimes"]["seller"] == "cmd"
+    assert run.config["harnesses"] == {
+        "seller": "cmd:<operator-supplied-command>"}
+    assert run.config["participant_provenance"]["seller"] == {
+        "kind": "cmd",
+        "identity_basis": "operator-supplied command (command not recorded)",
+        "release_basis": None,
+        "release_basis_note": "immutable external release not supplied",
+    }
+    assert run.config["rerun_required_inputs"] == {
+        "seller": "original command (not recorded)"}
+    assert "<operator-supplied-command>" in run.config["rerun_command"]
+    serialized_run = json.dumps(run.model_dump())
+    assert secret not in serialized_run
+    assert EXAMPLE not in serialized_run
+
+
+def test_wait_handoff_records_external_participant_and_reconnect_rerun(
+        tmp_path):
+    processes: list[subprocess.Popen] = []
+
+    def connect(role, env):
+        assert role == "seller"
+        processes.append(subprocess.Popen(
+            [sys.executable, EXAMPLE], env={**os.environ, **env},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+    try:
+        bundle_dir, result = run_town(
+            "quote-clean", str(tmp_path), external={"seller": None},
+            on_credentials=connect)
+    finally:
+        for process in processes:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                process.wait(timeout=5)
+
+    detail = [(s.name, s.status, s.note) for s in result.stages]
+    assert result.verdict == "passed", detail
+    run = load_bundle(bundle_dir)["run"]
+    seller = next(p for p in run.participants if p["name"] == "seller")
+    assert seller["runtime"] == "external"
+    assert seller["release"] == (
+        "external participant; immutable release not recorded")
+    assert run.config["harnesses"] == {"seller": "external"}
+    assert run.config["participant_provenance"]["seller"] == {
+        "kind": "external",
+        "identity_basis": (
+            "operator-connected participant (software identity not supplied)"),
+        "release_basis": None,
+        "release_basis_note": "immutable external release not supplied",
+    }
+    assert run.config["rerun_command"] == (
+        "nandatown test-agent --profile quote-clean --role seller --wait")
+    assert run.config["rerun_required_inputs"] == {
+        "seller": "external participant must reconnect with fresh credentials"}
 
 
 def test_llm_harness_overrides_scripted_profile(tmp_path):
@@ -92,6 +162,10 @@ def test_llm_harness_overrides_scripted_profile(tmp_path):
     bundle = load_bundle(bundle_dir)
     assert bundle["run"].config["model"] == "mock:v1"
     assert bundle["run"].config["harnesses"]["seller"] == "llm:mock:alt"
+    seller = next(p for p in bundle["run"].participants
+                  if p["name"] == "seller")
+    assert seller["runtime"] == "llm"
+    assert seller["release"] == f"nandatown.participants.llm {__version__}"
 
 
 def test_layer_override_reproduces_weak_auth_failure(tmp_path):

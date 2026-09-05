@@ -9,6 +9,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from nandatown import __version__
 from nandatown.a2a_adapter import build_a2a_app, probe_endpoint
 from nandatown.client import TownClient
 from nandatown.coordinator import build_app
@@ -214,9 +215,11 @@ def test_a2a_bridge_carries_a_track_run(tmp_path):
         except httpx.HTTPError:
             time.sleep(0.1)
     try:
+        secret = "a2a-query-secret-must-not-enter-evidence"
         bundle_dir, result = run_town(
             "quote-clean", str(tmp_path),
-            harnesses={"seller": f"a2a:http://127.0.0.1:{port}"})
+            harnesses={
+                "seller": f"a2a:http://127.0.0.1:{port}?token={secret}"})
         detail = [(s.name, s.status, s.note) for s in result.stages]
         assert result.verdict == "passed", detail
         from nandatown.bundle import load_bundle
@@ -225,6 +228,26 @@ def test_a2a_bridge_carries_a_track_run(tmp_path):
                        if e.kind == "ack_recorded"
                        and e.observer == "seller"]
         assert seller_acks[0].detail["note"]["runtime"] == "a2a-bridge"
+        run = bundle["run"]
+        seller = next(p for p in run.participants
+                      if p["name"] == "seller")
+        assert seller["runtime"] == "a2a"
+        assert seller["release"] == (
+            "external A2A participant; immutable release not recorded")
+        assert run.config["harnesses"] == {
+            "seller": "a2a:<operator-supplied-endpoint>"}
+        assert run.config["participant_provenance"]["seller"] == {
+            "kind": "a2a",
+            "identity_basis": (
+                "operator-supplied A2A endpoint (URL not recorded)"),
+            "release_basis": None,
+            "release_basis_note": "immutable external release not supplied",
+            "adapter_release": (
+                f"nandatown.participants.a2a_bridge {__version__}"),
+        }
+        assert secret not in json.dumps(run.model_dump())
+        assert "<operator-supplied-endpoint>" in (
+            run.config["rerun_command"])
     finally:
         server.should_exit = True
         thread.join(timeout=5)

@@ -221,6 +221,130 @@ def _participant_command(profile: TestProfile, role: str,
             {}, kind)
 
 
+def _participant_provenance(role: str, kind: str
+                            ) -> tuple[str, dict[str, Any]]:
+    """Describe who supplied a harness without inventing its release.
+
+    Town can name the bundled module bytes it launched. An operator command,
+    manually connected participant, or remote A2A endpoint does not supply an
+    immutable participant release through the current connector contract, so
+    the record says that directly. The A2A bridge is still recorded separately
+    as the adapter Town did launch.
+    """
+    if kind in ("scripted", "llm"):
+        module = role if kind == "scripted" else "llm"
+        release = f"nandatown.participants.{module} {__version__}"
+        return release, {
+            "kind": kind,
+            "identity_basis": "bundled NANDA Town harness",
+            "release_basis": release,
+        }
+
+    external = {
+        "cmd": (
+            "external command; immutable release not recorded",
+            "operator-supplied command (command not recorded)",
+        ),
+        "external": (
+            "external participant; immutable release not recorded",
+            "operator-connected participant (software identity not supplied)",
+        ),
+        "a2a": (
+            "external A2A participant; immutable release not recorded",
+            "operator-supplied A2A endpoint (URL not recorded)",
+        ),
+    }
+    release, identity_basis = external[kind]
+    provenance: dict[str, Any] = {
+        "kind": kind,
+        "identity_basis": identity_basis,
+        "release_basis": None,
+        "release_basis_note": "immutable external release not supplied",
+    }
+    if kind == "a2a":
+        provenance["adapter_release"] = (
+            f"nandatown.participants.a2a_bridge {__version__}")
+    return release, provenance
+
+
+def _redacted_harness_spec(kind: str, supplied: str | None = None) -> str:
+    """Return connector metadata that is safe to put in run.json."""
+    if kind == "cmd":
+        return "cmd:<operator-supplied-command>"
+    if kind == "a2a":
+        return "a2a:<operator-supplied-endpoint>"
+    if kind in ("scripted", "llm", "external"):
+        return supplied or kind
+    raise RunnerError(f"unknown resolved harness kind {kind!r}")
+
+
+def _recorded_harnesses(
+        profile: TestProfile,
+        participant_kinds: dict[str, str],
+        harnesses: dict[str, str] | None,
+        external: dict[str, list[str] | None] | None) -> dict[str, str]:
+    """Record effective overrides while omitting commands and endpoints."""
+    recorded: dict[str, str] = {}
+    for role in profile.roles:
+        if harnesses and role in harnesses:
+            supplied = harnesses[role]
+        elif external and role in external:
+            supplied = None
+        else:
+            continue
+        recorded[role] = _redacted_harness_spec(
+            participant_kinds[role], supplied)
+    return recorded
+
+
+def _rerun_metadata(
+        profile: TestProfile,
+        recorded_harnesses: dict[str, str],
+        participant_kinds: dict[str, str],
+        external: dict[str, list[str] | None] | None,
+        harnesses: dict[str, str] | None,
+        identity_dir: str | None,
+        uses_llm: bool,
+        model: str) -> tuple[str, dict[str, str]]:
+    """Build a non-secret rerun recipe and list inputs Town omitted."""
+    import shlex
+
+    required = {
+        role: {
+            "cmd": "original command (not recorded)",
+            "a2a": "original A2A endpoint (URL not recorded)",
+            "external": (
+                "external participant must reconnect with fresh credentials"),
+        }[kind]
+        for role, kind in participant_kinds.items()
+        if kind in ("cmd", "a2a", "external")
+    }
+
+    # This is the public CLI path used by `test-agent --cmd/--wait`. Preserve
+    # it when possible instead of converting the rerun into a stock Track run.
+    if external and not harnesses and len(external) == 1 and not identity_dir:
+        role, command = next(iter(external.items()))
+        parts = ["nandatown", "test-agent", "--profile", profile.name,
+                 "--role", role]
+        if command is None:
+            parts.append("--wait")
+        else:
+            parts.extend(["--cmd", "<operator-supplied-command>"])
+        rerun = " ".join(shlex.quote(part) for part in parts)
+        if uses_llm and model != "mock:v1":
+            rerun = f"TOWN_MODEL={shlex.quote(model)} {rerun}"
+        return rerun, required
+
+    parts = ["nandatown", "run", profile.name]
+    for role, spec in recorded_harnesses.items():
+        parts.extend(["--agent", f"{role}={spec}"])
+    if identity_dir:
+        parts.append("--identity")
+    if uses_llm and model != "mock:v1":
+        parts.extend(["--model", model])
+    return " ".join(shlex.quote(part) for part in parts), required
+
+
 def _validate_role_overrides(
         profile: TestProfile,
         harnesses: dict[str, str] | None,
@@ -445,16 +569,20 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
         raw_events = get_events()
         events = [TownEvent.model_validate(e) for e in raw_events]
         intents = admin.get(f"/runs/{run_id}/intents").json()["intents"]
-        directory = [
-            {"name": p["name"], "role": p["role"],
-             "capabilities": p["capabilities"],
-             "release": f"nandatown.participants.{p['role']} {__version__}"}
-            for p in [
-                {"name": "buyer", "role": "buyer", "capabilities": []},
-                {"name": "seller", "role": "seller",
-                 "capabilities": ["quote.read"]},
-            ]
-        ]
+        participant_kinds = {"buyer": buyer_kind, "seller": seller_kind}
+        participant_provenance: dict[str, dict[str, Any]] = {}
+        directory = []
+        for name, role in profile.roles.items():
+            release, provenance = _participant_provenance(
+                role, participant_kinds[name])
+            participant_provenance[name] = provenance
+            directory.append({
+                "name": name,
+                "role": role,
+                "capabilities": profile.capabilities.get(name, []),
+                "runtime": participant_kinds[name],
+                "release": release,
+            })
         created_at = next((e.at for e in events if e.kind == "run_created"),
                           time.time())
         from .skills import skill_source
@@ -463,25 +591,23 @@ def run_town(profile_name: str, out_dir: str, port: int = 0,
              "content_fingerprint": fingerprint(skill_source(name))}
             for name in ("town-protocol", "quote.read", "quote.request")
         ]
-        uses_llm = ("llm" in profile.runtimes.values()
-                    or any(spec.startswith("llm")
-                           for spec in (harnesses or {}).values()))
+        uses_llm = "llm" in participant_kinds.values()
+        recorded_harnesses = _recorded_harnesses(
+            profile, participant_kinds, harnesses, external)
         config: dict[str, Any] = {"port": port,
                                   "restarted_seller": restarted,
-                                  "runtimes": profile.runtimes or
-                                  {"buyer": "scripted",
-                                   "seller": "scripted"},
+                                  "runtimes": participant_kinds,
+                                  "participant_provenance":
+                                  participant_provenance,
                                   "skill_releases": skill_releases}
-        if harnesses:
-            config["harnesses"] = harnesses
-        rerun = f"nandatown run {profile.name}"
-        for role, spec_text in (harnesses or {}).items():
-            rerun += f" --agent {role}={spec_text}"
-        if identity_dir:
-            rerun += " --identity"
-        if uses_llm and model != "mock:v1":
-            rerun += f" --model {model}"
+        if recorded_harnesses:
+            config["harnesses"] = recorded_harnesses
+        rerun, rerun_required_inputs = _rerun_metadata(
+            profile, recorded_harnesses, participant_kinds, external,
+            harnesses, identity_dir, uses_llm, model)
         config["rerun_command"] = rerun
+        if rerun_required_inputs:
+            config["rerun_required_inputs"] = rerun_required_inputs
         if uses_llm:
             config["model"] = model
             if not model.startswith("mock:"):
