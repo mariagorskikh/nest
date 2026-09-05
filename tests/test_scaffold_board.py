@@ -146,7 +146,41 @@ def test_unverified_bundle_remains_visible_in_terminal_browser(tmp_path):
         async with app.run_test():
             table = app.query_one("#bundle-table", DataTable)
             assert table.row_count == 1
-            assert "unverified" in table.get_row("broken")
+            assert "unverified" in [str(cell) for cell in table.get_row("broken")]
             assert "0 passed" in str(app.query_one("#town-status", Static).render())
 
     asyncio.run(browse())
+
+
+def test_duplicate_bundle_copies_count_once_and_open_the_actual_directory(tmp_path):
+    import asyncio
+    import shutil
+    from textual.widgets import DataTable
+    from nandatown.tui import TownApp
+
+    directory, _ = run_lab("voting", str(tmp_path))
+    copied = tmp_path / "a-copy-with-a-different-name"
+    shutil.copytree(directory, copied)
+    rows = scan_bundles(str(tmp_path))
+    assert len(rows) == 1
+    assert "1/1 passed" in render_board(str(tmp_path))
+
+    async def browse():
+        app = TownApp(out_dir=str(tmp_path))
+        async with app.run_test():
+            table = app.query_one("#bundle-table", DataTable)
+            assert table.row_count == 1
+            table.move_cursor(row=0)
+            assert Path(app._selected_bundle()) == copied
+
+    asyncio.run(browse())
+
+
+def test_board_escapes_control_characters_in_unverified_paths(tmp_path):
+    bad = tmp_path / "bad\nINJECTED\x1b[2J"
+    bad.mkdir()
+    (bad / "manifest.json").write_text("{")
+    rendered = render_board(str(tmp_path))
+    assert "\x1b" not in rendered
+    assert "bad\nINJECTED" not in rendered
+    assert "bad\\nINJECTED\\x1b[2J" in rendered
